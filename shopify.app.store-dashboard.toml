@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "88ce5155d4fe752b0d5d04faed424ea2"
-application_url = "https://example.com"
+application_url = "https://champions-portrait-tyler-dui.trycloudflare.com"
 embedded = true
 name = "Store_dashboard"
 
@@ -9,12 +9,14 @@ name = "Store_dashboard"
 api_version = "2026-07"
 
 [access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_all_orders,read_inventory,read_orders,read_products"
+scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://champions-portrait-tyler-dui.trycloudflare.com/auth/callback",
+  "https://champions-portrait-tyler-dui.trycloudflare.com/auth/shopify/callback",
+  "https://champions-portrait-tyler-dui.trycloudflare.com/api/auth/callback"
+]
 
 [build]
-include_config_on_deploy = true
 automatically_update_urls_on_dev = true
