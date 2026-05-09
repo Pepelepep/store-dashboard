@@ -1,19 +1,19 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "29bcced0010337c0dd277076a905a89e"
-name = "Store_dashboard"
+client_id = "88ce5155d4fe752b0d5d04faed424ea2"
 application_url = "https://example.com"
 embedded = true
-
-[access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,read_orders,read_all_orders,read_inventory"
-
-[auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+name = "Store_dashboard"
 
 [webhooks]
 api_version = "2026-07"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_all_orders,read_inventory,read_orders,read_products"
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
 
 [build]
 include_config_on_deploy = true
