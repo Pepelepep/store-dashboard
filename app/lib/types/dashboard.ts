@@ -1,3 +1,12 @@
+export type LocationRow = {
+  locationId: string;
+  locationName: string;
+  isActive: boolean;
+  city?: string;
+  province?: string;
+  country?: string;
+};
+
 export type ProductRow = {
   productId: string;
   variantId: string;
@@ -21,6 +30,13 @@ export type OrderLineRow = {
   quantity: number;
   unitPrice: number;
   revenue: number;
+
+  // Location-first logic
+  locationId?: string;
+  locationName?: string;
+  locationSource?: "POS" | "FULFILLMENT" | "ONLINE" | "MANUAL" | "UNKNOWN";
+  salesChannel?: string;
+  isOnlineOrder?: boolean;
 };
 
 export type InventoryRow = {
@@ -29,8 +45,11 @@ export type InventoryRow = {
   variantId: string;
   sku?: string;
   inventoryItemId: string;
+
+  // Location-first logic
   locationId: string;
   locationName: string;
+
   available: number;
   updatedAt?: string;
 };

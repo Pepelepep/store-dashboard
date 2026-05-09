@@ -1,4 +1,5 @@
-import type { OrderLineRow, DashboardKpis } from "../types/dashboard";
+import type { DashboardKpis, OrderLineRow } from "../types/dashboard";
+import { filterByLocation } from "./location";
 
 export function computeSalesKpis(orderLines: OrderLineRow[]): DashboardKpis {
   const revenue = orderLines.reduce((sum, row) => sum + row.revenue, 0);
@@ -15,4 +16,13 @@ export function computeSalesKpis(orderLines: OrderLineRow[]): DashboardKpis {
     unitsSold,
     averageOrderValue,
   };
+}
+
+export function computeSalesKpisByLocation(
+  orderLines: OrderLineRow[],
+  selectedLocationId: string,
+): DashboardKpis {
+  const filteredRows = filterByLocation(orderLines, selectedLocationId);
+
+  return computeSalesKpis(filteredRows);
 }
