@@ -3,7 +3,7 @@ import { useLoaderData, useNavigate } from "react-router";
 
 import { authenticate } from "../shopify.server";
 
-type PeriodKey = "today"| "7d" | "30d" | "90d";
+type PeriodKey = "today" | "7d" | "30d" | "90d";
 
 type LocationNode = {
   id: string;
@@ -176,7 +176,7 @@ type LoaderData = {
 };
 
 const periodOptions: { label: string; value: PeriodKey; days: number }[] = [
-  { label: "Today", value: "today", days: 1 },
+  { label: "Today", value: "today", days: 0 },
   { label: "Last 7 days", value: "7d", days: 7 },
   { label: "Last 30 days", value: "30d", days: 30 },
   { label: "Last 90 days", value: "90d", days: 90 },
@@ -188,17 +188,53 @@ function getPeriodConfig(period: string | null) {
   );
 }
 
+function toShopifyDateTimeLocal(date: Date) {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, "0");
+  const minutes = String(absoluteMinutes % 60).padStart(2, "0");
+
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  const sec = String(date.getSeconds()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}:${sec}${sign}${hours}:${minutes}`;
+}
+
+function formatLocalDate(date: Date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function getPeriodRange(period: PeriodKey) {
   const config = getPeriodConfig(period);
-  const endDate = new Date();
-  const startDate = new Date();
 
-  startDate.setDate(endDate.getDate() - config.days);
+  const now = new Date();
+
+  const endDate = new Date(now);
+  endDate.setHours(0, 0, 0, 0);
+  endDate.setDate(endDate.getDate() + 1);
+
+  const startDate = new Date(now);
+  startDate.setHours(0, 0, 0, 0);
+
+  if (period !== "today") {
+    startDate.setDate(startDate.getDate() - config.days);
+  }
 
   return {
-    startDate: startDate.toISOString().slice(0, 10),
-    endDate: endDate.toISOString().slice(0, 10),
-    days: config.days,
+    startDate: formatLocalDate(startDate),
+    endDate: formatLocalDate(endDate),
+    startDateTime: toShopifyDateTimeLocal(startDate),
+    endDateTime: toShopifyDateTimeLocal(endDate),
+    days: period === "today" ? 1 : config.days,
     label: config.label,
   };
 }
@@ -445,7 +481,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
   }
 
-  const orderQuery = `created_at:>=${periodRange.startDate} created_at:<=${periodRange.endDate}`;
+  const orderQuery = `created_at:>=${periodRange.startDateTime} created_at:<${periodRange.endDateTime}`;
 
   const [ordersResponse, inventoryResponse] = await Promise.all([
     admin.graphql(
@@ -664,14 +700,69 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
 }
 
+function escapeCsvValue(value: unknown) {
+  const stringValue = String(value ?? "");
+  const escaped = stringValue.replace(/"/g, '""');
+
+  return `"${escaped}"`;
+}
+
+function downloadCsv(filename: string, headers: string[], rows: Array<Array<unknown>>) {
+  const csvContent = [
+    headers.map(escapeCsvValue).join(","),
+    ...rows.map((row) => row.map(escapeCsvValue).join(",")),
+  ].join("\n");
+
+  const blob = new Blob([csvContent], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function ExportButton({
+  label = "Export CSV",
+  onClick,
+}: {
+  label?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        border: "1px solid #c9c9c9",
+        background: "white",
+        borderRadius: 10,
+        padding: "7px 10px",
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+
 function KpiCard({
   title,
   value,
-  subtitle,
+  subtitle
 }: {
   title: string;
   value: string;
   subtitle: string;
+
 }) {
   return (
     <div
@@ -683,12 +774,10 @@ function KpiCard({
         boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
       }}
     >
-      <div style={{ color: "#616161", fontSize: 14, marginBottom: 8 }}>
-        {title}
-      </div>
       <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>
         {value}
       </div>
+
       <div style={{ color: "#707070", fontSize: 13 }}>{subtitle}</div>
     </div>
   );
@@ -697,9 +786,15 @@ function KpiCard({
 function SectionCard({
   title,
   children,
+  exportConfig,
 }: {
   title: string;
   children: React.ReactNode;
+  exportConfig?: {
+    filename: string;
+    headers: string[];
+    rows: Array<Array<unknown>>;
+  };
 }) {
   return (
     <section
@@ -709,9 +804,33 @@ function SectionCard({
         borderRadius: 16,
         padding: 22,
         boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+        minHeight: 420,
       }}
     >
-      <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>{title}</h2>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+          marginBottom: 16,
+        }}
+      >
+        <h2 style={{ margin: 0, fontSize: 20 }}>{title}</h2>
+
+        {exportConfig ? (
+          <ExportButton
+            onClick={() =>
+              downloadCsv(
+                exportConfig.filename,
+                exportConfig.headers,
+                exportConfig.rows,
+              )
+            }
+          />
+        ) : null}
+      </div>
+
       {children}
     </section>
   );
@@ -747,7 +866,15 @@ function Table({
   rows: Array<Array<string | number | React.ReactNode>>;
 }) {
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div
+      style={{
+        overflowX: "auto",
+        overflowY: "auto",
+        maxHeight: 320,
+        border: "1px solid #f0f0f0",
+        borderRadius: 12,
+      }}
+    >
       <table
         style={{
           width: "100%",
@@ -767,6 +894,10 @@ function Table({
                   color: "#616161",
                   fontWeight: 700,
                   whiteSpace: "nowrap",
+                  position: "sticky",
+                  top: 0,
+                  background: "white",
+                  zIndex: 1,
                 }}
               >
                 {header}
@@ -1074,7 +1205,21 @@ export default function LiveDashboardPage() {
             marginBottom: 20,
           }}
         >
-          <SectionCard title="Best sellers">
+          <SectionCard
+            title="Best sellers"
+            exportConfig={{
+              filename: "best-sellers.csv",
+              headers: ["Product", "SKU", "Vendor", "Units sold", "Revenue", "% sales"],
+              rows: topProducts.map((row) => [
+                row.productTitle,
+                row.sku,
+                row.vendor,
+                row.unitsSold,
+                row.revenue,
+                row.revenueSharePct.toFixed(1),
+              ]),
+            }}
+          >
             <Table
               headers={[
                 "Product",
@@ -1095,7 +1240,21 @@ export default function LiveDashboardPage() {
             />
           </SectionCard>
 
-          <SectionCard title="Soon out of stock">
+          <SectionCard
+            title="Soon out of stock"
+            exportConfig={{
+              filename: "soon-out-of-stock.csv",
+              headers: ["Product", "SKU", "Available", "Sold", "Days left", "Status"],
+              rows: stockAlerts.map((row) => [
+                row.productTitle,
+                row.sku,
+                row.available,
+                row.unitsSold,
+                row.daysOfStock === null ? "-" : row.daysOfStock.toFixed(1),
+                row.status,
+              ]),
+            }}
+          >
             <Table
               headers={[
                 "Product",
@@ -1127,7 +1286,20 @@ export default function LiveDashboardPage() {
             marginBottom: 20,
           }}
         >
-          <SectionCard title="Sales by vendor">
+          <SectionCard
+            title="Sales by vendor"
+            exportConfig={{
+              filename: "sales-by-vendor.csv",
+              headers: ["Vendor", "Revenue", "Units sold", "Inventory units", "Low stock SKUs"],
+              rows: vendorSummary.map((row) => [
+                row.vendor,
+                row.revenue,
+                row.unitsSold,
+                row.inventoryUnits,
+                row.lowStockSkus,
+              ]),
+            }}
+          >
             <Table
               headers={[
                 "Vendor",
@@ -1146,7 +1318,20 @@ export default function LiveDashboardPage() {
             />
           </SectionCard>
 
-          <SectionCard title="Slow movers">
+          <SectionCard
+            title="Slow movers"
+            exportConfig={{
+              filename: "slow-movers.csv",
+              headers: ["Product", "Variant", "SKU", "Vendor", "Available"],
+              rows: slowMovers.map((row) => [
+                row.productTitle,
+                row.variantTitle,
+                row.sku,
+                row.vendor,
+                row.available,
+              ]),
+            }}
+          >
             <Table
               headers={["Product", "Variant", "SKU", "Vendor", "Available"]}
               rows={slowMovers.map((row) => [
@@ -1160,7 +1345,21 @@ export default function LiveDashboardPage() {
           </SectionCard>
         </div>
 
-        <SectionCard title="Recent order lines">
+        <SectionCard
+          title="Recent order lines"
+          exportConfig={{
+            filename: "recent-order-lines.csv",
+            headers: ["Order", "Date", "Product", "SKU", "Qty", "Revenue"],
+            rows: recentOrders.map((row) => [
+              row.orderName,
+              formatDate(row.createdAt),
+              row.productTitle,
+              row.sku,
+              row.quantity,
+              row.revenue,
+            ]),
+          }}
+        >
           <Table
             headers={["Order", "Date", "Product", "SKU", "Qty", "Revenue"]}
             rows={recentOrders.map((row) => [
