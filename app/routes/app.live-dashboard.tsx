@@ -1,9 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useNavigate } from "react-router";
+import { Form, useLoaderData, useNavigate } from "react-router";
 
 import { authenticate } from "../shopify.server";
-
-type PeriodKey = "today" | "7d" | "30d" | "90d";
 
 type LocationNode = {
   id: string;
@@ -20,6 +18,13 @@ type OrderLineItemNode = {
     id: string;
     title?: string | null;
     sku?: string | null;
+    inventoryItem?: {
+      id: string;
+      unitCost?: {
+        amount: string;
+        currencyCode: string;
+      } | null;
+    } | null;
     product?: {
       id: string;
       title: string;
@@ -49,6 +54,13 @@ type OrderNode = {
   };
 };
 
+type StaffOrderNode = OrderNode & {
+  staffMember?: {
+    id: string;
+    name: string;
+  } | null;
+};
+
 type InventoryLevelNode = {
   location: {
     id: string;
@@ -68,6 +80,10 @@ type VariantNode = {
     id: string;
     sku?: string | null;
     tracked: boolean;
+    unitCost?: {
+      amount: string;
+      currencyCode: string;
+    } | null;
     inventoryLevels: {
       edges: {
         node: InventoryLevelNode;
@@ -97,9 +113,14 @@ type OrderLineRow = {
   vendor: string;
   quantity: number;
   unitPrice: number;
+  unitCost: number;
   revenue: number;
+  cogs: number;
+  grossProfit: number;
   locationId: string;
   locationName: string;
+  staffName: string;
+  orderUrl: string;
 };
 
 type InventoryRow = {
@@ -111,6 +132,7 @@ type InventoryRow = {
   locationName: string;
   available: number;
   tracked: boolean;
+  unitCost: number;
 };
 
 type TopProductRow = {
@@ -119,6 +141,8 @@ type TopProductRow = {
   vendor: string;
   unitsSold: number;
   revenue: number;
+  cogs: number;
+  grossProfit: number;
   revenueSharePct: number;
 };
 
@@ -137,55 +161,111 @@ type StockAlertRow = {
 type VendorSummaryRow = {
   vendor: string;
   revenue: number;
+  cogs: number;
+  grossProfit: number;
+  grossMarginPct: number;
   unitsSold: number;
   inventoryUnits: number;
   lowStockSkus: number;
 };
 
-type SlowMoverRow = {
-  productTitle: string;
-  variantTitle: string;
-  sku: string;
-  vendor: string;
-  available: number;
+type StaffSummaryRow = {
+  staffName: string;
+  revenue: number;
+  ordersCount: number;
+  unitsSold: number;
+};
+
+type FixedExpenseRow = {
+  id: string;
+  name: string;
+  monthlyAmount: number;
+  locationId: string | null;
+  locationName: string;
+  category: string;
 };
 
 type LoaderData = {
   locations: LocationNode[];
   selectedLocationId: string | null;
   selectedLocationName: string | null;
-  selectedPeriod: PeriodKey;
-  periodLabel: string;
   startDate: string;
   endDate: string;
+  selectedDays: number;
   kpis: {
     revenue: number;
     ordersCount: number;
     unitsSold: number;
-    averageOrderValue: number;
-    inventoryUnits: number;
-    lowStockCount: number;
+    cogs: number;
+    grossProfit: number;
+    grossMarginPct: number;
+    expensesToDate: number | null;
+    netProfit: number | null;
     criticalStockCount: number;
   };
   topProducts: TopProductRow[];
   stockAlerts: StockAlertRow[];
   vendorSummary: VendorSummaryRow[];
-  slowMovers: SlowMoverRow[];
+  staffSummary: StaffSummaryRow[];
+  expenseRows: FixedExpenseRow[];
   recentOrders: OrderLineRow[];
+  notices: string[];
   errors?: unknown[];
 };
 
-const periodOptions: { label: string; value: PeriodKey; days: number }[] = [
-  { label: "Today", value: "today", days: 0 },
-  { label: "Last 7 days", value: "7d", days: 7 },
-  { label: "Last 30 days", value: "30d", days: 30 },
-  { label: "Last 90 days", value: "90d", days: 90 },
+const fixedExpenses: FixedExpenseRow[] = [
+  {
+    id: "rent-downtown",
+    name: "Rent / fixed cost",
+    monthlyAmount: 0,
+    locationId: null,
+    locationName: "All locations",
+    category: "Fixed cost",
+  },
+  {
+    id: "staff-general",
+    name: "Staff",
+    monthlyAmount: 0,
+    locationId: null,
+    locationName: "All locations",
+    category: "Payroll",
+  },
+  {
+    id: "shopify-billing",
+    name: "Shopify billing",
+    monthlyAmount: 0,
+    locationId: null,
+    locationName: "All locations",
+    category: "Software",
+  },
+  {
+    id: "marketing",
+    name: "Marketing",
+    monthlyAmount: 0,
+    locationId: null,
+    locationName: "All locations",
+    category: "Marketing",
+  },
 ];
 
-function getPeriodConfig(period: string | null) {
-  return (
-    periodOptions.find((option) => option.value === period) ?? periodOptions[1]
-  );
+function getTodayLocalDate() {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function parseLocalDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
 
 function toShopifyDateTimeLocal(date: Date) {
@@ -205,37 +285,27 @@ function toShopifyDateTimeLocal(date: Date) {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}:${sec}${sign}${hours}:${minutes}`;
 }
 
-function formatLocalDate(date: Date) {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
+function getDateRange(startDateParam: string | null, endDateParam: string | null) {
+  const today = getTodayLocalDate();
+  const startDate = startDateParam || today;
+  const endDate = endDateParam || today;
 
-  return `${yyyy}-${mm}-${dd}`;
-}
+  const start = parseLocalDate(startDate);
+  const inclusiveEnd = parseLocalDate(endDate);
+  const exclusiveEnd = addDays(inclusiveEnd, 1);
 
-function getPeriodRange(period: PeriodKey) {
-  const config = getPeriodConfig(period);
-
-  const now = new Date();
-
-  const endDate = new Date(now);
-  endDate.setHours(0, 0, 0, 0);
-  endDate.setDate(endDate.getDate() + 1);
-
-  const startDate = new Date(now);
-  startDate.setHours(0, 0, 0, 0);
-
-  if (period !== "today") {
-    startDate.setDate(startDate.getDate() - config.days);
-  }
+  const selectedDays = Math.max(
+    1,
+    Math.ceil((exclusiveEnd.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)),
+  );
 
   return {
-    startDate: formatLocalDate(startDate),
-    endDate: formatLocalDate(endDate),
-    startDateTime: toShopifyDateTimeLocal(startDate),
-    endDateTime: toShopifyDateTimeLocal(endDate),
-    days: period === "today" ? 1 : config.days,
-    label: config.label,
+    startDate,
+    endDate,
+    startDateTime: toShopifyDateTimeLocal(start),
+    endDateTime: toShopifyDateTimeLocal(exclusiveEnd),
+    selectedDays,
+    isToday: startDate === today && endDate === today,
   };
 }
 
@@ -248,6 +318,10 @@ function formatCurrency(value: number) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("fr-CA").format(value);
+}
+
+function formatPercent(value: number) {
+  return `${value.toFixed(1)}%`;
 }
 
 function formatDate(value: string) {
@@ -265,6 +339,11 @@ function getAvailableQuantity(level: InventoryLevelNode) {
   );
 }
 
+function getNumericCost(value?: string | null) {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
 function computeTopProducts(orderRows: OrderLineRow[]): TopProductRow[] {
   const totalRevenue = orderRows.reduce((sum, row) => sum + row.revenue, 0);
   const grouped = new Map<string, Omit<TopProductRow, "revenueSharePct">>();
@@ -276,6 +355,8 @@ function computeTopProducts(orderRows: OrderLineRow[]): TopProductRow[] {
     if (existing) {
       existing.unitsSold += row.quantity;
       existing.revenue += row.revenue;
+      existing.cogs += row.cogs;
+      existing.grossProfit += row.grossProfit;
     } else {
       grouped.set(key, {
         productTitle: row.productTitle,
@@ -283,6 +364,8 @@ function computeTopProducts(orderRows: OrderLineRow[]): TopProductRow[] {
         vendor: row.vendor,
         unitsSold: row.quantity,
         revenue: row.revenue,
+        cogs: row.cogs,
+        grossProfit: row.grossProfit,
       });
     }
   }
@@ -360,12 +443,17 @@ function computeVendorSummary(
       ({
         vendor,
         revenue: 0,
+        cogs: 0,
+        grossProfit: 0,
+        grossMarginPct: 0,
         unitsSold: 0,
         inventoryUnits: 0,
         lowStockSkus: 0,
       } satisfies VendorSummaryRow);
 
     existing.revenue += row.revenue;
+    existing.cogs += row.cogs;
+    existing.grossProfit += row.grossProfit;
     existing.unitsSold += row.quantity;
     vendors.set(vendor, existing);
   }
@@ -377,6 +465,9 @@ function computeVendorSummary(
       ({
         vendor,
         revenue: 0,
+        cogs: 0,
+        grossProfit: 0,
+        grossMarginPct: 0,
         unitsSold: 0,
         inventoryUnits: 0,
         lowStockSkus: 0,
@@ -392,36 +483,90 @@ function computeVendorSummary(
   }
 
   return Array.from(vendors.values())
+    .map((row) => ({
+      ...row,
+      grossMarginPct: row.revenue > 0 ? (row.grossProfit / row.revenue) * 100 : 0,
+    }))
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 10);
 }
 
-function computeSlowMovers(
-  inventoryRows: InventoryRow[],
-  orderRows: OrderLineRow[],
-): SlowMoverRow[] {
-  const soldSkus = new Set(orderRows.map((row) => row.sku));
+function computeStaffSummary(orderRows: OrderLineRow[]): StaffSummaryRow[] {
+  const staff = new Map<string, StaffSummaryRow>();
 
-  return inventoryRows
-    .filter((row) => row.available > 0 && !soldSkus.has(row.sku))
-    .sort((a, b) => b.available - a.available)
-    .slice(0, 15)
-    .map((row) => ({
-      productTitle: row.productTitle,
-      variantTitle: row.variantTitle,
-      sku: row.sku,
-      vendor: row.vendor,
-      available: row.available,
-    }));
+  for (const row of orderRows) {
+    const staffName = row.staffName || "Unassigned / unavailable";
+    const existing =
+      staff.get(staffName) ??
+      ({
+        staffName,
+        revenue: 0,
+        ordersCount: 0,
+        unitsSold: 0,
+      } satisfies StaffSummaryRow);
+
+    existing.revenue += row.revenue;
+    existing.unitsSold += row.quantity;
+    staff.set(staffName, existing);
+  }
+
+  for (const row of staff.values()) {
+    const uniqueOrders = new Set(
+      orderRows
+        .filter((orderRow) => orderRow.staffName === row.staffName)
+        .map((orderRow) => orderRow.orderId),
+    );
+    row.ordersCount = uniqueOrders.size;
+  }
+
+  return Array.from(staff.values()).sort((a, b) => b.revenue - a.revenue);
+}
+
+function getExpenseRowsForLocation(
+  expenses: FixedExpenseRow[],
+  selectedLocationId: string,
+) {
+  return expenses.filter(
+    (expense) => expense.locationId === null || expense.locationId === selectedLocationId,
+  );
+}
+
+function computeExpensesToDate(expenses: FixedExpenseRow[], selectedDays: number) {
+  const monthlyTotal = expenses.reduce((sum, expense) => sum + expense.monthlyAmount, 0);
+  return (monthlyTotal / 30) * selectedDays;
+}
+
+function buildCostMaps(products: ProductNode[]) {
+  const costByVariantId = new Map<string, number>();
+  const costBySku = new Map<string, number>();
+
+  for (const product of products) {
+    for (const { node: variant } of product.variants.edges) {
+      const unitCost = getNumericCost(variant.inventoryItem?.unitCost?.amount);
+      costByVariantId.set(variant.id, unitCost);
+
+      if (variant.sku) {
+        costBySku.set(variant.sku, unitCost);
+      }
+
+      if (variant.inventoryItem?.sku) {
+        costBySku.set(variant.inventoryItem.sku, unitCost);
+      }
+    }
+  }
+
+  return { costByVariantId, costBySku };
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
 
   const url = new URL(request.url);
   const requestedLocationId = url.searchParams.get("locationId");
-  const selectedPeriod = getPeriodConfig(url.searchParams.get("period")).value;
-  const periodRange = getPeriodRange(selectedPeriod);
+  const dateRange = getDateRange(
+    url.searchParams.get("startDate"),
+    url.searchParams.get("endDate"),
+  );
 
   const locationsResponse = await admin.graphql(`#graphql
     query getLocations {
@@ -453,41 +598,45 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const selectedLocationId = selectedLocation?.id ?? null;
   const selectedLocationName = selectedLocation?.name ?? null;
+  const shopHandle = session.shop.replace(".myshopify.com", "");
 
   if (!selectedLocationId) {
     return {
       locations: activeLocations,
       selectedLocationId: null,
       selectedLocationName: null,
-      selectedPeriod,
-      periodLabel: periodRange.label,
-      startDate: periodRange.startDate,
-      endDate: periodRange.endDate,
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate,
+      selectedDays: dateRange.selectedDays,
       kpis: {
         revenue: 0,
         ordersCount: 0,
         unitsSold: 0,
-        averageOrderValue: 0,
-        inventoryUnits: 0,
-        lowStockCount: 0,
+        cogs: 0,
+        grossProfit: 0,
+        grossMarginPct: 0,
+        expensesToDate: null,
+        netProfit: null,
         criticalStockCount: 0,
       },
       topProducts: [],
       stockAlerts: [],
       vendorSummary: [],
-      slowMovers: [],
+      staffSummary: [],
+      expenseRows: [],
       recentOrders: [],
+      notices: ["No active Shopify location found."],
       errors: locationsData.errors ? [locationsData.errors] : undefined,
-    };
+    } satisfies LoaderData;
   }
 
-  const orderQuery = `created_at:>=${periodRange.startDateTime} created_at:<${periodRange.endDateTime}`;
+  const orderQuery = `created_at:>=${dateRange.startDateTime} created_at:<${dateRange.endDateTime}`;
 
   const [ordersResponse, inventoryResponse] = await Promise.all([
     admin.graphql(
       `#graphql
         query getRecentOrdersForDashboard($query: String!) {
-          orders(first: 50, sortKey: CREATED_AT, reverse: true, query: $query) {
+          orders(first: 75, sortKey: CREATED_AT, reverse: true, query: $query) {
             edges {
               node {
                 id
@@ -508,6 +657,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
                         id
                         title
                         sku
+                        inventoryItem {
+                          id
+                          unitCost {
+                            amount
+                            currencyCode
+                          }
+                        }
                         product {
                           id
                           title
@@ -536,13 +692,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ),
     admin.graphql(`#graphql
       query getInventoryForDashboard {
-        products(first: 15) {
+        products(first: 20) {
           edges {
             node {
               id
               title
               vendor
-              variants(first: 25) {
+              variants(first: 30) {
                 edges {
                   node {
                     id
@@ -552,6 +708,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
                       id
                       sku
                       tracked
+                      unitCost {
+                        amount
+                        currencyCode
+                      }
                       inventoryLevels(first: 10) {
                         edges {
                           node {
@@ -590,6 +750,57 @@ export async function loader({ request }: LoaderFunctionArgs) {
       (edge: { node: ProductNode }) => edge.node,
     ) ?? [];
 
+  const { costByVariantId, costBySku } = buildCostMaps(products);
+
+  let staffRowsByOrderId = new Map<string, string>();
+  let staffNotice: string | null = null;
+
+  try {
+    const staffResponse = await admin.graphql(
+      `#graphql
+        query getOrdersStaffForDashboard($query: String!) {
+          orders(first: 75, sortKey: CREATED_AT, reverse: true, query: $query) {
+            edges {
+              node {
+                id
+                retailLocation {
+                  id
+                }
+                staffMember {
+                  id
+                  name
+                }
+              }
+            }
+          }
+        }
+      `,
+      {
+        variables: {
+          query: orderQuery,
+        },
+      },
+    );
+
+    const staffData = await staffResponse.json();
+    const staffOrders: StaffOrderNode[] =
+      staffData.data?.orders?.edges?.map(
+        (edge: { node: StaffOrderNode }) => edge.node,
+      ) ?? [];
+
+    staffRowsByOrderId = new Map(
+      staffOrders
+        .filter((order) => order.retailLocation?.id === selectedLocationId)
+        .map((order) => [
+          order.id,
+          order.staffMember?.name ?? "Unassigned / unavailable",
+        ]),
+    );
+  } catch {
+    staffNotice =
+      "Sales by staff is unavailable with the current Shopify permissions or plan. It usually requires staff/user access to be enabled.";
+  }
+
   const orderRows: OrderLineRow[] = orders.flatMap((order) => {
     if (order.retailLocation?.id !== selectedLocationId) {
       return [];
@@ -599,6 +810,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const unitPrice = Number(
         lineItem.discountedUnitPriceSet?.shopMoney?.amount ?? 0,
       );
+      const variantId = lineItem.variant?.id ?? "-";
+      const sku = lineItem.sku ?? lineItem.variant?.sku ?? "-";
+      const lineItemUnitCost = getNumericCost(
+        lineItem.variant?.inventoryItem?.unitCost?.amount,
+      );
+      const unitCost =
+        lineItemUnitCost || costByVariantId.get(variantId) || costBySku.get(sku) || 0;
+      const revenue = unitPrice * lineItem.quantity;
+      const cogs = unitCost * lineItem.quantity;
+      const grossProfit = revenue - cogs;
 
       return {
         orderId: order.id,
@@ -606,13 +827,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
         createdAt: order.createdAt,
         productTitle: lineItem.variant?.product?.title ?? lineItem.title,
         variantTitle: lineItem.variant?.title ?? "-",
-        sku: lineItem.sku ?? lineItem.variant?.sku ?? "-",
+        sku,
         vendor: lineItem.variant?.product?.vendor ?? "-",
         quantity: lineItem.quantity,
         unitPrice,
-        revenue: unitPrice * lineItem.quantity,
+        unitCost,
+        revenue,
+        cogs,
+        grossProfit,
         locationId: order.retailLocation?.id ?? "-",
         locationName: order.retailLocation?.name ?? "-",
+        staffName: staffRowsByOrderId.get(order.id) ?? "Unassigned / unavailable",
+        orderUrl: `https://admin.shopify.com/store/${shopHandle}/orders/${order.id.split("/").pop() ?? ""}`,
       };
     });
   });
@@ -624,6 +850,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       if (!inventoryItem) {
         return [];
       }
+
+      const unitCost = getNumericCost(inventoryItem.unitCost?.amount);
 
       return inventoryItem.inventoryLevels.edges.flatMap(({ node: level }) => {
         if (level.location.id !== selectedLocationId) {
@@ -640,31 +868,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
             locationName: level.location.name,
             available: getAvailableQuantity(level),
             tracked: inventoryItem.tracked,
+            unitCost,
           },
         ];
       });
     }),
   );
 
+  const expenseRows: FixedExpenseRow[] = [];
+  const expensesToDate: number | null = null;
+
   const revenue = orderRows.reduce((sum, row) => sum + row.revenue, 0);
+  const cogs = orderRows.reduce((sum, row) => sum + row.cogs, 0);
+  const grossProfit = revenue - cogs;
+  const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
+  const netProfit: number | null = null;
   const unitsSold = orderRows.reduce((sum, row) => sum + row.quantity, 0);
   const uniqueOrders = new Set(orderRows.map((row) => row.orderId));
   const ordersCount = uniqueOrders.size;
-  const averageOrderValue = ordersCount > 0 ? revenue / ordersCount : 0;
-  const inventoryUnits = inventoryRows.reduce(
-    (sum, row) => sum + row.available,
-    0,
-  );
 
   const stockAlerts = computeStockAlerts(
     inventoryRows,
     orderRows,
-    periodRange.days,
+    dateRange.selectedDays,
   );
-
-  const lowStockCount = stockAlerts.filter(
-    (row) => row.status === "Critical" || row.status === "Warning",
-  ).length;
 
   const criticalStockCount = stockAlerts.filter(
     (row) => row.status === "Critical",
@@ -674,36 +901,40 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .filter(Boolean)
     .flat();
 
+  const notices: string[] = [];
+
   return {
     locations: activeLocations,
     selectedLocationId,
     selectedLocationName,
-    selectedPeriod,
-    periodLabel: periodRange.label,
-    startDate: periodRange.startDate,
-    endDate: periodRange.endDate,
+    startDate: dateRange.startDate,
+    endDate: dateRange.endDate,
+    selectedDays: dateRange.selectedDays,
     kpis: {
       revenue,
       ordersCount,
       unitsSold,
-      averageOrderValue,
-      inventoryUnits,
-      lowStockCount,
+      cogs,
+      grossProfit,
+      grossMarginPct,
+      expensesToDate,
+      netProfit,
       criticalStockCount,
     },
     topProducts: computeTopProducts(orderRows),
     stockAlerts,
     vendorSummary: computeVendorSummary(orderRows, inventoryRows),
-    slowMovers: computeSlowMovers(inventoryRows, orderRows),
+    staffSummary: computeStaffSummary(orderRows),
+    expenseRows,
     recentOrders: orderRows.slice(0, 25),
+    notices,
     errors: errors.length > 0 ? errors : undefined,
-  };
+  } satisfies LoaderData;
 }
 
 function escapeCsvValue(value: unknown) {
   const stringValue = String(value ?? "");
   const escaped = stringValue.replace(/"/g, '""');
-
   return `"${escaped}"`;
 }
 
@@ -728,7 +959,7 @@ function downloadCsv(filename: string, headers: string[], rows: Array<Array<unkn
 }
 
 function ExportButton({
-  label = "Export CSV",
+  label = "CSV",
   onClick,
 }: {
   label?: string;
@@ -739,13 +970,15 @@ function ExportButton({
       type="button"
       onClick={onClick}
       style={{
-        border: "1px solid #c9c9c9",
-        background: "white",
+        border: "1px solid #d1d5db",
+        background: "#ffffff",
         borderRadius: 10,
         padding: "7px 10px",
         fontSize: 12,
         fontWeight: 700,
         cursor: "pointer",
+        color: "#202223",
+        whiteSpace: "nowrap",
       }}
     >
       {label}
@@ -753,32 +986,65 @@ function ExportButton({
   );
 }
 
-
 function KpiCard({
   title,
   value,
-  subtitle
+  subtitle,
+  exportValue,
+  selectedLocationName,
+  startDate,
+  endDate,
 }: {
   title: string;
   value: string;
   subtitle: string;
-
+  exportValue: string | number;
+  selectedLocationName: string | null;
+  startDate: string;
+  endDate: string;
 }) {
   return (
     <div
       style={{
         background: "white",
-        border: "1px solid #e3e3e3",
-        borderRadius: 16,
+        border: "1px solid #e5e7eb",
+        borderRadius: 18,
         padding: 20,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
+        minHeight: 132,
       }}
     >
-      <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "flex-start",
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ color: "#5f6368", fontSize: 14, fontWeight: 700 }}>
+          {title}
+        </div>
+
+        <ExportButton
+          onClick={() =>
+            downloadCsv(
+              `${title.toLowerCase().replaceAll(" ", "-")}.csv`,
+              ["Metric", "Value", "Location", "Start date", "End date"],
+              [[title, exportValue, selectedLocationName ?? "-", startDate, endDate]],
+            )
+          }
+        />
+      </div>
+
+      <div style={{ fontSize: 30, fontWeight: 800, marginBottom: 8 }}>
         {value}
       </div>
 
-      <div style={{ color: "#707070", fontSize: 13 }}>{subtitle}</div>
+      <div style={{ color: "#6b7280", fontSize: 13, lineHeight: 1.35 }}>
+        {subtitle}
+      </div>
     </div>
   );
 }
@@ -787,9 +1053,11 @@ function SectionCard({
   title,
   children,
   exportConfig,
+  helperText,
 }: {
   title: string;
   children: React.ReactNode;
+  helperText?: string;
   exportConfig?: {
     filename: string;
     headers: string[];
@@ -800,11 +1068,11 @@ function SectionCard({
     <section
       style={{
         background: "white",
-        border: "1px solid #e3e3e3",
-        borderRadius: 16,
+        border: "1px solid #e5e7eb",
+        borderRadius: 18,
         padding: 22,
         boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-        minHeight: 420,
+        minHeight: 392,
       }}
     >
       <div
@@ -812,11 +1080,25 @@ function SectionCard({
           display: "flex",
           justifyContent: "space-between",
           gap: 12,
-          alignItems: "center",
-          marginBottom: 16,
+          alignItems: "flex-start",
+          marginBottom: helperText ? 8 : 16,
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 20 }}>{title}</h2>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>{title}</h2>
+          {helperText ? (
+            <p
+              style={{
+                margin: "8px 0 0",
+                color: "#6b7280",
+                fontSize: 13,
+                lineHeight: 1.4,
+              }}
+            >
+              {helperText}
+            </p>
+          ) : null}
+        </div>
 
         {exportConfig ? (
           <ExportButton
@@ -830,7 +1112,6 @@ function SectionCard({
           />
         ) : null}
       </div>
-
       {children}
     </section>
   );
@@ -861,18 +1142,21 @@ function StatusBadge({ status }: { status: StockAlertRow["status"] }) {
 function Table({
   headers,
   rows,
+  maxHeight = 320,
 }: {
   headers: string[];
   rows: Array<Array<string | number | React.ReactNode>>;
+  maxHeight?: number;
 }) {
   return (
     <div
       style={{
         overflowX: "auto",
         overflowY: "auto",
-        maxHeight: 320,
+        maxHeight,
         border: "1px solid #f0f0f0",
-        borderRadius: 12,
+        borderRadius: 14,
+        marginTop: 14,
       }}
     >
       <table
@@ -880,6 +1164,7 @@ function Table({
           width: "100%",
           borderCollapse: "collapse",
           fontSize: 14,
+          background: "white",
         }}
       >
         <thead>
@@ -891,12 +1176,12 @@ function Table({
                   textAlign: "left",
                   padding: "12px 10px",
                   borderBottom: "1px solid #dcdcdc",
-                  color: "#616161",
-                  fontWeight: 700,
+                  color: "#4b5563",
+                  fontWeight: 800,
                   whiteSpace: "nowrap",
                   position: "sticky",
                   top: 0,
-                  background: "white",
+                  background: "#fafafa",
                   zIndex: 1,
                 }}
               >
@@ -913,9 +1198,10 @@ function Table({
                   <td
                     key={cellIndex}
                     style={{
-                      padding: "12px 10px",
+                      padding: "11px 10px",
                       borderBottom: "1px solid #f0f0f0",
                       verticalAlign: "top",
+                      color: "#202223",
                     }}
                   >
                     {cell}
@@ -929,7 +1215,7 @@ function Table({
                 colSpan={headers.length}
                 style={{
                   padding: 16,
-                  color: "#707070",
+                  color: "#6b7280",
                 }}
               >
                 No data for this location and period.
@@ -947,27 +1233,30 @@ export default function LiveDashboardPage() {
     locations,
     selectedLocationId,
     selectedLocationName,
-    selectedPeriod,
-    periodLabel,
     startDate,
     endDate,
+    selectedDays,
     kpis,
     topProducts,
     stockAlerts,
     vendorSummary,
-    slowMovers,
+    staffSummary,
     recentOrders,
-    errors,
   } = useLoaderData<LoaderData>();
 
   const navigate = useNavigate();
 
-  function updateFilters(nextLocationId: string, nextPeriod: string) {
+  function updateFilters(nextLocationId: string, nextStartDate: string, nextEndDate: string) {
     navigate(
       `/app/live-dashboard?locationId=${encodeURIComponent(
         nextLocationId,
-      )}&period=${encodeURIComponent(nextPeriod)}`,
+      )}&startDate=${encodeURIComponent(nextStartDate)}&endDate=${encodeURIComponent(nextEndDate)}`,
     );
+  }
+
+  function setToday() {
+    const today = getTodayLocalDate();
+    updateFilters(selectedLocationId ?? "", today, today);
   }
 
   return (
@@ -980,397 +1269,163 @@ export default function LiveDashboardPage() {
           "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
       }}
     >
-      <div style={{ maxWidth: 1320, margin: "0 auto" }}>
-        <header style={{ marginBottom: 28 }}>
-          <div style={{ color: "#616161", fontSize: 14, marginBottom: 6 }}>
+      <div style={{ maxWidth: 1360, margin: "0 auto" }}>
+        <header
+          style={{
+            marginBottom: 24,
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderRadius: 20,
+            padding: 24,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+          }}
+        >
+          <div style={{ color: "#5f6368", fontSize: 14, marginBottom: 6, fontWeight: 700 }}>
             Live Shopify data
           </div>
 
-          <h1 style={{ margin: 0, fontSize: 32, fontWeight: 750 }}>
+          <h1 style={{ margin: 0, fontSize: 34, fontWeight: 850 }}>
             Store dashboard
           </h1>
 
-          <p style={{ marginTop: 8, color: "#616161", fontSize: 16 }}>
-            Sales, inventory, best sellers and stock risks by location.
+          <p style={{ marginTop: 8, color: "#6b7280", fontSize: 16 }}>
+            Sales, margin and operational risks by location.
           </p>
 
-          <div
-            style={{
-              marginTop: 18,
-              display: "grid",
-              gridTemplateColumns: "minmax(220px, 340px) minmax(160px, 220px)",
-              gap: 14,
-              alignItems: "end",
-            }}
-          >
-            <div>
-              <label
-                htmlFor="location"
-                style={{
-                  display: "block",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  marginBottom: 6,
-                }}
-              >
-                Location
-              </label>
-
-              <select
-                id="location"
-                value={selectedLocationId ?? ""}
-                onChange={(event) =>
-                  updateFilters(event.target.value, selectedPeriod)
-                }
-                style={{
-                  width: "100%",
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #c9c9c9",
-                  background: "white",
-                  fontSize: 14,
-                }}
-              >
-                {locations.map((location) => (
-                  <option key={location.id} value={location.id}>
-                    {location.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label
-                htmlFor="period"
-                style={{
-                  display: "block",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  marginBottom: 6,
-                }}
-              >
-                Period
-              </label>
-
-              <select
-                id="period"
-                value={selectedPeriod}
-                onChange={(event) =>
-                  updateFilters(selectedLocationId ?? "", event.target.value)
-                }
-                style={{
-                  width: "100%",
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid #c9c9c9",
-                  background: "white",
-                  fontSize: 14,
-                }}
-              >
-                {periodOptions.map((period) => (
-                  <option key={period.value} value={period.value}>
-                    {period.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div
-            style={{
-              marginTop: 14,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-            }}
-          >
-            <span
+          <Form method="get">
+            <div
               style={{
-                background: "white",
-                border: "1px solid #e3e3e3",
-                borderRadius: 999,
-                padding: "7px 12px",
-                fontSize: 13,
-                fontWeight: 700,
+                marginTop: 18,
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                gap: 14,
+                alignItems: "end",
               }}
             >
+              <div>
+                <label htmlFor="locationId" style={{ display: "block", fontSize: 14, fontWeight: 800, marginBottom: 6 }}>
+                  Location
+                </label>
+                <select
+                  id="locationId"
+                  name="locationId"
+                  value={selectedLocationId ?? ""}
+                  onChange={(event) => updateFilters(event.target.value, startDate, endDate)}
+                  style={{ width: "100%", padding: "11px 12px", borderRadius: 12, border: "1px solid #c9c9c9", background: "white", fontSize: 14, minHeight: 44 }}
+                >
+                  {locations.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="startDate" style={{ display: "block", fontSize: 14, fontWeight: 800, marginBottom: 6 }}>
+                  Start date
+                </label>
+                <input
+                  id="startDate"
+                  name="startDate"
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => updateFilters(selectedLocationId ?? "", event.target.value, endDate)}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 12, border: "1px solid #c9c9c9", background: "white", fontSize: 14, minHeight: 44 }}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="endDate" style={{ display: "block", fontSize: 14, fontWeight: 800, marginBottom: 6 }}>
+                  End date
+                </label>
+                <input
+                  id="endDate"
+                  name="endDate"
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => updateFilters(selectedLocationId ?? "", startDate, event.target.value)}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 12, border: "1px solid #c9c9c9", background: "white", fontSize: 14, minHeight: 44 }}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={setToday}
+                style={{ border: "1px solid #202223", background: "#202223", color: "white", borderRadius: 12, padding: "11px 16px", fontSize: 14, fontWeight: 800, cursor: "pointer", minHeight: 44 }}
+              >
+                Today
+              </button>
+
+              <button
+                type="submit"
+                style={{ border: "1px solid #c9c9c9", background: "white", borderRadius: 12, padding: "11px 16px", fontSize: 14, fontWeight: 800, cursor: "pointer", minHeight: 44 }}
+              >
+                Apply
+              </button>
+            </div>
+          </Form>
+
+          <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <span style={{ background: "#fafafa", border: "1px solid #e3e3e3", borderRadius: 999, padding: "7px 12px", fontSize: 13, fontWeight: 800 }}>
               Current location: {selectedLocationName ?? "-"}
             </span>
-
-            <span
-              style={{
-                background: "white",
-                border: "1px solid #e3e3e3",
-                borderRadius: 999,
-                padding: "7px 12px",
-                fontSize: 13,
-                fontWeight: 700,
-              }}
-            >
-              Period: {periodLabel}
+            <span style={{ background: "#fafafa", border: "1px solid #e3e3e3", borderRadius: 999, padding: "7px 12px", fontSize: 13, fontWeight: 800 }}>
+              Range: {startDate} → {endDate}
             </span>
-
-            <span
-              style={{
-                background: "white",
-                border: "1px solid #e3e3e3",
-                borderRadius: 999,
-                padding: "7px 12px",
-                fontSize: 13,
-                fontWeight: 700,
-              }}
-            >
-              {startDate} → {endDate}
+            <span style={{ background: "#fafafa", border: "1px solid #e3e3e3", borderRadius: 999, padding: "7px 12px", fontSize: 13, fontWeight: 800 }}>
+              {selectedDays} day{selectedDays > 1 ? "s" : ""}
             </span>
-          </div>
-
-          <div
-            style={{
-              marginTop: 16,
-              background: "#fff8e5",
-              border: "1px solid #f1c96b",
-              borderRadius: 14,
-              padding: 14,
-              color: "#5f4200",
-              fontSize: 14,
-            }}
-          >
-            Sales source: POS / retail location only. Online orders are not
-            included in this location view yet.
           </div>
         </header>
 
-        {errors ? (
-          <section
-            style={{
-              background: "#fff4f4",
-              border: "1px solid #f2b8b5",
-              borderRadius: 14,
-              padding: 18,
-              marginBottom: 20,
-            }}
-          >
-            <strong>GraphQL errors</strong>
-            <pre style={{ whiteSpace: "pre-wrap" }}>
-              {JSON.stringify(errors, null, 2)}
-            </pre>
-          </section>
-        ) : null}
-
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: 16,
-            marginBottom: 22,
-          }}
-        >
-          <KpiCard
-            title="Revenue"
-            value={formatCurrency(kpis.revenue)}
-            subtitle="Retail sales linked to this location"
-          />
-          <KpiCard
-            title="Orders"
-            value={String(kpis.ordersCount)}
-            subtitle="Unique orders for this location"
-          />
-          <KpiCard
-            title="Units sold"
-            value={String(kpis.unitsSold)}
-            subtitle="Quantity sold from order lines"
-          />
-          <KpiCard
-            title="Average order value"
-            value={formatCurrency(kpis.averageOrderValue)}
-            subtitle="Revenue divided by orders"
-          />
-          <KpiCard
-            title="Inventory units"
-            value={formatNumber(kpis.inventoryUnits)}
-            subtitle="Available stock at this location"
-          />
-          <KpiCard
-            title="Critical SKUs"
-            value={String(kpis.criticalStockCount)}
-            subtitle="Estimated stock coverage ≤ 3 days"
-          />
+        <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginBottom: 22 }}>
+          <KpiCard title="Revenue" value={formatCurrency(kpis.revenue)} subtitle="Retail sales linked to this location" exportValue={kpis.revenue} selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
+          <KpiCard title="Orders" value={String(kpis.ordersCount)} subtitle="Unique orders for this location" exportValue={kpis.ordersCount} selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
+          <KpiCard title="Units sold" value={String(kpis.unitsSold)} subtitle="Quantity sold from order lines" exportValue={kpis.unitsSold} selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
+          <KpiCard title="COGS" value={formatCurrency(kpis.cogs)} subtitle="Product costs for sold items" exportValue={kpis.cogs} selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
+          <KpiCard title="Gross profit" value={formatCurrency(kpis.grossProfit)} subtitle="Revenue minus COGS" exportValue={kpis.grossProfit} selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
+          <KpiCard title="Gross margin" value={formatPercent(kpis.grossMarginPct)} subtitle="Gross profit divided by revenue" exportValue={kpis.grossMarginPct} selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
+          <KpiCard title="Expenses" value="Not configured" subtitle="Requires expenses settings page" exportValue="Not configured" selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
+          <KpiCard title="Net profit" value="Not available" subtitle="Requires configured expenses" exportValue="Not available" selectedLocationName={selectedLocationName} startDate={startDate} endDate={endDate} />
         </section>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)",
-            gap: 20,
-            marginBottom: 20,
-          }}
-        >
-          <SectionCard
-            title="Best sellers"
-            exportConfig={{
-              filename: "best-sellers.csv",
-              headers: ["Product", "SKU", "Vendor", "Units sold", "Revenue", "% sales"],
-              rows: topProducts.map((row) => [
-                row.productTitle,
-                row.sku,
-                row.vendor,
-                row.unitsSold,
-                row.revenue,
-                row.revenueSharePct.toFixed(1),
-              ]),
-            }}
-          >
-            <Table
-              headers={[
-                "Product",
-                "SKU",
-                "Vendor",
-                "Units sold",
-                "Revenue",
-                "% sales",
-              ]}
-              rows={topProducts.map((row) => [
-                row.productTitle,
-                row.sku,
-                row.vendor,
-                row.unitsSold,
-                formatCurrency(row.revenue),
-                `${row.revenueSharePct.toFixed(1)}%`,
-              ])}
-            />
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 20, marginBottom: 20 }}>
+          <SectionCard title="Best sellers" exportConfig={{ filename: "best-sellers.csv", headers: ["Product", "SKU", "Vendor", "Units", "Revenue"], rows: topProducts.map((row) => [row.productTitle, row.sku, row.vendor, row.unitsSold, row.revenue]) }}>
+            <Table headers={["Product", "SKU", "Vendor", "Units", "Revenue"]} rows={topProducts.map((row) => [row.productTitle, row.sku, row.vendor, row.unitsSold, formatCurrency(row.revenue)])} />
           </SectionCard>
 
           <SectionCard
             title="Soon out of stock"
-            exportConfig={{
-              filename: "soon-out-of-stock.csv",
-              headers: ["Product", "SKU", "Available", "Sold", "Days left", "Status"],
-              rows: stockAlerts.map((row) => [
-                row.productTitle,
-                row.sku,
-                row.available,
-                row.unitsSold,
-                row.daysOfStock === null ? "-" : row.daysOfStock.toFixed(1),
-                row.status,
-              ]),
-            }}
+            helperText="Uses recent sales velocity: average daily sales = units sold in the selected date range ÷ number of days. Days left = available stock ÷ average daily sales. Critical ≤ 3 days, Warning ≤ 7 days."
+            exportConfig={{ filename: "soon-out-of-stock.csv", headers: ["Product", "SKU", "Available", "Sold", "Days left", "Status"], rows: stockAlerts.map((row) => [row.productTitle, row.sku, row.available, row.unitsSold, row.daysOfStock === null ? "-" : row.daysOfStock.toFixed(1), row.status]) }}
           >
-            <Table
-              headers={[
-                "Product",
-                "SKU",
-                "Available",
-                "Sold",
-                "Days left",
-                "Status",
-              ]}
-              rows={stockAlerts.map((row) => [
-                row.productTitle,
-                row.sku,
-                row.available,
-                row.unitsSold,
-                row.daysOfStock === null
-                  ? "-"
-                  : row.daysOfStock.toFixed(1),
-                <StatusBadge key={`${row.sku}-${row.status}`} status={row.status} />,
-              ])}
-            />
+            <Table headers={["Product", "SKU", "Available", "Sold", "Days left", "Status"]} rows={stockAlerts.map((row) => [row.productTitle, row.sku, row.available, row.unitsSold, row.daysOfStock === null ? "-" : row.daysOfStock.toFixed(1), <StatusBadge key={`${row.sku}-${row.status}`} status={row.status} />])} />
           </SectionCard>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-            gap: 20,
-            marginBottom: 20,
-          }}
-        >
-          <SectionCard
-            title="Sales by vendor"
-            exportConfig={{
-              filename: "sales-by-vendor.csv",
-              headers: ["Vendor", "Revenue", "Units sold", "Inventory units", "Low stock SKUs"],
-              rows: vendorSummary.map((row) => [
-                row.vendor,
-                row.revenue,
-                row.unitsSold,
-                row.inventoryUnits,
-                row.lowStockSkus,
-              ]),
-            }}
-          >
-            <Table
-              headers={[
-                "Vendor",
-                "Revenue",
-                "Units sold",
-                "Inventory units",
-                "Low stock SKUs",
-              ]}
-              rows={vendorSummary.map((row) => [
-                row.vendor,
-                formatCurrency(row.revenue),
-                row.unitsSold,
-                row.inventoryUnits,
-                row.lowStockSkus,
-              ])}
-            />
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 20, marginBottom: 20 }}>
+          <SectionCard title="Sales by vendor" exportConfig={{ filename: "sales-by-vendor.csv", headers: ["Vendor", "Units", "Revenue"], rows: vendorSummary.map((row) => [row.vendor, row.unitsSold, row.revenue]) }}>
+            <Table headers={["Vendor", "Units", "Revenue"]} rows={vendorSummary.map((row) => [row.vendor, row.unitsSold, formatCurrency(row.revenue)])} />
           </SectionCard>
 
-          <SectionCard
-            title="Slow movers"
-            exportConfig={{
-              filename: "slow-movers.csv",
-              headers: ["Product", "Variant", "SKU", "Vendor", "Available"],
-              rows: slowMovers.map((row) => [
-                row.productTitle,
-                row.variantTitle,
-                row.sku,
-                row.vendor,
-                row.available,
-              ]),
-            }}
-          >
-            <Table
-              headers={["Product", "Variant", "SKU", "Vendor", "Available"]}
-              rows={slowMovers.map((row) => [
-                row.productTitle,
-                row.variantTitle,
-                row.sku,
-                row.vendor,
-                row.available,
-              ])}
-            />
+          <SectionCard title="Sales by staff" helperText="This depends on Shopify POS staff attribution. If empty, Shopify is not returning staff attribution through the current API access." exportConfig={{ filename: "sales-by-staff.csv", headers: ["Staff", "Revenue", "Orders", "Units sold"], rows: staffSummary.map((row) => [row.staffName, row.revenue, row.ordersCount, row.unitsSold]) }}>
+            <Table headers={["Staff", "Revenue", "Orders", "Units sold"]} rows={staffSummary.map((row) => [row.staffName, formatCurrency(row.revenue), row.ordersCount, row.unitsSold])} />
           </SectionCard>
         </div>
 
-        <SectionCard
-          title="Recent order lines"
-          exportConfig={{
-            filename: "recent-order-lines.csv",
-            headers: ["Order", "Date", "Product", "SKU", "Qty", "Revenue"],
-            rows: recentOrders.map((row) => [
-              row.orderName,
-              formatDate(row.createdAt),
-              row.productTitle,
-              row.sku,
-              row.quantity,
-              row.revenue,
-            ]),
-          }}
-        >
-          <Table
-            headers={["Order", "Date", "Product", "SKU", "Qty", "Revenue"]}
-            rows={recentOrders.map((row) => [
-              row.orderName,
-              formatDate(row.createdAt),
-              row.productTitle,
-              row.sku,
-              row.quantity,
-              formatCurrency(row.revenue),
-            ])}
-          />
+        <SectionCard title="Recent order lines" exportConfig={{ filename: "recent-order-lines.csv", headers: ["Order", "Date", "Product", "SKU", "Qty", "Revenue", "COGS", "Gross profit", "Staff", "Order URL"], rows: recentOrders.map((row) => [row.orderName, formatDate(row.createdAt), row.productTitle, row.sku, row.quantity, row.revenue, row.cogs, row.grossProfit, row.staffName, row.orderUrl]) }}>
+          <Table maxHeight={420} headers={["Order", "Date", "Product", "SKU", "Qty", "Revenue", "COGS", "Gross profit", "Staff"]} rows={recentOrders.map((row) => [
+            <a key={row.orderId} href={row.orderUrl} target="_top" style={{ color: "#005bd3", fontWeight: 800, textDecoration: "none" }}>{row.orderName}</a>,
+            formatDate(row.createdAt),
+            row.productTitle,
+            row.sku,
+            row.quantity,
+            formatCurrency(row.revenue),
+            formatCurrency(row.cogs),
+            formatCurrency(row.grossProfit),
+            row.staffName,
+          ])} />
         </SectionCard>
       </div>
     </main>
