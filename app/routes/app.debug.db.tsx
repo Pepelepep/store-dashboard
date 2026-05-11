@@ -7,26 +7,49 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 type LoaderData = {
   shop: string;
   ok: boolean;
-  table: string;
-  rowsCount: number;
-  error?: string;
+  tables: {
+    table: string;
+    rowsCount: number;
+    error?: string;
+  }[];
 };
+
+async function getTableCount(
+  table: string,
+  shop: string,
+  supabase: ReturnType<typeof getSupabaseAdminClient>,
+) {
+  const { count, error } = await supabase
+    .from(table)
+    .select("*", { count: "exact", head: true })
+    .eq("shop_domain", shop);
+
+  return {
+    table,
+    rowsCount: count ?? 0,
+    error: error?.message,
+  };
+}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
-  const { count, error } = await supabase
-    .from("locations")
-    .select("*", { count: "exact", head: true })
-    .eq("shop_domain", session.shop);
+  const tables = await Promise.all([
+    getTableCount("locations", session.shop, supabase),
+    getTableCount("products", session.shop, supabase),
+    getTableCount("variants", session.shop, supabase),
+    getTableCount("inventory_levels", session.shop, supabase),
+    getTableCount("orders", session.shop, supabase),
+    getTableCount("order_lines", session.shop, supabase),
+    getTableCount("fixed_expenses", session.shop, supabase),
+    getTableCount("user_location_access", session.shop, supabase),
+  ]);
 
   return {
     shop: session.shop,
-    ok: !error,
-    table: "locations",
-    rowsCount: count ?? 0,
-    error: error?.message,
+    ok: tables.every((table) => !table.error),
+    tables,
   };
 }
 
