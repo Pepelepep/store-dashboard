@@ -19,8 +19,11 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <ui-nav-menu>
-        <Link to="/app/live-dashboard" rel="home">
-          Live dashboard
+        <Link to="/app/db-dashboard" rel="home">
+          Dashboard
+        </Link>
+        <Link to="/app/admin/sync">
+          Data sync
         </Link>
       </ui-nav-menu>
 
