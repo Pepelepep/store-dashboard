@@ -27,14 +27,18 @@ export default function App() {
         <Link to="/app/db-dashboard" rel="home">
           Dashboard
         </Link>
-        <Link to="/app/admin/sync">
-          {canAdmin ? (
-            <>
-              <Link to="/app/admin/sync">Data sync</Link>
-              <Link to="/app/admin/permissions">Permissions</Link>
-            </>
-          ) : null}
-        </Link>
+
+        {canAdmin ? (
+          <Link to="/app/admin/sync">
+            Data sync
+          </Link>
+        ) : null}
+
+        {canAdmin ? (
+          <Link to="/app/admin/permissions">
+            Permissions
+          </Link>
+        ) : null}
       </ui-nav-menu>
 
       <Outlet />
