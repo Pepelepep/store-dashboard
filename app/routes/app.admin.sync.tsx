@@ -1,8 +1,15 @@
-import type { LoaderFunctionArgs } from "react-router";
-import { Link, useLoaderData } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import {
+  Form,
+  Link,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { assertAdminAccess } from "../lib/auth/permissions.server";
 
 type TableCount = {
   table: string;
@@ -23,6 +30,12 @@ type LoaderData = {
   shop: string;
   counts: TableCount[];
   lastSyncRuns: SyncRun[];
+};
+
+type ActionData = {
+  ok: boolean;
+  message: string;
+  details?: unknown;
 };
 
 async function getTableCount({
@@ -64,6 +77,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
+  await assertAdminAccess({ request, session, supabase });
+
   const counts = await Promise.all([
     getTableCount({ table: "locations", shop: session.shop, supabase }),
     getTableCount({ table: "products", shop: session.shop, supabase }),
@@ -87,6 +102,65 @@ export async function loader({ request }: LoaderFunctionArgs) {
     counts,
     lastSyncRuns: (syncRuns ?? []) as SyncRun[],
   };
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  const { session } = await authenticate.admin(request);
+  const supabase = getSupabaseAdminClient();
+
+  await assertAdminAccess({ request, session, supabase });
+
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
+
+  if (intent !== "refresh_all") {
+    return {
+      ok: false,
+      message: "Unknown action.",
+    } satisfies ActionData;
+  }
+
+  const appUrl = process.env.SHOPIFY_APP_URL;
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (!appUrl || !cronSecret) {
+    return {
+      ok: false,
+      message: "Missing SHOPIFY_APP_URL or CRON_SECRET environment variable.",
+    } satisfies ActionData;
+  }
+
+  const response = await fetch(
+    `${appUrl.replace(/\/$/, "")}/api/cron/daily-sync`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cronSecret}`,
+      },
+    },
+  );
+
+  let details: unknown = null;
+
+  try {
+    details = await response.json();
+  } catch {
+    details = await response.text();
+  }
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      message: `Full sync failed with status ${response.status}.`,
+      details,
+    } satisfies ActionData;
+  }
+
+  return {
+    ok: true,
+    message: "Full data refresh completed successfully.",
+    details,
+  } satisfies ActionData;
 }
 
 function Card({
@@ -131,6 +205,7 @@ function ButtonLink({
         padding: "10px 14px",
         fontWeight: 700,
         textDecoration: "none",
+        textAlign: "center",
       }}
     >
       {children}
@@ -140,6 +215,12 @@ function ButtonLink({
 
 export default function AdminSyncPage() {
   const { shop, counts, lastSyncRuns } = useLoaderData<LoaderData>();
+  const actionData = useActionData<ActionData>();
+  const navigation = useNavigation();
+
+  const isRefreshing =
+    navigation.state !== "idle" &&
+    navigation.formData?.get("intent") === "refresh_all";
 
   return (
     <main
@@ -161,6 +242,22 @@ export default function AdminSyncPage() {
             Shop: <strong>{shop}</strong>
           </p>
         </header>
+
+        {actionData ? (
+          <div
+            style={{
+              background: actionData.ok ? "#ecfdf3" : "#fef3f2",
+              border: `1px solid ${actionData.ok ? "#abefc6" : "#fecdca"}`,
+              color: actionData.ok ? "#067647" : "#b42318",
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 20,
+              fontWeight: 700,
+            }}
+          >
+            {actionData.message}
+          </div>
+        ) : null}
 
         <div
           style={{
@@ -192,6 +289,34 @@ export default function AdminSyncPage() {
         >
           <Card title="Refresh data">
             <div style={{ display: "grid", gap: 12 }}>
+              <Form method="post">
+                <input type="hidden" name="intent" value="refresh_all" />
+                <button
+                  type="submit"
+                  disabled={isRefreshing}
+                  style={{
+                    width: "100%",
+                    border: "1px solid #006fbb",
+                    background: isRefreshing ? "#8cc5ff" : "#006fbb",
+                    color: "white",
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                    fontWeight: 800,
+                    cursor: isRefreshing ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {isRefreshing ? "Refreshing all data..." : "Refresh all data"}
+                </button>
+              </Form>
+
+              <div
+                style={{
+                  height: 1,
+                  background: "#e3e3e3",
+                  margin: "4px 0",
+                }}
+              />
+
               <ButtonLink to="/app/admin/sync-locations">
                 Refresh locations
               </ButtonLink>
@@ -215,7 +340,7 @@ export default function AdminSyncPage() {
               <li>Refresh locations</li>
               <li>Refresh products & variants</li>
               <li>Refresh inventory</li>
-              <li>Refresh orders month by month</li>
+              <li>Refresh orders</li>
             </ol>
 
             <div
@@ -228,8 +353,8 @@ export default function AdminSyncPage() {
                 marginTop: 16,
               }}
             >
-              For orders, use date ranges of one month or less to avoid Shopify
-              query cost and timeout issues.
+              The full refresh uses the same flow as the scheduled daily cron.
+              Use it when the admin needs to force an immediate update.
             </div>
           </Card>
         </div>
@@ -264,23 +389,62 @@ export default function AdminSyncPage() {
               <tbody>
                 {lastSyncRuns.map((run) => (
                   <tr key={run.id}>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {run.sync_type}
                     </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {run.status}
                     </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {formatDateTime(run.started_at)}
                     </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {formatDateTime(run.finished_at)}
                     </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {run.error_message ?? "-"}
                     </td>
                   </tr>
                 ))}
+
+                {lastSyncRuns.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={5}
+                      style={{
+                        padding: "14px 10px",
+                        color: "#616161",
+                      }}
+                    >
+                      No sync runs yet.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
