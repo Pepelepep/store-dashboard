@@ -3,6 +3,7 @@ import { Form, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { getPermissionContext } from "../lib/auth/permissions.server";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -721,6 +722,7 @@ function Table({
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  const permissions = await getPermissionContext({ request, session, supabase });
   const url = new URL(request.url);
   const today = getTodayStoreDate();
   const preset = url.searchParams.get("preset");
@@ -741,7 +743,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   if (locationsError) errors.push(locationsError.message);
 
-  const locations = (locationsData ?? []) as LocationRow[];
+  const allLocations = (locationsData ?? []) as LocationRow[];
+  const locations = permissions.isAdmin
+    ? allLocations
+    : allLocations.filter((location) =>
+        permissions.allowedLocationIds.has(location.shopify_location_id),
+      );
+  if (!permissions.isAdmin && locations.length === 0) {
+    throw new Response("Forbidden: no location access configured", {
+      status: 403,
+    });
+  }
   const requestedLocationId = url.searchParams.get("locationId");
   const selectedLocation =
     locations.find(
