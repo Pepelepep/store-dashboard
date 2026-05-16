@@ -24,20 +24,20 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <ui-nav-menu>
-        <Link to="/app/db-dashboard" rel="home">
+        <a href="/app/db-dashboard" rel="home">
           Dashboard
-        </Link>
+        </a>
 
         {canAdmin ? (
-          <Link to="/app/admin/sync">
+          <a href="/app/admin/sync">
             Data sync
-          </Link>
+          </a>
         ) : null}
 
         {canAdmin ? (
-          <Link to="/app/admin/permissions">
+          <a href="/app/admin/permissions">
             Permissions
-          </Link>
+          </a>
         ) : null}
       </ui-nav-menu>
 
