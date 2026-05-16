@@ -130,46 +130,106 @@ type LoaderData = {
   errors: string[];
 };
 
-function getTodayLocalDate() {
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, "0");
-  const dd = String(today.getDate()).padStart(2, "0");
+const STORE_TIME_ZONE = "America/Toronto";
 
-  return `${yyyy}-${mm}-${dd}`;
+function getDatePartsInStoreTimezone(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: STORE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  return {
+    year: values.year,
+    month: values.month,
+    day: values.day,
+  };
 }
 
-function parseLocalDate(value: string) {
+function getTodayStoreDate() {
+  const { year, month, day } = getDatePartsInStoreTimezone(new Date());
+
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateOnlyUtc(value: string) {
   const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day);
+  return new Date(Date.UTC(year, month - 1, day));
 }
 
-function formatLocalDate(date: Date) {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
+function formatDateOnlyUtc(date: Date) {
+  const yyyy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
 
   return `${yyyy}-${mm}-${dd}`;
 }
 
 function addDays(date: Date, days: number) {
   const next = new Date(date);
-  next.setDate(next.getDate() + days);
+  next.setUTCDate(next.getUTCDate() + days);
   return next;
 }
 
 function nextDate(date: string) {
-  return formatLocalDate(addDays(parseLocalDate(date), 1));
+  return formatDateOnlyUtc(addDays(parseDateOnlyUtc(date), 1));
 }
 
 function daysBetween(startDate: string, endExclusiveDate: string) {
-  const start = parseLocalDate(startDate);
-  const end = parseLocalDate(endExclusiveDate);
+  const start = parseDateOnlyUtc(startDate);
+  const end = parseDateOnlyUtc(endExclusiveDate);
 
   return Math.max(
     1,
     Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)),
   );
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  const localAsUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second),
+  );
+
+  return localAsUtc - date.getTime();
+}
+
+function storeDateToUtcIso(date: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  const firstOffset = getTimeZoneOffsetMs(utcGuess, STORE_TIME_ZONE);
+  const firstUtc = new Date(utcGuess.getTime() - firstOffset);
+  const finalOffset = getTimeZoneOffsetMs(firstUtc, STORE_TIME_ZONE);
+
+  return new Date(utcGuess.getTime() - finalOffset).toISOString();
 }
 
 function formatCurrency(value: number) {
@@ -191,11 +251,14 @@ function formatPercent(value: number | null) {
   return `${value.toFixed(1)}%`;
 }
 
-function formatDate(value: string) {
+function formatStoreDateTime(value: string) {
   return new Intl.DateTimeFormat("fr-CA", {
+    timeZone: STORE_TIME_ZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   }).format(new Date(value));
 }
 
@@ -659,11 +722,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   const url = new URL(request.url);
-  const today = getTodayLocalDate();
+  const today = getTodayStoreDate();
   const preset = url.searchParams.get("preset");
   const startDate = preset === "today" ? today : url.searchParams.get("startDate") || today;
   const endDate = preset === "today" ? today : url.searchParams.get("endDate") || today;
   const endExclusive = nextDate(endDate);
+  const startDateUtc = storeDateToUtcIso(startDate);
+  const endExclusiveUtc = storeDateToUtcIso(endExclusive);
   const selectedDays = daysBetween(startDate, endExclusive);
   const errors: string[] = [];
 
@@ -702,8 +767,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
           )
           .eq("shop_domain", session.shop)
           .eq("retail_location_id", selectedLocationId)
-          .gte("created_at_shopify", startDate)
-          .lt("created_at_shopify", endExclusive)
+          .gte("created_at_shopify", startDateUtc)
+          .lt("created_at_shopify", endExclusiveUtc)
           .order("created_at_shopify", { ascending: false })
       : Promise.resolve({ data: [], error: null }),
     selectedLocationId
@@ -1268,7 +1333,7 @@ export default function DbDashboardPage() {
 
           <SectionCard
             title="Soon out of stock"
-            helperText="Days left = available stock / average daily units sold on selected range."
+            subtitle="Days left = available stock / average daily units sold on selected range."
             exportConfig={{
               filename: "soon-out-of-stock.csv",
               headers: ["Product", "SKU", "Available", "Sold", "Days left", "Status"],
@@ -1333,7 +1398,7 @@ export default function DbDashboardPage() {
             ],
             rows: recentOrders.map((row) => [
               row.orderName,
-              formatDate(row.date),
+              formatStoreDateTime(row.date),
               row.product,
               row.sku,
               row.quantity,
@@ -1360,7 +1425,7 @@ export default function DbDashboardPage() {
               <a href={row.orderUrl} target="_blank" rel="noreferrer">
                 {row.orderName}
               </a>,
-              formatDate(row.date),
+              formatStoreDateTime(row.date),
               row.product,
               row.sku,
               row.quantity,
