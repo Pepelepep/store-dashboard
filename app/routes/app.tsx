@@ -27,18 +27,9 @@ export default function App() {
         <a href="/app/db-dashboard" rel="home">
           Dashboard
         </a>
-
-        {canAdmin ? (
-          <a href="/app/admin/sync">
-            Data sync
-          </a>
-        ) : null}
-
-        {canAdmin ? (
-          <a href="/app/admin/permissions">
-            Permissions
-          </a>
-        ) : null}
+        {canAdmin ? <a href="/app/admin/sync">Data sync</a> : null}
+        {canAdmin ? <a href="/app/admin/permissions">Permissions</a> : null}
+        {canAdmin ? <a href="/app/admin/expenses">Expenses</a> : null}
       </ui-nav-menu>
 
       <Outlet />

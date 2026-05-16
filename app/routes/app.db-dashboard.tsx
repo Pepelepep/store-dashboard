@@ -393,37 +393,73 @@ function computeStockAlerts({
     .slice(0, 15);
 }
 
+function getDaysInMonth(date: Date) {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+}
+
+function getMonthKey(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function getMonthKeyFromDateString(value: string | null) {
+  if (!value) return null;
+  return value.slice(0, 7);
+}
+
 function computeExpensesForRange({
   expenses,
   selectedLocationId,
   selectedDays,
+  startDate,
+  endDate,
+  activeLocationCount,
 }: {
   expenses: FixedExpenseDbRow[];
   selectedLocationId: string | null;
   selectedDays: number;
+  startDate: string;
+  endDate: string;
+  activeLocationCount: number;
 }) {
-  const activeExpenses = expenses.filter((expense) => {
-    if (!expense.is_active) {
-      return false;
+  const rangeStart = parseDateOnlyUtc(startDate);
+  const rangeEndExclusive = addDays(parseDateOnlyUtc(endDate), 1);
+  let total = 0;
+
+  for (
+    let current = new Date(rangeStart);
+    current < rangeEndExclusive;
+    current = addDays(current, 1)
+  ) {
+    const currentMonthKey = getMonthKey(current);
+    const daysInMonth = getDaysInMonth(current);
+
+    for (const expense of expenses) {
+      if (!expense.is_active) continue;
+
+      const expenseStartMonth = getMonthKeyFromDateString(expense.start_month);
+      const expenseEndMonth = getMonthKeyFromDateString(expense.end_month);
+
+      if (expenseStartMonth && currentMonthKey < expenseStartMonth) continue;
+      if (expenseEndMonth && currentMonthKey > expenseEndMonth) continue;
+
+      const isGlobalExpense = !expense.shopify_location_id;
+      const isSelectedLocationExpense =
+        expense.shopify_location_id === selectedLocationId;
+
+      if (!isGlobalExpense && !isSelectedLocationExpense) continue;
+
+      const monthlyAmount = Number(expense.monthly_amount ?? 0);
+      const dailyAmount = monthlyAmount / daysInMonth;
+
+      total += isGlobalExpense
+        ? dailyAmount / Math.max(activeLocationCount, 1)
+        : dailyAmount;
     }
-
-    if (!expense.shopify_location_id) {
-      return true;
-    }
-
-    return expense.shopify_location_id === selectedLocationId;
-  });
-
-  if (activeExpenses.length === 0) {
-    return null;
   }
 
-  const monthlyTotal = activeExpenses.reduce(
-    (sum, expense) => sum + Number(expense.monthly_amount ?? 0),
-    0,
-  );
-
-  return (monthlyTotal / 30) * selectedDays;
+  return selectedDays > 0 ? total : null;
 }
 
 function escapeCsvValue(value: unknown) {
@@ -853,6 +889,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     expenses,
     selectedLocationId,
     selectedDays,
+    startDate,
+    endDate,
+    activeLocationCount: locations.length,
   });
   const netProfit =
     expensesToDate === null ? null : grossProfit - Number(expensesToDate);
