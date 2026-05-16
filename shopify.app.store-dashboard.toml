@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "88ce5155d4fe752b0d5d04faed424ea2"
-application_url = "https://chocolate-intend-stability-cdt.trycloudflare.com"
+application_url = "https://store-dashboard-sasm.onrender.com"
 embedded = true
 name = "Store_dashboard"
 
@@ -13,9 +13,9 @@ scopes = "read_all_orders,read_inventory,read_orders,read_products,read_location
 
 [auth]
 redirect_urls = [
-  "https://chocolate-intend-stability-cdt.trycloudflare.com/auth/callback",
-  "https://chocolate-intend-stability-cdt.trycloudflare.com/auth/shopify/callback",
-  "https://chocolate-intend-stability-cdt.trycloudflare.com/api/auth/callback"
+  "https://store-dashboard-sasm.onrender.com/auth/callback",
+  "https://store-dashboard-sasm.onrender.com/auth/shopify/callback",
+  "https://store-dashboard-sasm.onrender.com/api/auth/callback"
 ]
 
 [build]

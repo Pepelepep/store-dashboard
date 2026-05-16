@@ -652,13 +652,9 @@ Do not share `.env` values.
 
 ## Next recommended steps
 
-1. Finish project cleanup.
-2. Make `/app` and `/app/live-dashboard` redirect to `/app/db-dashboard`.
-3. Make `/app/db-dashboard` visually match the final live dashboard UI.
-4. Validate paginated `/app/admin/sync-orders`.
-5. Improve sync UX/progress.
-6. Add DB-backed expenses settings page.
-7. Add server-side permissions.
-8. Prepare Render/Railway production deploy.
-9. Replace manual Cloudflare workflow.
-10. Add scheduled sync / webhooks / bulk operations later.
+1. Improve sync UX/progress.
+2. Add DB-backed expenses settings page.
+3. Add server-side permissions.
+4. Prepare Render/Railway production deploy.
+5. Replace manual Cloudflare workflow.
+6. Add scheduled sync / webhooks / bulk operations later.
