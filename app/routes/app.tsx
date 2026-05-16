@@ -2,19 +2,24 @@ import type { LoaderFunctionArgs } from "react-router";
 import { Link, Outlet, useLoaderData, useRouteError } from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { getPermissionContext } from "../lib/auth/permissions.server";
 
 import { authenticate } from "../shopify.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const supabase = getSupabaseAdminClient();
+  const permissions = await getPermissionContext({ request, session, supabase });
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY ?? "",
+    canAdmin: permissions.isAdmin,
   };
 }
 
 export default function App() {
-  const { apiKey } = useLoaderData<typeof loader>();
+  const { apiKey, canAdmin } = useLoaderData<typeof loader>();
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -23,7 +28,12 @@ export default function App() {
           Dashboard
         </Link>
         <Link to="/app/admin/sync">
-          Data sync
+          {canAdmin ? (
+            <>
+              <Link to="/app/admin/sync">Data sync</Link>
+              <Link to="/app/admin/permissions">Permissions</Link>
+            </>
+          ) : null}
         </Link>
       </ui-nav-menu>
 
