@@ -60,6 +60,32 @@ type OrderNode = {
   };
 };
 
+type LineItemsGraphqlResponse = {
+  data?: {
+    node?: {
+      lineItems?: OrderNode["lineItems"];
+    };
+  };
+  errors?: unknown;
+};
+
+type OrdersConnection = {
+  pageInfo: {
+    hasNextPage: boolean;
+    endCursor?: string | null;
+  };
+  edges?: {
+    node: OrderNode;
+  }[];
+};
+
+type OrdersGraphqlResponse = {
+  data?: {
+    orders?: OrdersConnection;
+  };
+  errors?: unknown;
+};
+
 type LoaderData = {
   shop: string;
   ordersCount: number;
@@ -217,7 +243,7 @@ async function getAllLineItemsForOrder({
       },
     );
 
-    const data = await response.json();
+    const data = (await response.json()) as LineItemsGraphqlResponse;
 
     if (data.errors) {
       throw new Error(JSON.stringify(data.errors));
@@ -234,7 +260,7 @@ async function getAllLineItemsForOrder({
     );
 
     hasNextPage = lineItems.pageInfo.hasNextPage;
-    cursor = lineItems.pageInfo.endCursor;
+    cursor = lineItems.pageInfo.endCursor ?? null;
   }
 
   return allLineItems;
@@ -402,7 +428,7 @@ export async function action({ request }: ActionFunctionArgs) {
         },
       );
 
-      const data = await response.json();
+      const data = (await response.json()) as OrdersGraphqlResponse;
 
       if (data.errors) {
         return {
@@ -497,8 +523,8 @@ export async function action({ request }: ActionFunctionArgs) {
       totalOrderLinesSynced += orderLineRows.length;
       pagesProcessed += 1;
 
-      hasNextPage = ordersConnection.pageInfo.hasNextPage;
-      cursor = ordersConnection.pageInfo.endCursor;
+      hasNextPage = ordersConnection?.pageInfo.hasNextPage ?? false;
+      cursor = ordersConnection?.pageInfo.endCursor ?? null;
 
       if (orders.length === 0) {
         break;

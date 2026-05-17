@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
+import type { DetailedHTMLProps, HTMLAttributes } from "react";
 import { Link, Outlet, useLoaderData, useRouteError } from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -6,6 +7,17 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
 
 import { authenticate } from "../shopify.server";
+
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      "ui-nav-menu": DetailedHTMLProps<
+        HTMLAttributes<HTMLElement>,
+        HTMLElement
+      >;
+    }
+  }
+}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);

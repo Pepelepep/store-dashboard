@@ -15,6 +15,17 @@ type LocationNode = {
   } | null;
 };
 
+type LocationsGraphqlResponse = {
+  data?: {
+    locations?: {
+      edges?: {
+        node: LocationNode;
+      }[];
+    };
+  };
+  errors?: unknown;
+};
+
 type LoaderData = {
   shop: string;
   existingLocationsCount: number;
@@ -68,7 +79,7 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   `);
 
-  const data = await response.json();
+  const data = (await response.json()) as LocationsGraphqlResponse;
 
   if (data.errors) {
     return {

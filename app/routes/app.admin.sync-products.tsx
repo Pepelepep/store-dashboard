@@ -30,6 +30,17 @@ type ProductNode = {
   };
 };
 
+type ProductsGraphqlResponse = {
+  data?: {
+    products?: {
+      edges?: {
+        node: ProductNode;
+      }[];
+    };
+  };
+  errors?: unknown;
+};
+
 type LoaderData = {
   shop: string;
   productsCount: number;
@@ -104,7 +115,7 @@ export async function action({ request }: ActionFunctionArgs) {
     }
   `);
 
-  const data = await response.json();
+  const data = (await response.json()) as ProductsGraphqlResponse;
 
   if (data.errors) {
     return {

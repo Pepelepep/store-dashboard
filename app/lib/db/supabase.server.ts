@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import type { WebSocketLikeConstructor } from "@supabase/supabase-js";
 import WebSocket from "ws";
 
 export function getSupabaseAdminClient() {
@@ -22,7 +23,7 @@ export function getSupabaseAdminClient() {
       autoRefreshToken: false,
     },
     realtime: {
-      transport: WebSocket,
+      transport: WebSocket as unknown as WebSocketLikeConstructor,
     },
   });
 }

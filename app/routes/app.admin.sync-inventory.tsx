@@ -30,6 +30,13 @@ type InventoryItemNode = {
   };
 };
 
+type InventoryGraphqlResponse = {
+  data?: {
+    nodes?: (InventoryItemNode | null)[];
+  };
+  errors?: unknown;
+};
+
 type LoaderData = {
   shop: string;
   variantsWithInventoryItemCount: number;
@@ -162,7 +169,7 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     );
 
-    const data = await response.json();
+    const data = (await response.json()) as InventoryGraphqlResponse;
 
     if (data.errors) {
       return {
@@ -171,9 +178,9 @@ export async function action({ request }: ActionFunctionArgs) {
       };
     }
 
-    const inventoryItems: InventoryItemNode[] = (data.data?.nodes ?? []).filter(
+    const inventoryItems = (data.data?.nodes ?? []).filter(
       Boolean,
-    );
+    ) as InventoryItemNode[];
 
     const rows = inventoryItems.flatMap((inventoryItem) => {
       const variant = variantByInventoryItemId.get(inventoryItem.id);
