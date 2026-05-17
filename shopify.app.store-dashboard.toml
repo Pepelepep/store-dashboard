@@ -9,7 +9,7 @@ name = "Store_dashboard"
 api_version = "2026-07"
 
 [access_scopes]
-scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations"
+scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations,read_users"
 
 [auth]
 redirect_urls = [

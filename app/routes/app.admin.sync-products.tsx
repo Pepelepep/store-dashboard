@@ -3,6 +3,7 @@ import { Form, useActionData, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { assertAdminAccess } from "../lib/auth/permissions.server";
 
 type ProductNode = {
   id: string;
@@ -45,6 +46,7 @@ type ActionData = {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await assertAdminAccess({ request, session, supabase });
 
   const [{ count: productsCount }, { count: variantsCount }] =
     await Promise.all([
