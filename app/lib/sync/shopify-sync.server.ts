@@ -247,6 +247,7 @@ async function insertSyncRun({
   source,
   startedAt,
   errorMessage,
+  details,
 }: {
   supabase: SupabaseAdminClient;
   shop: string;
@@ -255,6 +256,7 @@ async function insertSyncRun({
   source: SyncSource;
   startedAt: string;
   errorMessage?: string;
+  details?: Record<string, unknown>;
 }) {
   await supabase.from("sync_runs").insert({
     shop_domain: shop,
@@ -264,6 +266,7 @@ async function insertSyncRun({
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     error_message: errorMessage ?? null,
+    details: details ?? null,
   });
 }
 
@@ -441,6 +444,10 @@ export async function syncLocations({
       }
     }
 
+    const result = {
+      syncedCount: rows.length,
+    };
+
     await insertSyncRun({
       supabase,
       shop,
@@ -448,11 +455,10 @@ export async function syncLocations({
       status: "success",
       source,
       startedAt,
+      details: result,
     });
 
-    return {
-      syncedCount: rows.length,
-    };
+    return result;
   } catch (error) {
     await insertSyncRun({
       supabase,
@@ -572,6 +578,11 @@ export async function syncProducts({
       }
     }
 
+    const result = {
+      productsSynced: productRows.length,
+      variantsSynced: variantRows.length,
+    };
+
     await insertSyncRun({
       supabase,
       shop,
@@ -579,12 +590,10 @@ export async function syncProducts({
       status: "success",
       source,
       startedAt,
+      details: result,
     });
 
-    return {
-      productsSynced: productRows.length,
-      variantsSynced: variantRows.length,
-    };
+    return result;
   } catch (error) {
     await insertSyncRun({
       supabase,
@@ -724,6 +733,11 @@ export async function syncInventory({
       totalInventoryLevelsSynced += rows.length;
     }
 
+    const result = {
+      inventoryItemsProcessed: totalInventoryItemsProcessed,
+      inventoryLevelsSynced: totalInventoryLevelsSynced,
+    };
+
     await insertSyncRun({
       supabase,
       shop,
@@ -731,12 +745,10 @@ export async function syncInventory({
       status: "success",
       source,
       startedAt,
+      details: result,
     });
 
-    return {
-      inventoryItemsProcessed: totalInventoryItemsProcessed,
-      inventoryLevelsSynced: totalInventoryLevelsSynced,
-    };
+    return result;
   } catch (error) {
     await insertSyncRun({
       supabase,
@@ -974,6 +986,14 @@ export async function syncOrders({
       }
     }
 
+    const result = {
+      ordersSynced: totalOrdersSynced,
+      orderLinesSynced: totalOrderLinesSynced,
+      pagesProcessed,
+      startDate: startDate ?? null,
+      endDate: endDate ?? null,
+    };
+
     await insertSyncRun({
       supabase,
       shop,
@@ -981,15 +1001,10 @@ export async function syncOrders({
       status: "success",
       source,
       startedAt,
+      details: result,
     });
 
-    return {
-      ordersSynced: totalOrdersSynced,
-      orderLinesSynced: totalOrderLinesSynced,
-      pagesProcessed,
-      startDate: startDate ?? null,
-      endDate: endDate ?? null,
-    };
+    return result;
   } catch (error) {
     await insertSyncRun({
       supabase,

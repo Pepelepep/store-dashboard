@@ -26,6 +26,7 @@ type SyncRun = {
   started_at: string;
   finished_at?: string | null;
   error_message?: string | null;
+  details?: Record<string, unknown> | null;
 };
 
 type LoaderData = {
@@ -75,6 +76,58 @@ function formatDateTime(value?: string | null) {
   }).format(new Date(value));
 }
 
+function formatSyncRunDetails(run: SyncRun) {
+  const details = run.details;
+
+  if (!details) {
+    return "-";
+  }
+
+  switch (run.sync_type) {
+    case "locations":
+      return details.syncedCount === undefined
+        ? "-"
+        : `${details.syncedCount} locations`;
+    case "products":
+      return [
+        details.productsSynced === undefined
+          ? null
+          : `${details.productsSynced} products`,
+        details.variantsSynced === undefined
+          ? null
+          : `${details.variantsSynced} variants`,
+      ]
+        .filter(Boolean)
+        .join(", ") || "-";
+    case "inventory":
+      return [
+        details.inventoryItemsProcessed === undefined
+          ? null
+          : `${details.inventoryItemsProcessed} items`,
+        details.inventoryLevelsSynced === undefined
+          ? null
+          : `${details.inventoryLevelsSynced} levels`,
+      ]
+        .filter(Boolean)
+        .join(", ") || "-";
+    case "orders":
+      return [
+        details.ordersSynced === undefined ? null : `${details.ordersSynced} orders`,
+        details.orderLinesSynced === undefined
+          ? null
+          : `${details.orderLinesSynced} lines`,
+        details.pagesProcessed === undefined ? null : `${details.pagesProcessed} pages`,
+        details.startDate && details.endDate
+          ? `${details.startDate} to ${details.endDate}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ") || "-";
+    default:
+      return "-";
+  }
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
@@ -94,7 +147,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const { data: syncRuns } = await supabase
     .from("sync_runs")
-    .select("id, sync_type, status, source, started_at, finished_at, error_message")
+    .select(
+      "id, sync_type, status, source, started_at, finished_at, error_message, details",
+    )
     .eq("shop_domain", session.shop)
     .order("started_at", { ascending: false })
     .limit(10);
@@ -358,8 +413,15 @@ export default function AdminSyncPage() {
             >
               <thead>
                 <tr>
-                  {["Type", "Status", "Source", "Started", "Finished", "Error"].map(
-                    (header) => (
+                  {[
+                    "Type",
+                    "Status",
+                    "Source",
+                    "Started",
+                    "Finished",
+                    "Details",
+                    "Error",
+                  ].map((header) => (
                       <th
                         key={header}
                         style={{
@@ -370,8 +432,7 @@ export default function AdminSyncPage() {
                       >
                         {header}
                       </th>
-                    ),
-                  )}
+                    ))}
                 </tr>
               </thead>
               <tbody>
@@ -423,6 +484,14 @@ export default function AdminSyncPage() {
                         borderBottom: "1px solid #eee",
                       }}
                     >
+                      {formatSyncRunDetails(run)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {run.error_message ?? "-"}
                     </td>
                   </tr>
@@ -431,7 +500,7 @@ export default function AdminSyncPage() {
                 {lastSyncRuns.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       style={{
                         padding: "14px 10px",
                         color: "#616161",
