@@ -117,14 +117,10 @@ export async function getPermissionContext({
       .select("user_email, shopify_user_id, shopify_location_id, role, can_view, can_manage")
       .eq("shop_domain", session.shop);
 
-    if (identity.email && identity.shopifyUserId) {
-      query = query.or(
-        `user_email.eq.${identity.email},shopify_user_id.eq.${identity.shopifyUserId}`,
-      );
+    if (identity.shopifyUserId) {
+      query = query.eq("shopify_user_id", identity.shopifyUserId);
     } else if (identity.email) {
       query = query.eq("user_email", identity.email);
-    } else if (identity.shopifyUserId) {
-      query = query.eq("shopify_user_id", identity.shopifyUserId);
     }
 
     const { data, error } = await query;

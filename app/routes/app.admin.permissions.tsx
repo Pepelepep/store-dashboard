@@ -65,6 +65,13 @@ const emptyAccessForm: AccessFormState = {
   locationIds: [],
 };
 
+const roleDescriptions: Record<string, string> = {
+  admin: "Can access all locations and manage permissions.",
+  manager:
+    "Can view dashboard data and manage location-level settings for selected locations.",
+  viewer: "Can view dashboard data for selected locations.",
+};
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
@@ -238,6 +245,22 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
+function FieldHelp({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        color: "#616161",
+        fontSize: 13,
+        fontWeight: 400,
+        lineHeight: 1.35,
+        overflowWrap: "anywhere",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 function groupPermissions(permissions: PermissionRow[]) {
   const groups = new Map<string, PermissionGroup>();
 
@@ -365,48 +388,51 @@ export default function AdminPermissionsPage() {
           </div>
         ) : null}
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 420px) minmax(0, 1fr)", gap: 20 }}>
+        <div style={{ display: "grid", gap: 20 }}>
           <Card title="Add or replace user access">
-            <Form method="post" style={{ display: "grid", gap: 14 }}>
+            <Form method="post" style={{ display: "grid", gap: 18 }}>
               <input type="hidden" name="intent" value="save" />
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Email
-                <input
-                  name="user_email"
-                  placeholder="manager@local.ca"
-                  value={formState.user_email}
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      user_email: event.target.value,
-                    }))
-                  }
-                  style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                />
-              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Email
+                  <input
+                    name="user_email"
+                    placeholder="manager@local.ca"
+                    value={formState.user_email}
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        user_email: event.target.value,
+                      }))
+                    }
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                  />
+                  <FieldHelp>Optional display label.</FieldHelp>
+                </label>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Shopify user ID
-                <input
-                  name="shopify_user_id"
-                  required
-                  placeholder="90052427974"
-                  value={formState.shopify_user_id}
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      shopify_user_id: event.target.value,
-                    }))
-                  }
-                  style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                />
-                <span style={{ color: "#616161", fontSize: 13, fontWeight: 400 }}>
-                  Required. We use this Shopify user ID to identify staff members without requesting read_users.
-                </span>
-              </label>
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Shopify user ID
+                  <input
+                    name="shopify_user_id"
+                    required
+                    placeholder="90052427974"
+                    value={formState.shopify_user_id}
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        shopify_user_id: event.target.value,
+                      }))
+                    }
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                  />
+                  <FieldHelp>
+                    Required. We use this Shopify user ID to identify staff members without requesting read_users.
+                  </FieldHelp>
+                </label>
+              </div>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+              <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
                 Role
                 <select
                   name="role"
@@ -422,17 +448,18 @@ export default function AdminPermissionsPage() {
                           : current.locationIds,
                     }))
                   }
-                  style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                  style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
                 >
-                  <option value="viewer">Viewer - Can view dashboard data for selected locations.</option>
-                  <option value="manager">Manager - Can view dashboard data and manage location-level settings for selected locations.</option>
-                  <option value="admin">Admin - Can access all locations and manage permissions.</option>
+                  <option value="viewer">Viewer</option>
+                  <option value="manager">Manager</option>
+                  <option value="admin">Admin</option>
                 </select>
+                <FieldHelp>{roleDescriptions[formState.role]}</FieldHelp>
               </label>
 
               <div>
                 <div style={{ fontWeight: 700, marginBottom: 8 }}>Locations</div>
-                <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
                   {locations.map((location) => (
                     <label key={location.shopify_location_id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <input
@@ -454,7 +481,9 @@ export default function AdminPermissionsPage() {
                     </label>
                   ))}
                 </div>
-                <p style={{ color: "#616161", fontSize: 13 }}>For admin role, locations are ignored and access is global.</p>
+                <p style={{ color: "#616161", fontSize: 13, lineHeight: 1.35 }}>
+                  For admin role, locations are ignored and access is global.
+                </p>
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
