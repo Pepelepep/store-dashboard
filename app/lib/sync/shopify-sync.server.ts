@@ -80,6 +80,13 @@ type VariantCostRow = {
   unit_cost: number | null;
 };
 
+type OrderLineCostRecomputeRow = {
+  shopify_line_item_id: string;
+  shopify_variant_id: string | null;
+  quantity: number;
+  revenue: number;
+};
+
 type OrderLineItemNode = {
   id: string;
   title: string;
@@ -306,6 +313,81 @@ async function upsertInBatches({
       throw new Error(error.message);
     }
   }
+}
+
+async function recomputeOrderLineCogsForVariants({
+  supabase,
+  shop,
+  variantRows,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  variantRows: Array<{
+    shopify_variant_id: string;
+    unit_cost: number | null;
+  }>;
+}) {
+  const costByVariantId = new Map(
+    variantRows
+      .filter((variant) => variant.unit_cost !== null)
+      .map((variant) => [
+        variant.shopify_variant_id,
+        variant.unit_cost as number,
+      ]),
+  );
+  const variantIds = Array.from(costByVariantId.keys());
+
+  if (variantIds.length === 0) {
+    return 0;
+  }
+
+  const { data: orderLineRows, error } = await supabase
+    .from("order_lines")
+    .select("shopify_line_item_id, shopify_variant_id, quantity, revenue")
+    .eq("shop_domain", shop)
+    .in("shopify_variant_id", variantIds);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  let recomputedCount = 0;
+
+  for (const orderLine of (orderLineRows ??
+    []) as OrderLineCostRecomputeRow[]) {
+    if (!orderLine.shopify_variant_id) {
+      continue;
+    }
+
+    const unitCost = costByVariantId.get(orderLine.shopify_variant_id);
+
+    if (unitCost === undefined) {
+      continue;
+    }
+
+    const quantity = Number(orderLine.quantity ?? 0);
+    const revenue = Number(orderLine.revenue ?? 0);
+    const cogs = unitCost * quantity;
+
+    const { error: updateError } = await supabase
+      .from("order_lines")
+      .update({
+        unit_cost: unitCost,
+        cogs,
+        gross_profit: revenue - cogs,
+        cost_source: "recomputed_from_current_variant_cost",
+      })
+      .eq("shop_domain", shop)
+      .eq("shopify_line_item_id", orderLine.shopify_line_item_id);
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+
+    recomputedCount += 1;
+  }
+
+  return recomputedCount;
 }
 
 async function getAllLineItemsForOrder({
@@ -735,9 +817,16 @@ export async function syncProductById({
       }
     }
 
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
+      supabase,
+      shop,
+      variantRows,
+    });
+
     const result = {
       productsSynced: 1,
       variantsSynced: variantRows.length,
+      orderLinesCogsRecomputed,
     };
 
     await insertSyncRun({
