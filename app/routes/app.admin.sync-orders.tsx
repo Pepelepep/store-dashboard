@@ -3,6 +3,7 @@ import { Form, useActionData, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { syncOrders } from "../lib/sync/shopify-sync.server";
 
 type LoaderData = {
@@ -55,6 +56,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+
+  await assertAdminAccess({ request, session, supabase });
 
   const formData = await request.formData();
   const { startDate, endDate } = getOrderDateRangeFromForm(formData);

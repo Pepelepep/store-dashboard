@@ -47,6 +47,8 @@ export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
+  await assertAdminAccess({ request, session, supabase });
+
   try {
     const result = await syncProducts({
       admin,

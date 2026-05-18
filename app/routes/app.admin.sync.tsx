@@ -10,6 +10,7 @@ import {
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { runFullSync } from "../lib/sync/shopify-sync.server";
 
 type TableCount = {
   table: string;
@@ -21,6 +22,7 @@ type SyncRun = {
   id: string;
   sync_type: string;
   status: string;
+  source: string | null;
   started_at: string;
   finished_at?: string | null;
   error_message?: string | null;
@@ -92,7 +94,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const { data: syncRuns } = await supabase
     .from("sync_runs")
-    .select("id, sync_type, status, started_at, finished_at, error_message")
+    .select("id, sync_type, status, source, started_at, finished_at, error_message")
     .eq("shop_domain", session.shop)
     .order("started_at", { ascending: false })
     .limit(10);
@@ -105,7 +107,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
   await assertAdminAccess({ request, session, supabase });
@@ -120,47 +122,33 @@ export async function action({ request }: ActionFunctionArgs) {
     } satisfies ActionData;
   }
 
-  const appUrl = process.env.SHOPIFY_APP_URL;
-  const cronSecret = process.env.CRON_SECRET;
-
-  if (!appUrl || !cronSecret) {
-    return {
-      ok: false,
-      message: "Missing SHOPIFY_APP_URL or CRON_SECRET environment variable.",
-    } satisfies ActionData;
-  }
-
-  const response = await fetch(
-    `${appUrl.replace(/\/$/, "")}/api/cron/daily-sync`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${cronSecret}`,
-      },
-    },
-  );
-
-  let details: unknown = null;
-
   try {
-    details = await response.json();
-  } catch {
-    details = await response.text();
-  }
+    const result = await runFullSync({
+      admin,
+      shop: session.shop,
+      source: "manual_admin_sync",
+    });
 
-  if (!response.ok) {
+    if (!result.ok) {
+      return {
+        ok: false,
+        message: "Full sync failed.",
+        details: result,
+      } satisfies ActionData;
+    }
+
+    return {
+      ok: true,
+      message: "Full data refresh completed successfully.",
+      details: result,
+    } satisfies ActionData;
+  } catch (error) {
     return {
       ok: false,
-      message: `Full sync failed with status ${response.status}.`,
-      details,
+      message: "Full sync failed.",
+      details: error instanceof Error ? error.message : String(error),
     } satisfies ActionData;
   }
-
-  return {
-    ok: true,
-    message: "Full data refresh completed successfully.",
-    details,
-  } satisfies ActionData;
 }
 
 function Card({
@@ -370,7 +358,7 @@ export default function AdminSyncPage() {
             >
               <thead>
                 <tr>
-                  {["Type", "Status", "Started", "Finished", "Error"].map(
+                  {["Type", "Status", "Source", "Started", "Finished", "Error"].map(
                     (header) => (
                       <th
                         key={header}
@@ -411,6 +399,14 @@ export default function AdminSyncPage() {
                         borderBottom: "1px solid #eee",
                       }}
                     >
+                      {run.source ?? "-"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {formatDateTime(run.started_at)}
                     </td>
                     <td
@@ -435,7 +431,7 @@ export default function AdminSyncPage() {
                 {lastSyncRuns.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       style={{
                         padding: "14px 10px",
                         color: "#616161",
