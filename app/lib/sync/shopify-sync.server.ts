@@ -766,6 +766,64 @@ export async function syncProductById({
   }
 }
 
+export async function markProductDeletedById({
+  shop,
+  supabase,
+  source,
+  productId,
+}: {
+  shop: string;
+  supabase: SupabaseAdminClient;
+  source: SyncSource;
+  productId: string;
+}) {
+  const startedAt = new Date().toISOString();
+
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .update({
+        status: "DELETED",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("shop_domain", shop)
+      .eq("shopify_product_id", normalizeProductId(productId))
+      .select("shopify_product_id");
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const result = {
+      productsDeleted: data && data.length > 0 ? 1 : 0,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "products",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  } catch (error) {
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "products",
+      status: "error",
+      source,
+      startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+
+    throw error;
+  }
+}
+
 export async function syncInventory({
   admin,
   shop,
