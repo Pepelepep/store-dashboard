@@ -10,14 +10,6 @@ embedded = false
 api_version = "2026-07"
 
 [[webhooks.subscriptions]]
-topics = ["orders/create"]
-uri = "/webhooks/orders/create"
-
-[[webhooks.subscriptions]]
-topics = ["orders/updated"]
-uri = "/webhooks/orders/updated"
-
-[[webhooks.subscriptions]]
 topics = ["products/create"]
 uri = "/webhooks/products/create"
 
@@ -39,7 +31,7 @@ uri = "/webhooks/inventory-items/update"
 
 [access_scopes]
 scopes = "read_products,read_inventory,read_orders,read_all_orders,read_locations"
-optional_scopes = [ ]
+optional_scopes = []
 use_legacy_install_flow = false
 
 [auth]
