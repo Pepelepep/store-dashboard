@@ -160,6 +160,12 @@ function getAvailableQuantity(
   );
 }
 
+function normalizeInventoryItemId(inventoryItemId: string) {
+  return inventoryItemId.startsWith("gid://")
+    ? inventoryItemId
+    : `gid://shopify/InventoryItem/${inventoryItemId}`;
+}
+
 function getIncrementalOrderDateRange(lookbackDays = 7) {
   const end = new Date();
   const start = new Date();
@@ -657,6 +663,162 @@ export async function syncInventory({
     let totalInventoryItemsProcessed = 0;
 
     for (const chunk of chunks) {
+      const response = await admin.graphql(
+        `#graphql
+          query getInventoryItemsForSync($ids: [ID!]!) {
+            nodes(ids: $ids) {
+              ... on InventoryItem {
+                id
+                sku
+                tracked
+                inventoryLevels(first: 20) {
+                  edges {
+                    node {
+                      location {
+                        id
+                        name
+                      }
+                      quantities(names: ["available"]) {
+                        name
+                        quantity
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `,
+        {
+          variables: {
+            ids: chunk,
+          },
+        },
+      );
+
+      const data = await response.json();
+
+      if ("errors" in data && data.errors) {
+        throw new Error(JSON.stringify(data.errors));
+      }
+
+      const inventoryItems: InventoryItemNode[] = (
+        data.data?.nodes ?? []
+      ).filter(Boolean);
+
+      const rows = inventoryItems.flatMap((inventoryItem) => {
+        const variant = variantByInventoryItemId.get(inventoryItem.id);
+
+        if (!variant) {
+          return [];
+        }
+
+        return inventoryItem.inventoryLevels.edges.map(({ node: level }) => ({
+          shop_domain: shop,
+          shopify_location_id: level.location.id,
+          shopify_variant_id: variant.shopify_variant_id,
+          inventory_item_id: inventoryItem.id,
+          sku: variant.sku ?? inventoryItem.sku ?? null,
+          available: getAvailableQuantity(level),
+          tracked: inventoryItem.tracked,
+          synced_at: new Date().toISOString(),
+        }));
+      });
+
+      if (rows.length > 0) {
+        const { error } = await supabase.from("inventory_levels").upsert(rows, {
+          onConflict: "shop_domain,shopify_location_id,inventory_item_id",
+        });
+
+        if (error) {
+          throw new Error(error.message);
+        }
+      }
+
+      totalInventoryItemsProcessed += inventoryItems.length;
+      totalInventoryLevelsSynced += rows.length;
+    }
+
+    const result = {
+      inventoryItemsProcessed: totalInventoryItemsProcessed,
+      inventoryLevelsSynced: totalInventoryLevelsSynced,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "inventory",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  } catch (error) {
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "inventory",
+      status: "error",
+      source,
+      startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+
+    throw error;
+  }
+}
+
+export async function syncInventoryItems({
+  admin,
+  shop,
+  supabase,
+  source,
+  inventoryItemIds,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  source: SyncSource;
+  inventoryItemIds: string[];
+}) {
+  const startedAt = new Date().toISOString();
+
+  try {
+    const normalizedInventoryItemIds = Array.from(
+      new Set(
+        inventoryItemIds
+          .map((inventoryItemId) => inventoryItemId.trim())
+          .filter(Boolean)
+          .map(normalizeInventoryItemId),
+      ),
+    );
+
+    const { data: variantRows, error: variantsError } = await supabase
+      .from("variants")
+      .select("shopify_variant_id, inventory_item_id, sku")
+      .eq("shop_domain", shop)
+      .in("inventory_item_id", normalizedInventoryItemIds);
+
+    if (variantsError) {
+      throw new Error(variantsError.message);
+    }
+
+    const variants = (variantRows ?? []) as VariantDbRow[];
+    const variantByInventoryItemId = new Map<string, VariantDbRow>();
+
+    for (const variant of variants) {
+      variantByInventoryItemId.set(variant.inventory_item_id, variant);
+    }
+
+    let totalInventoryLevelsSynced = 0;
+    let totalInventoryItemsProcessed = 0;
+
+    for (const chunk of chunkArray(
+      normalizedInventoryItemIds,
+      INVENTORY_BATCH_SIZE,
+    )) {
       const response = await admin.graphql(
         `#graphql
           query getInventoryItemsForSync($ids: [ID!]!) {
