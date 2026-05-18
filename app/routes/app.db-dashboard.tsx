@@ -111,6 +111,7 @@ type LoaderData = {
   selectedLocationName: string | null;
   startDate: string;
   endDate: string;
+  preservedSearchParams: Array<{ name: string; value: string }>;
   lastSuccessfulSync: string | null;
   selectedDays: number;
   kpis: {
@@ -782,6 +783,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const supabase = getSupabaseAdminClient();
   const permissions = await getPermissionContext({ request, session, supabase });
   const url = new URL(request.url);
+  const preservedSearchParams = Array.from(url.searchParams.entries())
+    .filter(
+      ([name]) =>
+        !["locationId", "startDate", "endDate", "preset"].includes(name),
+    )
+    .map(([name, value]) => ({ name, value }));
   const today = getTodayStoreDate();
   const preset = url.searchParams.get("preset");
   const startDate = preset === "today" ? today : url.searchParams.get("startDate") || today;
@@ -962,6 +969,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedLocationName,
     startDate,
     endDate,
+    preservedSearchParams,
     lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
     selectedDays,
     kpis: {
@@ -992,6 +1000,7 @@ export default function DbDashboardPage() {
     selectedLocationName,
     startDate,
     endDate,
+    preservedSearchParams,
     lastSuccessfulSync,
     selectedDays,
     kpis,
@@ -1026,6 +1035,15 @@ export default function DbDashboardPage() {
           }}
         >
           <Form method="get">
+            {preservedSearchParams.map(({ name, value }, index) => (
+              <input
+                key={`${name}-${index}`}
+                type="hidden"
+                name={name}
+                value={value}
+              />
+            ))}
+
             <div
               style={{
                 display: "flex",
