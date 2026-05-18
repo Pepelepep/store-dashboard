@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { useMemo, useState } from "react";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -38,6 +39,30 @@ type LoaderData = {
 type ActionData = {
   ok: boolean;
   message: string;
+};
+
+type AccessFormState = {
+  user_email: string;
+  shopify_user_id: string;
+  role: string;
+  locationIds: string[];
+};
+
+type PermissionGroup = {
+  key: string;
+  user_email: string;
+  shopify_user_id: string;
+  role: string;
+  locationIds: string[];
+  locationNames: string[];
+  can_manage: boolean;
+};
+
+const emptyAccessForm: AccessFormState = {
+  user_email: "",
+  shopify_user_id: "",
+  role: "viewer",
+  locationIds: [],
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -82,11 +107,11 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(formData.get("intent") ?? "save");
 
   if (intent === "delete") {
-    const id = String(formData.get("id") ?? "");
-    if (!id) {
+    const shopifyUserId = String(formData.get("shopify_user_id") ?? "").trim();
+    if (!shopifyUserId) {
       return {
         ok: false,
-        message: "Missing permission id.",
+        message: "Missing Shopify user ID.",
       } satisfies ActionData;
     }
 
@@ -94,7 +119,7 @@ export async function action({ request }: ActionFunctionArgs) {
       .from("user_location_access")
       .delete()
       .eq("shop_domain", session.shop)
-      .eq("id", id);
+      .eq("shopify_user_id", shopifyUserId);
 
     if (error) {
       return {
@@ -105,7 +130,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     return {
       ok: true,
-      message: "Permission deleted.",
+      message: "Access deleted.",
     } satisfies ActionData;
   }
 
@@ -213,14 +238,102 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
+function groupPermissions(permissions: PermissionRow[]) {
+  const groups = new Map<string, PermissionGroup>();
+
+  for (const row of permissions) {
+    const key = row.shopify_user_id ?? `missing-${row.id}`;
+    const existing = groups.get(key);
+    const isAdmin = row.role === "admin" || row.shopify_location_id === "*";
+    const role = isAdmin ? "admin" : row.role || "viewer";
+
+    if (!existing) {
+      groups.set(key, {
+        key,
+        user_email: row.user_email ?? "",
+        shopify_user_id: row.shopify_user_id ?? "",
+        role,
+        locationIds:
+          isAdmin || !row.shopify_location_id ? [] : [row.shopify_location_id],
+        locationNames: [
+          isAdmin
+            ? "All locations"
+            : row.location_name ?? row.shopify_location_id ?? "-",
+        ],
+        can_manage: Boolean(row.can_manage),
+      });
+      continue;
+    }
+
+    if (!existing.user_email && row.user_email) {
+      existing.user_email = row.user_email;
+    }
+
+    if (isAdmin) {
+      existing.role = "admin";
+      existing.locationIds = [];
+      existing.locationNames = ["All locations"];
+      existing.can_manage = true;
+      continue;
+    }
+
+    if (row.role === "manager") {
+      existing.role = "manager";
+    }
+
+    if (row.can_manage) {
+      existing.can_manage = true;
+    }
+
+    if (row.shopify_location_id) {
+      existing.locationIds.push(row.shopify_location_id);
+      existing.locationNames.push(row.location_name ?? row.shopify_location_id);
+    }
+  }
+
+  return Array.from(groups.values()).sort((a, b) =>
+    (a.user_email || a.shopify_user_id).localeCompare(
+      b.user_email || b.shopify_user_id,
+    ),
+  );
+}
+
 export default function AdminPermissionsPage() {
   const { shop, currentUser, locations, permissions } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
+  const permissionGroups = useMemo(
+    () => groupPermissions(permissions),
+    [permissions],
+  );
+  const [formState, setFormState] = useState<AccessFormState>(emptyAccessForm);
   const isSubmitting = navigation.state !== "idle";
   const activeIntent = navigation.formData?.get("intent");
   const isSaving = isSubmitting && activeIntent === "save";
   const isDeleting = isSubmitting && activeIntent === "delete";
+  const isAdminRole = formState.role === "admin";
+
+  function toggleLocation(locationId: string, checked: boolean) {
+    setFormState((current) => ({
+      ...current,
+      locationIds: checked
+        ? Array.from(new Set([...current.locationIds, locationId]))
+        : current.locationIds.filter((id) => id !== locationId),
+    }));
+  }
+
+  function editGroup(group: PermissionGroup) {
+    setFormState({
+      user_email: group.user_email,
+      shopify_user_id: group.shopify_user_id,
+      role: group.role,
+      locationIds: group.role === "admin" ? [] : group.locationIds,
+    });
+  }
+
+  function clearForm() {
+    setFormState(emptyAccessForm);
+  }
 
   return (
     <main style={{ minHeight: "100vh", background: "#f6f6f7", padding: 28, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
@@ -259,12 +372,35 @@ export default function AdminPermissionsPage() {
 
               <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
                 Email
-                <input name="user_email" placeholder="manager@local.ca" style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }} />
+                <input
+                  name="user_email"
+                  placeholder="manager@local.ca"
+                  value={formState.user_email}
+                  onChange={(event) =>
+                    setFormState((current) => ({
+                      ...current,
+                      user_email: event.target.value,
+                    }))
+                  }
+                  style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                />
               </label>
 
               <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
                 Shopify user ID
-                <input name="shopify_user_id" required placeholder="90052427974" style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }} />
+                <input
+                  name="shopify_user_id"
+                  required
+                  placeholder="90052427974"
+                  value={formState.shopify_user_id}
+                  onChange={(event) =>
+                    setFormState((current) => ({
+                      ...current,
+                      shopify_user_id: event.target.value,
+                    }))
+                  }
+                  style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                />
                 <span style={{ color: "#616161", fontSize: 13, fontWeight: 400 }}>
                   Required. We use this Shopify user ID to identify staff members without requesting read_users.
                 </span>
@@ -272,7 +408,22 @@ export default function AdminPermissionsPage() {
 
               <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
                 Role
-                <select name="role" required defaultValue="viewer" style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}>
+                <select
+                  name="role"
+                  required
+                  value={formState.role}
+                  onChange={(event) =>
+                    setFormState((current) => ({
+                      ...current,
+                      role: event.target.value,
+                      locationIds:
+                        event.target.value === "admin"
+                          ? []
+                          : current.locationIds,
+                    }))
+                  }
+                  style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                >
                   <option value="viewer">Viewer - Can view dashboard data for selected locations.</option>
                   <option value="manager">Manager - Can view dashboard data and manage location-level settings for selected locations.</option>
                   <option value="admin">Admin - Can access all locations and manage permissions.</option>
@@ -284,7 +435,21 @@ export default function AdminPermissionsPage() {
                 <div style={{ display: "grid", gap: 8 }}>
                   {locations.map((location) => (
                     <label key={location.shopify_location_id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input type="checkbox" name="locationIds" value={location.shopify_location_id} />
+                      <input
+                        type="checkbox"
+                        name="locationIds"
+                        value={location.shopify_location_id}
+                        checked={formState.locationIds.includes(
+                          location.shopify_location_id,
+                        )}
+                        disabled={isAdminRole}
+                        onChange={(event) =>
+                          toggleLocation(
+                            location.shopify_location_id,
+                            event.target.checked,
+                          )
+                        }
+                      />
                       {location.name}
                     </label>
                   ))}
@@ -292,9 +457,14 @@ export default function AdminPermissionsPage() {
                 <p style={{ color: "#616161", fontSize: 13 }}>For admin role, locations are ignored and access is global.</p>
               </div>
 
-              <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #202223", background: isSubmitting ? "#8a8f93" : "#202223", color: "white", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
-                {isSaving ? "Saving..." : "Save permissions"}
-              </button>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #202223", background: isSubmitting ? "#8a8f93" : "#202223", color: "white", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+                  {isSaving ? "Saving..." : "Save permissions"}
+                </button>
+                <button type="button" onClick={clearForm} disabled={isSubmitting} style={{ border: "1px solid #c9cccf", background: "white", color: "#202223", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+                  New access
+                </button>
+              </div>
             </Form>
           </Card>
 
@@ -303,31 +473,42 @@ export default function AdminPermissionsPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr>
-                    {["User", "Shopify user id", "Role", "Location", "View", "Manage", ""].map((header) => (
+                    {["User", "Shopify user id", "Role", "Locations", "Manage", ""].map((header) => (
                       <th key={header} style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #ddd" }}>{header}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {permissions.map((row) => (
-                    <tr key={row.id}>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{row.user_email ?? "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{row.shopify_user_id ?? "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{row.role ?? "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{row.location_name ?? row.shopify_location_id ?? "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{row.can_view ? "Yes" : "No"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{row.can_manage ? "Yes" : "No"}</td>
+                  {permissionGroups.map((group) => (
+                    <tr key={group.key}>
+                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.user_email || "-"}</td>
+                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.shopify_user_id || "-"}</td>
+                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.role}</td>
+                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.locationNames.join(", ") || "-"}</td>
+                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.can_manage ? "Yes" : "No"}</td>
                       <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-                        <Form method="post">
-                          <input type="hidden" name="intent" value="delete" />
-                          <input type="hidden" name="id" value={row.id} />
-                          <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #d72c0d", background: "white", color: isSubmitting ? "#8a8f93" : "#d72c0d", borderRadius: 8, padding: "6px 10px" }}>
-                            {isDeleting ? "Deleting..." : "Delete"}
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button type="button" onClick={() => editGroup(group)} disabled={isSubmitting || !group.shopify_user_id} style={{ border: "1px solid #202223", background: "white", color: "#202223", borderRadius: 8, padding: "6px 10px" }}>
+                            Edit
                           </button>
-                        </Form>
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="delete" />
+                            <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
+                            <button disabled={isSubmitting || !group.shopify_user_id} type="submit" style={{ border: "1px solid #d72c0d", background: "white", color: isSubmitting ? "#8a8f93" : "#d72c0d", borderRadius: 8, padding: "6px 10px" }}>
+                              {isDeleting ? "Deleting..." : "Delete access"}
+                            </button>
+                          </Form>
+                        </div>
                       </td>
                     </tr>
                   ))}
+                  {permissionGroups.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ padding: 14, color: "#616161" }}>
+                        No permissions configured.
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
