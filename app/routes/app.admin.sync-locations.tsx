@@ -3,28 +3,7 @@ import { Form, useActionData, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-
-type LocationNode = {
-  id: string;
-  name: string;
-  isActive: boolean;
-  address?: {
-    city?: string | null;
-    province?: string | null;
-    country?: string | null;
-  } | null;
-};
-
-type LocationsGraphqlResponse = {
-  data?: {
-    locations?: {
-      edges?: {
-        node: LocationNode;
-      }[];
-    };
-  };
-  errors?: unknown;
-};
+import { syncLocations } from "../lib/sync/shopify-sync.server";
 
 type LoaderData = {
   shop: string;
@@ -60,74 +39,24 @@ export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
-  const response = await admin.graphql(`#graphql
-    query getLocationsForSync {
-      locations(first: 50) {
-        edges {
-          node {
-            id
-            name
-            isActive
-            address {
-              city
-              province
-              country
-            }
-          }
-        }
-      }
-    }
-  `);
-
-  const data = (await response.json()) as LocationsGraphqlResponse;
-
-  if (data.errors) {
-    return {
-      ok: false,
-      error: JSON.stringify(data.errors),
-    };
-  }
-
-  const locations: LocationNode[] =
-    data.data?.locations?.edges?.map(
-      (edge: { node: LocationNode }) => edge.node,
-    ) ?? [];
-
-  const rows = locations.map((location) => ({
-    shop_domain: session.shop,
-    shopify_location_id: location.id,
-    name: location.name,
-    is_active: location.isActive,
-    city: location.address?.city ?? null,
-    province: location.address?.province ?? null,
-    country: location.address?.country ?? null,
-    updated_at: new Date().toISOString(),
-  }));
-
-  const { error } = await supabase
-    .from("locations")
-    .upsert(rows, {
-      onConflict: "shop_domain,shopify_location_id",
+  try {
+    const result = await syncLocations({
+      admin,
+      shop: session.shop,
+      supabase,
+      source: "manual_admin_sync",
     });
 
-  if (error) {
+    return {
+      ok: true,
+      syncedCount: result.syncedCount,
+    };
+  } catch (error) {
     return {
       ok: false,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
-
-  await supabase.from("sync_runs").insert({
-    shop_domain: session.shop,
-    sync_type: "locations",
-    status: "success",
-    finished_at: new Date().toISOString(),
-  });
-
-  return {
-    ok: true,
-    syncedCount: rows.length,
-  };
 }
 
 export default function SyncLocationsPage() {

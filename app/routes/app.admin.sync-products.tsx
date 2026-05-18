@@ -4,42 +4,7 @@ import { Form, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
-
-type ProductNode = {
-  id: string;
-  title: string;
-  vendor?: string | null;
-  productType?: string | null;
-  status?: string | null;
-  variants: {
-    edges: {
-      node: {
-        id: string;
-        title: string;
-        sku?: string | null;
-        price?: string | null;
-        inventoryItem?: {
-          id: string;
-          unitCost?: {
-            amount: string;
-            currencyCode: string;
-          } | null;
-        } | null;
-      };
-    }[];
-  };
-};
-
-type ProductsGraphqlResponse = {
-  data?: {
-    products?: {
-      edges?: {
-        node: ProductNode;
-      }[];
-    };
-  };
-  errors?: unknown;
-};
+import { syncProducts } from "../lib/sync/shopify-sync.server";
 
 type LoaderData = {
   shop: string;
@@ -82,117 +47,25 @@ export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
-  const response = await admin.graphql(`#graphql
-    query getProductsForSync {
-      products(first: 100) {
-        edges {
-          node {
-            id
-            title
-            vendor
-            productType
-            status
-            variants(first: 100) {
-              edges {
-                node {
-                  id
-                  title
-                  sku
-                  price
-                  inventoryItem {
-                    id
-                    unitCost {
-                      amount
-                      currencyCode
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  `);
+  try {
+    const result = await syncProducts({
+      admin,
+      shop: session.shop,
+      supabase,
+      source: "manual_admin_sync",
+    });
 
-  const data = (await response.json()) as ProductsGraphqlResponse;
-
-  if (data.errors) {
+    return {
+      ok: true,
+      productsSynced: result.productsSynced,
+      variantsSynced: result.variantsSynced,
+    };
+  } catch (error) {
     return {
       ok: false,
-      error: JSON.stringify(data.errors),
+      error: error instanceof Error ? error.message : String(error),
     };
   }
-
-  const products: ProductNode[] =
-    data.data?.products?.edges?.map(
-      (edge: { node: ProductNode }) => edge.node,
-    ) ?? [];
-
-  const productRows = products.map((product) => ({
-    shop_domain: session.shop,
-    shopify_product_id: product.id,
-    title: product.title,
-    vendor: product.vendor ?? null,
-    product_type: product.productType ?? null,
-    status: product.status ?? null,
-    updated_at: new Date().toISOString(),
-  }));
-
-  const variantRows = products.flatMap((product) =>
-    product.variants.edges.map(({ node: variant }) => ({
-      shop_domain: session.shop,
-      shopify_variant_id: variant.id,
-      shopify_product_id: product.id,
-      inventory_item_id: variant.inventoryItem?.id ?? null,
-      title: variant.title,
-      sku: variant.sku ?? null,
-      price: variant.price ? Number(variant.price) : null,
-      unit_cost: variant.inventoryItem?.unitCost?.amount
-        ? Number(variant.inventoryItem.unitCost.amount)
-        : null,
-      updated_at: new Date().toISOString(),
-    })),
-  );
-
-  if (productRows.length > 0) {
-    const { error } = await supabase.from("products").upsert(productRows, {
-      onConflict: "shop_domain,shopify_product_id",
-    });
-
-    if (error) {
-      return {
-        ok: false,
-        error: error.message,
-      };
-    }
-  }
-
-  if (variantRows.length > 0) {
-    const { error } = await supabase.from("variants").upsert(variantRows, {
-      onConflict: "shop_domain,shopify_variant_id",
-    });
-
-    if (error) {
-      return {
-        ok: false,
-        error: error.message,
-      };
-    }
-  }
-
-  await supabase.from("sync_runs").insert({
-    shop_domain: session.shop,
-    sync_type: "products",
-    status: "success",
-    finished_at: new Date().toISOString(),
-  });
-
-  return {
-    ok: true,
-    productsSynced: productRows.length,
-    variantsSynced: variantRows.length,
-  };
 }
 
 export default function SyncProductsPage() {

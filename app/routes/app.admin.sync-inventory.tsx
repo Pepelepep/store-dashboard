@@ -3,39 +3,7 @@ import { Form, useActionData, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-
-type VariantDbRow = {
-  shopify_variant_id: string;
-  inventory_item_id: string;
-  sku: string | null;
-};
-
-type InventoryItemNode = {
-  id: string;
-  sku?: string | null;
-  tracked: boolean;
-  inventoryLevels: {
-    edges: {
-      node: {
-        location: {
-          id: string;
-          name: string;
-        };
-        quantities: {
-          name: string;
-          quantity: number;
-        }[];
-      };
-    }[];
-  };
-};
-
-type InventoryGraphqlResponse = {
-  data?: {
-    nodes?: (InventoryItemNode | null)[];
-  };
-  errors?: unknown;
-};
+import { syncInventory } from "../lib/sync/shopify-sync.server";
 
 type LoaderData = {
   shop: string;
@@ -49,25 +17,6 @@ type ActionData = {
   inventoryLevelsSynced?: number;
   error?: string;
 };
-
-const INVENTORY_BATCH_SIZE = 25;
-
-function chunkArray<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
-function getAvailableQuantity(level: InventoryItemNode["inventoryLevels"]["edges"][number]["node"]) {
-  return (
-    level.quantities.find((quantity) => quantity.name === "available")
-      ?.quantity ?? 0
-  );
-}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
@@ -97,139 +46,25 @@ export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
-  const { data: variantRows, error: variantsError } = await supabase
-    .from("variants")
-    .select("shopify_variant_id, inventory_item_id, sku")
-    .eq("shop_domain", session.shop)
-    .not("inventory_item_id", "is", null);
-
-  if (variantsError) {
-    return {
-      ok: false,
-      error: variantsError.message,
-    };
-  }
-
-  const variants = (variantRows ?? []) as VariantDbRow[];
-
-  if (variants.length === 0) {
-    return {
-      ok: false,
-      error:
-        "No variants with inventory_item_id found. Run products & variants sync first.",
-    };
-  }
-
-  const variantByInventoryItemId = new Map<string, VariantDbRow>();
-
-  for (const variant of variants) {
-    variantByInventoryItemId.set(variant.inventory_item_id, variant);
-  }
-
-  const inventoryItemIds = Array.from(
-    new Set(variants.map((variant) => variant.inventory_item_id)),
-  );
-
-  const chunks = chunkArray(inventoryItemIds, INVENTORY_BATCH_SIZE);
-
-  let totalInventoryLevelsSynced = 0;
-  let totalInventoryItemsProcessed = 0;
-
-  for (const chunk of chunks) {
-    const response = await admin.graphql(
-      `#graphql
-        query getInventoryItemsForSync($ids: [ID!]!) {
-          nodes(ids: $ids) {
-            ... on InventoryItem {
-              id
-              sku
-              tracked
-              inventoryLevels(first: 20) {
-                edges {
-                  node {
-                    location {
-                      id
-                      name
-                    }
-                    quantities(names: ["available"]) {
-                      name
-                      quantity
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `,
-      {
-        variables: {
-          ids: chunk,
-        },
-      },
-    );
-
-    const data = (await response.json()) as InventoryGraphqlResponse;
-
-    if (data.errors) {
-      return {
-        ok: false,
-        error: JSON.stringify(data.errors),
-      };
-    }
-
-    const inventoryItems = (data.data?.nodes ?? []).filter(
-      Boolean,
-    ) as InventoryItemNode[];
-
-    const rows = inventoryItems.flatMap((inventoryItem) => {
-      const variant = variantByInventoryItemId.get(inventoryItem.id);
-
-      if (!variant) {
-        return [];
-      }
-
-      return inventoryItem.inventoryLevels.edges.map(({ node: level }) => ({
-        shop_domain: session.shop,
-        shopify_location_id: level.location.id,
-        shopify_variant_id: variant.shopify_variant_id,
-        inventory_item_id: inventoryItem.id,
-        sku: variant.sku ?? inventoryItem.sku ?? null,
-        available: getAvailableQuantity(level),
-        tracked: inventoryItem.tracked,
-        synced_at: new Date().toISOString(),
-      }));
+  try {
+    const result = await syncInventory({
+      admin,
+      shop: session.shop,
+      supabase,
+      source: "manual_admin_sync",
     });
 
-    if (rows.length > 0) {
-      const { error } = await supabase.from("inventory_levels").upsert(rows, {
-        onConflict: "shop_domain,shopify_location_id,inventory_item_id",
-      });
-
-      if (error) {
-        return {
-          ok: false,
-          error: error.message,
-        };
-      }
-    }
-
-    totalInventoryItemsProcessed += inventoryItems.length;
-    totalInventoryLevelsSynced += rows.length;
+    return {
+      ok: true,
+      inventoryItemsProcessed: result.inventoryItemsProcessed,
+      inventoryLevelsSynced: result.inventoryLevelsSynced,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
-
-  await supabase.from("sync_runs").insert({
-    shop_domain: session.shop,
-    sync_type: "inventory",
-    status: "success",
-    finished_at: new Date().toISOString(),
-  });
-
-  return {
-    ok: true,
-    inventoryItemsProcessed: totalInventoryItemsProcessed,
-    inventoryLevelsSynced: totalInventoryLevelsSynced,
-  };
 }
 
 export default function SyncInventoryPage() {
