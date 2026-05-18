@@ -13,7 +13,7 @@ topics = ["orders/create"]
 uri = "/webhooks/orders/create"
 
 [access_scopes]
-scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations,read_users"
+scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations"
 
 [auth]
 redirect_urls = [
