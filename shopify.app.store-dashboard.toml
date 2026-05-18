@@ -21,6 +21,10 @@ topics = ["inventory_levels/update"]
 uri = "/webhooks/inventory-levels/update"
 
 [[webhooks.subscriptions]]
+topics = ["inventory_items/update"]
+uri = "/webhooks/inventory-items/update"
+
+[[webhooks.subscriptions]]
 topics = ["products/create"]
 uri = "/webhooks/products/create"
 

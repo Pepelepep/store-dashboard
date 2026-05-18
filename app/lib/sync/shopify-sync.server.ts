@@ -49,6 +49,7 @@ type ProductNode = {
 
 type VariantDbRow = {
   shopify_variant_id: string;
+  shopify_product_id?: string | null;
   inventory_item_id: string;
   sku: string | null;
 };
@@ -57,6 +58,10 @@ type InventoryItemNode = {
   id: string;
   sku?: string | null;
   tracked: boolean;
+  unitCost?: {
+    amount: string;
+    currencyCode: string;
+  } | null;
   inventoryLevels: {
     edges: {
       node: {
@@ -335,7 +340,7 @@ async function recomputeOrderLineCogsForVariants({
   shop: string;
   variantRows: Array<{
     shopify_variant_id: string;
-    shopify_product_id: string;
+    shopify_product_id?: string | null;
     sku: string | null;
     unit_cost: number | null;
   }>;
@@ -367,6 +372,10 @@ async function recomputeOrderLineCogsForVariants({
 
   for (const variant of variantRows) {
     if (variant.unit_cost === null) {
+      continue;
+    }
+
+    if (!variant.shopify_product_id) {
       continue;
     }
 
@@ -1204,7 +1213,7 @@ export async function syncInventoryItems({
 
     const { data: variantRows, error: variantsError } = await supabase
       .from("variants")
-      .select("shopify_variant_id, inventory_item_id, sku")
+      .select("shopify_variant_id, shopify_product_id, inventory_item_id, sku")
       .eq("shop_domain", shop)
       .in("inventory_item_id", normalizedInventoryItemIds);
 
@@ -1221,6 +1230,8 @@ export async function syncInventoryItems({
 
     let totalInventoryLevelsSynced = 0;
     let totalInventoryItemsProcessed = 0;
+    let totalVariantsUnitCostUpdated = 0;
+    let totalOrderLinesCogsRecomputed = 0;
 
     for (const chunk of chunkArray(
       normalizedInventoryItemIds,
@@ -1234,6 +1245,10 @@ export async function syncInventoryItems({
                 id
                 sku
                 tracked
+                unitCost {
+                  amount
+                  currencyCode
+                }
                 inventoryLevels(first: 20) {
                   edges {
                     node {
@@ -1269,6 +1284,47 @@ export async function syncInventoryItems({
         data.data?.nodes ?? []
       ).filter(Boolean);
 
+      const affectedVariantRows: Array<{
+        shopify_variant_id: string;
+        shopify_product_id?: string | null;
+        sku: string | null;
+        unit_cost: number | null;
+      }> = [];
+
+      for (const inventoryItem of inventoryItems) {
+        const variant = variantByInventoryItemId.get(inventoryItem.id);
+
+        if (!variant) {
+          continue;
+        }
+
+        const unitCost = parseNullableNumericAmount(
+          inventoryItem.unitCost?.amount,
+        );
+        const { data: updatedVariantRows, error: variantUpdateError } =
+          await supabase
+            .from("variants")
+            .update({
+              unit_cost: unitCost,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("shop_domain", shop)
+            .eq("inventory_item_id", inventoryItem.id)
+            .select("shopify_variant_id");
+
+        if (variantUpdateError) {
+          throw new Error(variantUpdateError.message);
+        }
+
+        totalVariantsUnitCostUpdated += updatedVariantRows?.length ?? 0;
+        affectedVariantRows.push({
+          shopify_variant_id: variant.shopify_variant_id,
+          shopify_product_id: variant.shopify_product_id,
+          sku: variant.sku ?? inventoryItem.sku ?? null,
+          unit_cost: unitCost,
+        });
+      }
+
       const rows = inventoryItems.flatMap((inventoryItem) => {
         const variant = variantByInventoryItemId.get(inventoryItem.id);
 
@@ -1300,11 +1356,19 @@ export async function syncInventoryItems({
 
       totalInventoryItemsProcessed += inventoryItems.length;
       totalInventoryLevelsSynced += rows.length;
+      totalOrderLinesCogsRecomputed +=
+        await recomputeOrderLineCogsForVariants({
+          supabase,
+          shop,
+          variantRows: affectedVariantRows,
+        });
     }
 
     const result = {
       inventoryItemsProcessed: totalInventoryItemsProcessed,
       inventoryLevelsSynced: totalInventoryLevelsSynced,
+      variantsUnitCostUpdated: totalVariantsUnitCostUpdated,
+      orderLinesCogsRecomputed: totalOrderLinesCogsRecomputed,
     };
 
     await insertSyncRun({
