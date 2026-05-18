@@ -1,0 +1,50 @@
+client_id = "d13ab984b7a5d0813220b4bb859688a1"
+name = "Store_dashboard_staging"
+application_url = "https://store-dashboard-sasm.onrender.com"
+embedded = true
+
+[pos]
+embedded = false
+
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create"]
+uri = "/webhooks/orders/create"
+
+[[webhooks.subscriptions]]
+topics = ["orders/updated"]
+uri = "/webhooks/orders/updated"
+
+[[webhooks.subscriptions]]
+topics = ["products/create"]
+uri = "/webhooks/products/create"
+
+[[webhooks.subscriptions]]
+topics = ["products/update"]
+uri = "/webhooks/products/update"
+
+[[webhooks.subscriptions]]
+topics = ["products/delete"]
+uri = "/webhooks/products/delete"
+
+[[webhooks.subscriptions]]
+topics = ["inventory_levels/update"]
+uri = "/webhooks/inventory-levels/update"
+
+[[webhooks.subscriptions]]
+topics = ["inventory_items/update"]
+uri = "/webhooks/inventory-items/update"
+
+[access_scopes]
+scopes = "read_products,read_inventory,read_orders,read_all_orders,read_locations"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [
+  "https://store-dashboard-sasm.onrender.com/auth/callback",
+  "https://store-dashboard-sasm.onrender.com/auth/shopify/callback",
+  "https://store-dashboard-sasm.onrender.com/api/auth/callback"
+]
