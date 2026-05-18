@@ -20,6 +20,14 @@ uri = "/webhooks/orders/updated"
 topics = ["inventory_levels/update"]
 uri = "/webhooks/inventory-levels/update"
 
+[[webhooks.subscriptions]]
+topics = ["products/create"]
+uri = "/webhooks/products/create"
+
+[[webhooks.subscriptions]]
+topics = ["products/update"]
+uri = "/webhooks/products/update"
+
 [access_scopes]
 scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations"
 

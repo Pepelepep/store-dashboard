@@ -166,6 +166,12 @@ function normalizeInventoryItemId(inventoryItemId: string) {
     : `gid://shopify/InventoryItem/${inventoryItemId}`;
 }
 
+function normalizeProductId(productId: string) {
+  return productId.startsWith("gid://")
+    ? productId
+    : `gid://shopify/Product/${productId}`;
+}
+
 function getIncrementalOrderDateRange(lookbackDays = 7) {
   const end = new Date();
   const start = new Date();
@@ -586,6 +592,151 @@ export async function syncProducts({
 
     const result = {
       productsSynced: productRows.length,
+      variantsSynced: variantRows.length,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "products",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  } catch (error) {
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "products",
+      status: "error",
+      source,
+      startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+
+    throw error;
+  }
+}
+
+export async function syncProductById({
+  admin,
+  shop,
+  supabase,
+  source,
+  productId,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  source: SyncSource;
+  productId: string;
+}) {
+  const startedAt = new Date().toISOString();
+
+  try {
+    const response = await admin.graphql(
+      `#graphql
+        query getProductForSync($id: ID!) {
+          node(id: $id) {
+            ... on Product {
+              id
+              title
+              vendor
+              productType
+              status
+              variants(first: 100) {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    inventoryItem {
+                      id
+                      unitCost {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      {
+        variables: {
+          id: normalizeProductId(productId),
+        },
+      },
+    );
+
+    const data = await response.json();
+
+    if ("errors" in data && data.errors) {
+      throw new Error(JSON.stringify(data.errors));
+    }
+
+    const product = data.data?.node as ProductNode | null | undefined;
+
+    if (!product) {
+      throw new Error(`Product not found for ${productId}.`);
+    }
+
+    const productRows = [
+      {
+        shop_domain: shop,
+        shopify_product_id: product.id,
+        title: product.title,
+        vendor: product.vendor ?? null,
+        product_type: product.productType ?? null,
+        status: product.status ?? null,
+        updated_at: new Date().toISOString(),
+      },
+    ];
+
+    const variantRows = product.variants.edges.map(({ node: variant }) => ({
+      shop_domain: shop,
+      shopify_variant_id: variant.id,
+      shopify_product_id: product.id,
+      inventory_item_id: variant.inventoryItem?.id ?? null,
+      title: variant.title,
+      sku: variant.sku ?? null,
+      price: variant.price ? Number(variant.price) : null,
+      unit_cost: variant.inventoryItem?.unitCost?.amount
+        ? Number(variant.inventoryItem.unitCost.amount)
+        : null,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error: productError } = await supabase
+      .from("products")
+      .upsert(productRows, {
+        onConflict: "shop_domain,shopify_product_id",
+      });
+
+    if (productError) {
+      throw new Error(productError.message);
+    }
+
+    if (variantRows.length > 0) {
+      const { error: variantsError } = await supabase
+        .from("variants")
+        .upsert(variantRows, {
+          onConflict: "shop_domain,shopify_variant_id",
+        });
+
+      if (variantsError) {
+        throw new Error(variantsError.message);
+      }
+    }
+
+    const result = {
+      productsSynced: 1,
       variantsSynced: variantRows.length,
     };
 
