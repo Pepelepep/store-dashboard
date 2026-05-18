@@ -129,7 +129,7 @@ type OrderNode = {
   };
 };
 
-export type SyncSource = "manual_admin_sync" | "scheduled_daily_sync";
+export type SyncSource = "manual_admin_sync" | "scheduled_daily_sync" | "webhook";
 
 const INVENTORY_BATCH_SIZE = 25;
 const ORDERS_PAGE_SIZE = 50;

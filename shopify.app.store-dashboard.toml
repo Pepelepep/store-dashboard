@@ -8,6 +8,10 @@ name = "Store_dashboard"
 [webhooks]
 api_version = "2026-07"
 
+[[webhooks.subscriptions]]
+topics = ["orders/create"]
+uri = "/webhooks/orders/create"
+
 [access_scopes]
 scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations,read_users"
 
