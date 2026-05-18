@@ -110,6 +110,7 @@ type LoaderData = {
   selectedLocationName: string | null;
   startDate: string;
   endDate: string;
+  lastSuccessfulSync: string | null;
   selectedDays: number;
   kpis: {
     revenue: number;
@@ -800,6 +801,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const selectedLocationId = selectedLocation?.shopify_location_id ?? null;
   const selectedLocationName = selectedLocation?.name ?? null;
 
+  const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
+    await supabase
+      .from("sync_runs")
+      .select("finished_at")
+      .eq("shop_domain", session.shop)
+      .eq("status", "success")
+      .order("finished_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
   const [
     orderLinesResult,
     inventoryResult,
@@ -852,6 +863,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (variantsResult.error) errors.push(variantsResult.error.message);
   if (productsResult.error) errors.push(productsResult.error.message);
   if (expensesResult.error) errors.push(expensesResult.error.message);
+  if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
 
   const orderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
   const inventoryRows = (inventoryResult.data ?? []) as InventoryLevelDbRow[];
@@ -926,6 +938,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedLocationName,
     startDate,
     endDate,
+    lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
     selectedDays,
     kpis: {
       revenue,
@@ -955,6 +968,7 @@ export default function DbDashboardPage() {
     selectedLocationName,
     startDate,
     endDate,
+    lastSuccessfulSync,
     selectedDays,
     kpis,
     bestSellers,
@@ -1241,6 +1255,22 @@ export default function DbDashboardPage() {
               }}
             >
               {selectedDays} {selectedDays > 1 ? "days" : "day"}
+            </span>
+
+            <span
+              style={{
+                background: "white",
+                border: "1px solid #e5e7eb",
+                borderRadius: 999,
+                padding: "7px 12px",
+                fontSize: 13,
+                fontWeight: 800,
+              }}
+            >
+              Data updated:{" "}
+              {lastSuccessfulSync
+                ? formatStoreDateTime(lastSuccessfulSync)
+                : "unavailable"}
             </span>
           </div>
         </header>
