@@ -52,6 +52,7 @@ type ProductDbRow = {
   shopify_product_id: string;
   title: string;
   vendor: string | null;
+  status: string | null;
 };
 
 type FixedExpenseDbRow = {
@@ -392,6 +393,26 @@ function computeStockAlerts({
       return aDays - bDays;
     })
     .slice(0, 15);
+}
+
+function isActiveInventoryProduct({
+  inventory,
+  variantsById,
+  productsById,
+}: {
+  inventory: InventoryLevelDbRow;
+  variantsById: Map<string, VariantDbRow>;
+  productsById: Map<string, ProductDbRow>;
+}) {
+  const variant = inventory.shopify_variant_id
+    ? variantsById.get(inventory.shopify_variant_id)
+    : undefined;
+
+  const product = variant?.shopify_product_id
+    ? productsById.get(variant.shopify_product_id)
+    : undefined;
+
+  return product?.status !== "DELETED";
 }
 
 function getDaysInMonth(date: Date) {
@@ -847,7 +868,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .eq("shop_domain", session.shop),
     supabase
       .from("products")
-      .select("shopify_product_id, title, vendor")
+      .select("shopify_product_id, title, vendor, status")
       .eq("shop_domain", session.shop),
     supabase
       .from("fixed_expenses")
@@ -876,6 +897,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const productsById = new Map(
     products.map((product) => [product.shopify_product_id, product]),
   );
+  const activeInventoryRows = inventoryRows.filter((inventory) =>
+    isActiveInventoryProduct({ inventory, variantsById, productsById }),
+  );
   const revenue = orderLines.reduce(
     (sum, row) => sum + Number(row.revenue ?? 0),
     0,
@@ -893,7 +917,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     0,
   );
   const averageOrderValue = ordersCount > 0 ? revenue / ordersCount : 0;
-  const inventoryUnits = inventoryRows.reduce(
+  const inventoryUnits = activeInventoryRows.reduce(
     (sum, row) => sum + Number(row.available ?? 0),
     0,
   );
@@ -908,7 +932,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const netProfit =
     expensesToDate === null ? null : grossProfit - Number(expensesToDate);
   const stockAlerts = computeStockAlerts({
-    inventoryRows,
+    inventoryRows: activeInventoryRows,
     orderLines,
     variantsById,
     productsById,
