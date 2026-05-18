@@ -160,6 +160,15 @@ function getNumericAmount(value?: string | null) {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+function parseNullableNumericAmount(value?: string | null) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : null;
+}
+
 function getAvailableQuantity(
   level: InventoryItemNode["inventoryLevels"]["edges"][number]["node"],
 ) {
@@ -738,9 +747,9 @@ export async function syncProducts({
         title: variant.title,
         sku: variant.sku ?? null,
         price: variant.price ? Number(variant.price) : null,
-        unit_cost: variant.inventoryItem?.unitCost?.amount
-          ? Number(variant.inventoryItem.unitCost.amount)
-          : null,
+        unit_cost: parseNullableNumericAmount(
+          variant.inventoryItem?.unitCost?.amount,
+        ),
         updated_at: new Date().toISOString(),
       })),
     );
@@ -882,9 +891,9 @@ export async function syncProductById({
       title: variant.title,
       sku: variant.sku ?? null,
       price: variant.price ? Number(variant.price) : null,
-      unit_cost: variant.inventoryItem?.unitCost?.amount
-        ? Number(variant.inventoryItem.unitCost.amount)
-        : null,
+      unit_cost: parseNullableNumericAmount(
+        variant.inventoryItem?.unitCost?.amount,
+      ),
       updated_at: new Date().toISOString(),
     }));
 
@@ -915,10 +924,17 @@ export async function syncProductById({
       shop,
       variantRows,
     });
+    const variantsWithUnitCostSynced = variantRows.filter(
+      (variant) => variant.unit_cost !== null,
+    ).length;
+    const variantsWithMissingUnitCost =
+      variantRows.length - variantsWithUnitCostSynced;
 
     const result = {
       productsSynced: 1,
       variantsSynced: variantRows.length,
+      variantsWithUnitCostSynced,
+      variantsWithMissingUnitCost,
       orderLinesCogsRecomputed,
     };
 
