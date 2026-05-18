@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useLoaderData } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -33,6 +33,11 @@ type LoaderData = {
   };
   locations: LocationRow[];
   permissions: PermissionRow[];
+};
+
+type ActionData = {
+  ok: boolean;
+  message: string;
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -78,7 +83,12 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (intent === "delete") {
     const id = String(formData.get("id") ?? "");
-    if (!id) throw new Response("Missing permission id", { status: 400 });
+    if (!id) {
+      return {
+        ok: false,
+        message: "Missing permission id.",
+      } satisfies ActionData;
+    }
 
     const { error } = await supabase
       .from("user_location_access")
@@ -86,8 +96,17 @@ export async function action({ request }: ActionFunctionArgs) {
       .eq("shop_domain", session.shop)
       .eq("id", id);
 
-    if (error) throw new Response(error.message, { status: 500 });
-    return { ok: true };
+    if (error) {
+      return {
+        ok: false,
+        message: error.message,
+      } satisfies ActionData;
+    }
+
+    return {
+      ok: true,
+      message: "Permission deleted.",
+    } satisfies ActionData;
   }
 
   const email = String(formData.get("user_email") ?? "").trim().toLowerCase();
@@ -95,12 +114,25 @@ export async function action({ request }: ActionFunctionArgs) {
   const role = String(formData.get("role") ?? "viewer");
   const locationIds = formData.getAll("locationIds").map(String).filter(Boolean);
 
-  if (!email && !shopifyUserId) {
-    throw new Response("Email or Shopify user id is required", { status: 400 });
+  if (!shopifyUserId) {
+    return {
+      ok: false,
+      message: "Shopify user ID is required.",
+    } satisfies ActionData;
+  }
+
+  if (!role) {
+    return {
+      ok: false,
+      message: "Role is required.",
+    } satisfies ActionData;
   }
 
   if (!locationIds.length && role !== "admin") {
-    throw new Response("Select at least one location", { status: 400 });
+    return {
+      ok: false,
+      message: "Select at least one location.",
+    } satisfies ActionData;
   }
 
   const { data: locationsData, error: locationsError } = await supabase
@@ -108,7 +140,12 @@ export async function action({ request }: ActionFunctionArgs) {
     .select("shopify_location_id, name")
     .eq("shop_domain", session.shop);
 
-  if (locationsError) throw new Response(locationsError.message, { status: 500 });
+  if (locationsError) {
+    return {
+      ok: false,
+      message: locationsError.message,
+    } satisfies ActionData;
+  }
 
   const locationsById = new Map(
     (locationsData ?? []).map((location: any) => [location.shopify_location_id, location.name]),
@@ -119,16 +156,15 @@ export async function action({ request }: ActionFunctionArgs) {
     .delete()
     .eq("shop_domain", session.shop);
 
-  if (email && shopifyUserId) {
-    deleteQuery = deleteQuery.or(`user_email.eq.${email},shopify_user_id.eq.${shopifyUserId}`);
-  } else if (email) {
-    deleteQuery = deleteQuery.eq("user_email", email);
-  } else if (shopifyUserId) {
-    deleteQuery = deleteQuery.eq("shopify_user_id", shopifyUserId);
-  }
+  deleteQuery = deleteQuery.eq("shopify_user_id", shopifyUserId);
 
   const { error: deleteError } = await deleteQuery;
-  if (deleteError) throw new Response(deleteError.message, { status: 500 });
+  if (deleteError) {
+    return {
+      ok: false,
+      message: deleteError.message,
+    } satisfies ActionData;
+  }
 
   const rows = role === "admin"
     ? [
@@ -155,9 +191,17 @@ export async function action({ request }: ActionFunctionArgs) {
       }));
 
   const { error: insertError } = await supabase.from("user_location_access").insert(rows);
-  if (insertError) throw new Response(insertError.message, { status: 500 });
+  if (insertError) {
+    return {
+      ok: false,
+      message: insertError.message,
+    } satisfies ActionData;
+  }
 
-  return { ok: true };
+  return {
+    ok: true,
+    message: "Permissions saved.",
+  } satisfies ActionData;
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
@@ -171,6 +215,12 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 
 export default function AdminPermissionsPage() {
   const { shop, currentUser, locations, permissions } = useLoaderData<LoaderData>();
+  const actionData = useActionData<ActionData>();
+  const navigation = useNavigation();
+  const isSubmitting = navigation.state !== "idle";
+  const activeIntent = navigation.formData?.get("intent");
+  const isSaving = isSubmitting && activeIntent === "save";
+  const isDeleting = isSubmitting && activeIntent === "delete";
 
   return (
     <main style={{ minHeight: "100vh", background: "#f6f6f7", padding: 28, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
@@ -186,6 +236,22 @@ export default function AdminPermissionsPage() {
           </p>
         </header>
 
+        {actionData ? (
+          <div
+            style={{
+              background: actionData.ok ? "#ecfdf3" : "#fef3f2",
+              border: `1px solid ${actionData.ok ? "#abefc6" : "#fecdca"}`,
+              color: actionData.ok ? "#067647" : "#b42318",
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 20,
+              fontWeight: 700,
+            }}
+          >
+            {actionData.message}
+          </div>
+        ) : null}
+
         <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 420px) minmax(0, 1fr)", gap: 20 }}>
           <Card title="Add or replace user access">
             <Form method="post" style={{ display: "grid", gap: 14 }}>
@@ -197,16 +263,19 @@ export default function AdminPermissionsPage() {
               </label>
 
               <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Shopify user id, optional
-                <input name="shopify_user_id" placeholder="90052427974" style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }} />
+                Shopify user ID
+                <input name="shopify_user_id" required placeholder="90052427974" style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }} />
+                <span style={{ color: "#616161", fontSize: 13, fontWeight: 400 }}>
+                  Required. We use this Shopify user ID to identify staff members without requesting read_users.
+                </span>
               </label>
 
               <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
                 Role
-                <select name="role" defaultValue="viewer" style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}>
-                  <option value="viewer">Viewer</option>
-                  <option value="manager">Manager</option>
-                  <option value="admin">Admin</option>
+                <select name="role" required defaultValue="viewer" style={{ padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}>
+                  <option value="viewer">Viewer - Can view dashboard data for selected locations.</option>
+                  <option value="manager">Manager - Can view dashboard data and manage location-level settings for selected locations.</option>
+                  <option value="admin">Admin - Can access all locations and manage permissions.</option>
                 </select>
               </label>
 
@@ -223,8 +292,8 @@ export default function AdminPermissionsPage() {
                 <p style={{ color: "#616161", fontSize: 13 }}>For admin role, locations are ignored and access is global.</p>
               </div>
 
-              <button type="submit" style={{ border: "1px solid #202223", background: "#202223", color: "white", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
-                Save permissions
+              <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #202223", background: isSubmitting ? "#8a8f93" : "#202223", color: "white", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+                {isSaving ? "Saving..." : "Save permissions"}
               </button>
             </Form>
           </Card>
@@ -252,8 +321,8 @@ export default function AdminPermissionsPage() {
                         <Form method="post">
                           <input type="hidden" name="intent" value="delete" />
                           <input type="hidden" name="id" value={row.id} />
-                          <button type="submit" style={{ border: "1px solid #d72c0d", background: "white", color: "#d72c0d", borderRadius: 8, padding: "6px 10px" }}>
-                            Delete
+                          <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #d72c0d", background: "white", color: isSubmitting ? "#8a8f93" : "#d72c0d", borderRadius: 8, padding: "6px 10px" }}>
+                            {isDeleting ? "Deleting..." : "Delete"}
                           </button>
                         </Form>
                       </td>
