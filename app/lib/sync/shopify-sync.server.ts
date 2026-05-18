@@ -83,6 +83,8 @@ type VariantCostRow = {
 type OrderLineCostRecomputeRow = {
   shopify_line_item_id: string;
   shopify_variant_id: string | null;
+  shopify_product_id?: string | null;
+  sku: string | null;
   quantity: number;
   revenue: number;
 };
@@ -324,6 +326,8 @@ async function recomputeOrderLineCogsForVariants({
   shop: string;
   variantRows: Array<{
     shopify_variant_id: string;
+    shopify_product_id: string;
+    sku: string | null;
     unit_cost: number | null;
   }>;
 }) {
@@ -336,30 +340,119 @@ async function recomputeOrderLineCogsForVariants({
       ]),
   );
   const variantIds = Array.from(costByVariantId.keys());
+  const normalizeSku = (sku: string | null) => sku?.trim() ?? "";
+  const isUsableSku = (sku: string | null) => {
+    const normalizedSku = normalizeSku(sku);
 
-  if (variantIds.length === 0) {
+    return normalizedSku.length > 0 && normalizedSku !== "-";
+  };
+  const costBySku = new Map(
+    variantRows
+      .filter(
+        (variant) => variant.unit_cost !== null && isUsableSku(variant.sku),
+      )
+      .map((variant) => [normalizeSku(variant.sku), variant.unit_cost as number]),
+  );
+  const skus = Array.from(costBySku.keys());
+  const productVariantCosts = new Map<string, number[]>();
+
+  for (const variant of variantRows) {
+    if (variant.unit_cost === null) {
+      continue;
+    }
+
+    const existingCosts =
+      productVariantCosts.get(variant.shopify_product_id) ?? [];
+    existingCosts.push(variant.unit_cost);
+    productVariantCosts.set(variant.shopify_product_id, existingCosts);
+  }
+
+  const costBySingleVariantProductId = new Map(
+    Array.from(productVariantCosts.entries())
+      .filter(([, costs]) => costs.length === 1)
+      .map(([productId, costs]) => [productId, costs[0]]),
+  );
+  const productIds = Array.from(costBySingleVariantProductId.keys());
+
+  if (variantIds.length === 0 && skus.length === 0 && productIds.length === 0) {
     return 0;
   }
 
-  const { data: orderLineRows, error } = await supabase
-    .from("order_lines")
-    .select("shopify_line_item_id, shopify_variant_id, quantity, revenue")
-    .eq("shop_domain", shop)
-    .in("shopify_variant_id", variantIds);
+  const baseSelect =
+    "shopify_line_item_id, shopify_variant_id, sku, quantity, revenue";
+  const orderLinesById = new Map<string, OrderLineCostRecomputeRow>();
 
-  if (error) {
-    throw new Error(error.message);
+  if (variantIds.length > 0) {
+    const { data: variantMatchedRows, error } = await supabase
+      .from("order_lines")
+      .select(baseSelect)
+      .eq("shop_domain", shop)
+      .in("shopify_variant_id", variantIds);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    for (const orderLine of (variantMatchedRows ??
+      []) as OrderLineCostRecomputeRow[]) {
+      orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
+    }
+  }
+
+  if (skus.length > 0) {
+    const { data: skuMatchedRows, error } = await supabase
+      .from("order_lines")
+      .select(baseSelect)
+      .eq("shop_domain", shop)
+      .in("sku", skus);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    for (const orderLine of (skuMatchedRows ??
+      []) as OrderLineCostRecomputeRow[]) {
+      orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
+    }
+  }
+
+  if (productIds.length > 0) {
+    const { error: productIdColumnError } = await supabase
+      .from("order_lines")
+      .select("shopify_product_id")
+      .eq("shop_domain", shop)
+      .limit(1);
+
+    if (!productIdColumnError) {
+      const { data: productMatchedRows, error } = await supabase
+        .from("order_lines")
+        .select(`${baseSelect}, shopify_product_id`)
+        .eq("shop_domain", shop)
+        .in("shopify_product_id", productIds);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      for (const orderLine of (productMatchedRows ??
+        []) as OrderLineCostRecomputeRow[]) {
+        orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
+      }
+    }
   }
 
   let recomputedCount = 0;
 
-  for (const orderLine of (orderLineRows ??
-    []) as OrderLineCostRecomputeRow[]) {
-    if (!orderLine.shopify_variant_id) {
-      continue;
-    }
-
-    const unitCost = costByVariantId.get(orderLine.shopify_variant_id);
+  for (const orderLine of orderLinesById.values()) {
+    const sku = isUsableSku(orderLine.sku) ? normalizeSku(orderLine.sku) : null;
+    const unitCost =
+      (orderLine.shopify_variant_id
+        ? costByVariantId.get(orderLine.shopify_variant_id)
+        : undefined) ??
+      (sku ? costBySku.get(sku) : undefined) ??
+      (orderLine.shopify_product_id
+        ? costBySingleVariantProductId.get(orderLine.shopify_product_id)
+        : undefined);
 
     if (unitCost === undefined) {
       continue;
