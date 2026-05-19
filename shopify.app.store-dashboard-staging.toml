@@ -1,37 +1,45 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
 client_id = "d13ab984b7a5d0813220b4bb859688a1"
 name = "Store_dashboard_staging"
 application_url = "https://store-dashboard-sasm.onrender.com"
 embedded = true
 
-[pos]
-embedded = false
-
 [webhooks]
 api_version = "2026-07"
 
-[[webhooks.subscriptions]]
-topics = ["products/create"]
-uri = "/webhooks/products/create"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/inventory-levels/update"
+  topics = [ "inventory_levels/update" ]
 
-[[webhooks.subscriptions]]
-topics = ["products/update"]
-uri = "/webhooks/products/update"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/inventory-items/update"
+  topics = [ "inventory_items/update" ]
 
-[[webhooks.subscriptions]]
-topics = ["products/delete"]
-uri = "/webhooks/products/delete"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/delete"
+  topics = [ "products/delete" ]
 
-[[webhooks.subscriptions]]
-topics = ["inventory_levels/update"]
-uri = "/webhooks/inventory-levels/update"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/create"
+  topics = [ "products/create" ]
 
-[[webhooks.subscriptions]]
-topics = ["inventory_items/update"]
-uri = "/webhooks/inventory-items/update"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/products/update"
+  topics = [ "products/update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/create"
+  topics = [ "orders/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/updated"
+  topics = [ "orders/updated" ]
 
 [access_scopes]
-scopes = "read_products,read_inventory,read_orders,read_all_orders,read_locations"
-optional_scopes = []
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_all_orders,read_inventory,read_locations,read_orders,read_products"
+optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
@@ -40,3 +48,6 @@ redirect_urls = [
   "https://store-dashboard-sasm.onrender.com/auth/shopify/callback",
   "https://store-dashboard-sasm.onrender.com/api/auth/callback"
 ]
+
+[pos]
+embedded = false
