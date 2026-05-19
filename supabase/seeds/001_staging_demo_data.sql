@@ -72,15 +72,15 @@ begin
     (demo_shop, 'gid://shopify/ProductVariant/930100004', 'gid://shopify/Product/920100002', 'gid://shopify/InventoryItem/940100004', 'Blue', 'MUG-BLU', 24.00, null, now(), now()),
     (demo_shop, 'gid://shopify/ProductVariant/930100005', 'gid://shopify/Product/920100003', 'gid://shopify/InventoryItem/940100005', 'Charcoal', 'BEAN-CHR', 42.00, 18.00, now(), now()),
     (demo_shop, 'gid://shopify/ProductVariant/930100006', 'gid://shopify/Product/920100003', 'gid://shopify/InventoryItem/940100006', 'Forest', 'BEAN-FOR', 42.00, 18.00, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100007', 'gid://shopify/Product/920100004', 'Cedar', 'CND-CED', 32.00, 11.75, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100008', 'gid://shopify/Product/920100004', 'Lavender', 'CND-LAV', 32.00, 11.75, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100009', 'gid://shopify/Product/920100005', 'Dotted', 'NOTE-DOT', 18.00, 5.20, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100010', 'gid://shopify/Product/920100005', 'Plain', 'NOTE-PLN', 18.00, null, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100011', 'gid://shopify/Product/920100006', 'Rosemary', 'SOAP-ROS', 12.00, 3.80, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100012', 'gid://shopify/Product/920100006', 'Mint', 'SOAP-MNT', 12.00, 3.80, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100013', 'gid://shopify/Product/920100007', 'Brass', 'KEY-BRS', 22.00, 7.50, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100014', 'gid://shopify/Product/920100008', 'Tomato', 'TOWL-TOM', 28.00, null, now(), now()),
-    (demo_shop, 'gid://shopify/ProductVariant/930100015', 'gid://shopify/Product/920100008', 'Blueberry', 'TOWL-BLU', 28.00, 9.00, now(), now());
+    (demo_shop, 'gid://shopify/ProductVariant/930100007', 'gid://shopify/Product/920100004', 'gid://shopify/InventoryItem/940100007', 'Cedar', 'CND-CED', 32.00, 11.75, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100008', 'gid://shopify/Product/920100004', 'gid://shopify/InventoryItem/940100008', 'Lavender', 'CND-LAV', 32.00, 11.75, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100009', 'gid://shopify/Product/920100005', 'gid://shopify/InventoryItem/940100009', 'Dotted', 'NOTE-DOT', 18.00, 5.20, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100010', 'gid://shopify/Product/920100005', 'gid://shopify/InventoryItem/940100010', 'Plain', 'NOTE-PLN', 18.00, null, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100011', 'gid://shopify/Product/920100006', 'gid://shopify/InventoryItem/940100011', 'Rosemary', 'SOAP-ROS', 12.00, 3.80, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100012', 'gid://shopify/Product/920100006', 'gid://shopify/InventoryItem/940100012', 'Mint', 'SOAP-MNT', 12.00, 3.80, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100013', 'gid://shopify/Product/920100007', 'gid://shopify/InventoryItem/940100013', 'Brass', 'KEY-BRS', 22.00, 7.50, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100014', 'gid://shopify/Product/920100008', 'gid://shopify/InventoryItem/940100014', 'Tomato', 'TOWL-TOM', 28.00, null, now(), now()),
+    (demo_shop, 'gid://shopify/ProductVariant/930100015', 'gid://shopify/Product/920100008', 'gid://shopify/InventoryItem/940100015', 'Blueberry', 'TOWL-BLU', 28.00, 9.00, now(), now());
 
   insert into public.inventory_levels (
     shop_domain,
