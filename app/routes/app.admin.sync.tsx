@@ -10,7 +10,10 @@ import {
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
-import { runFullSync } from "../lib/sync/shopify-sync.server";
+import {
+  runFullSync,
+  syncStaffMembers,
+} from "../lib/sync/shopify-sync.server";
 
 type TableCount = {
   table: string;
@@ -110,6 +113,10 @@ function formatSyncRunDetails(run: SyncRun) {
       ]
         .filter(Boolean)
         .join(", ") || "-";
+    case "staff_members":
+      return details.syncedCount === undefined
+        ? "-"
+        : `${details.syncedCount} staff members`;
     case "orders":
       return [
         details.ordersSynced === undefined ? null : `${details.ordersSynced} orders`,
@@ -143,6 +150,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     getTableCount({ table: "order_lines", shop: session.shop, supabase }),
     getTableCount({ table: "fixed_expenses", shop: session.shop, supabase }),
     getTableCount({ table: "user_location_access", shop: session.shop, supabase }),
+    getTableCount({ table: "staff_members", shop: session.shop, supabase }),
   ]);
 
   const { data: syncRuns } = await supabase
@@ -169,6 +177,23 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
+
+  if (intent === "sync_staff_members") {
+    const result = await syncStaffMembers({
+      admin,
+      shop: session.shop,
+      supabase,
+      source: "manual_admin_sync",
+    });
+
+    return {
+      ok: result.ok,
+      message: result.ok
+        ? `Synced ${result.syncedCount} staff members.`
+        : `Staff sync failed: ${"error" in result ? result.error : "Unknown error"}`,
+      details: result,
+    } satisfies ActionData;
+  }
 
   if (intent !== "refresh_all") {
     return {
@@ -264,6 +289,9 @@ export default function AdminSyncPage() {
   const isRefreshing =
     navigation.state !== "idle" &&
     navigation.formData?.get("intent") === "refresh_all";
+  const isSyncingStaff =
+    navigation.state !== "idle" &&
+    navigation.formData?.get("intent") === "sync_staff_members";
 
   return (
     <main
@@ -375,6 +403,26 @@ export default function AdminSyncPage() {
               <ButtonLink to="/app/admin/sync-orders">
                 Refresh orders by date range
               </ButtonLink>
+
+              <Form method="post">
+                <input type="hidden" name="intent" value="sync_staff_members" />
+                <button
+                  type="submit"
+                  disabled={isSyncingStaff}
+                  style={{
+                    width: "100%",
+                    border: "1px solid #006fbb",
+                    background: isSyncingStaff ? "#8cc5ff" : "white",
+                    color: isSyncingStaff ? "white" : "#006fbb",
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                    fontWeight: 800,
+                    cursor: isSyncingStaff ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {isSyncingStaff ? "Syncing staff..." : "Sync staff members"}
+                </button>
+              </Form>
             </div>
           </Card>
 
@@ -383,6 +431,7 @@ export default function AdminSyncPage() {
               <li>Refresh locations</li>
               <li>Refresh products & variants</li>
               <li>Refresh inventory</li>
+              <li>Sync staff members</li>
               <li>Refresh orders</li>
             </ol>
 

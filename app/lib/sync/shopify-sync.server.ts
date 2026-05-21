@@ -99,6 +99,7 @@ type OrderLineItemNode = {
   title: string;
   quantity: number;
   sku?: string | null;
+  staffMember?: StaffMemberAttributionNode | null;
   variant?: {
     id: string;
     title?: string | null;
@@ -117,11 +118,49 @@ type OrderLineItemNode = {
   } | null;
 };
 
+type StaffMemberNode = {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  active?: boolean | null;
+  isShopOwner?: boolean | null;
+};
+
+type StaffMemberAttributionNode = {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+};
+
+type OrderTransactionNode = {
+  id: string;
+  kind?: string | null;
+  status?: string | null;
+  user?: StaffMemberAttributionNode | null;
+};
+
+type StaffSource =
+  | "line_item_staff"
+  | "order_staff"
+  | "transaction_user"
+  | "unavailable";
+
+type StaffAttribution = {
+  staffMemberId: string | null;
+  staffMemberName: string | null;
+  staffMemberEmail: string | null;
+  staffSource: StaffSource;
+};
+
 type OrderNode = {
   id: string;
   name: string;
   createdAt: string;
   displayFinancialStatus?: string | null;
+  staffMember?: StaffMemberAttributionNode | null;
+  transactions?: OrderTransactionNode[] | null;
   totalPriceSet?: {
     shopMoney?: {
       amount: string;
@@ -172,6 +211,63 @@ function parseNullableNumericAmount(value?: string | null) {
 
   const amount = Number(value);
   return Number.isFinite(amount) ? amount : null;
+}
+
+function getGraphqlErrorMessage(data: unknown) {
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    "errors" in data &&
+    (data as { errors?: unknown }).errors
+  ) {
+    return JSON.stringify((data as { errors: unknown }).errors);
+  }
+
+  return null;
+}
+
+function normalizeStaffId(staffId?: string | null) {
+  return staffId?.split("/").pop() ?? null;
+}
+
+function getStaffAttribution(
+  staffMember?: StaffMemberAttributionNode | null,
+  source: StaffSource = "unavailable",
+): StaffAttribution {
+  if (!staffMember?.id) {
+    return {
+      staffMemberId: null,
+      staffMemberName: null,
+      staffMemberEmail: null,
+      staffSource: "unavailable",
+    };
+  }
+
+  return {
+    staffMemberId: normalizeStaffId(staffMember.id),
+    staffMemberName: staffMember.name ?? null,
+    staffMemberEmail: staffMember.email ?? null,
+    staffSource: source,
+  };
+}
+
+function getTransactionStaffAttribution(
+  transactions?: OrderTransactionNode[] | null,
+): StaffAttribution {
+  const transactionUser = transactions?.find((transaction) => transaction.user?.id)
+    ?.user;
+
+  return getStaffAttribution(transactionUser, "transaction_user");
+}
+
+function getOrderStaffAttribution(order: OrderNode): StaffAttribution {
+  const orderStaff = getStaffAttribution(order.staffMember, "order_staff");
+
+  if (orderStaff.staffMemberId) {
+    return orderStaff;
+  }
+
+  return getTransactionStaffAttribution(order.transactions);
 }
 
 function getAvailableQuantity(
@@ -504,9 +600,11 @@ async function recomputeOrderLineCogsForVariants({
 async function getAllLineItemsForOrder({
   admin,
   order,
+  includeStaffAttribution = false,
 }: {
   admin: ShopifyAdminClient;
   order: OrderNode;
+  includeStaffAttribution?: boolean;
 }) {
   const allLineItems = [...order.lineItems.edges.map((edge) => edge.node)];
 
@@ -530,6 +628,17 @@ async function getAllLineItemsForOrder({
                     title
                     quantity
                     sku
+                    ${
+                      includeStaffAttribution
+                        ? `
+                    staffMember {
+                      id
+                      name
+                      email
+                    }
+                    `
+                        : ""
+                    }
                     variant {
                       id
                       title
@@ -562,9 +671,10 @@ async function getAllLineItemsForOrder({
     );
 
     const data = await response.json();
+    const graphqlErrorMessage = getGraphqlErrorMessage(data);
 
-    if ("errors" in data && data.errors) {
-      throw new Error(JSON.stringify(data.errors));
+    if (graphqlErrorMessage) {
+      throw new Error(graphqlErrorMessage);
     }
 
     const lineItems = data.data?.node?.lineItems;
@@ -1397,6 +1507,134 @@ export async function syncInventoryItems({
   }
 }
 
+export async function syncStaffMembers({
+  admin,
+  shop,
+  supabase,
+  source,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  source: SyncSource;
+}) {
+  const startedAt = new Date().toISOString();
+  let cursor: string | null = null;
+  let hasNextPage = true;
+  let syncedCount = 0;
+
+  try {
+    while (hasNextPage) {
+      const response = await admin.graphql(
+        `#graphql
+          query StaffMembers($first: Int!, $after: String) {
+            staffMembers(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  id
+                  name
+                  email
+                  firstName
+                  lastName
+                  active
+                  isShopOwner
+                }
+              }
+            }
+          }
+        `,
+        {
+          variables: {
+            first: 100,
+            after: cursor,
+          },
+        },
+      );
+
+      const data = await response.json();
+      const graphqlErrorMessage = getGraphqlErrorMessage(data);
+
+      if (graphqlErrorMessage) {
+        throw new Error(graphqlErrorMessage);
+      }
+
+      const connection = data.data?.staffMembers;
+      const staffMembers: StaffMemberNode[] =
+        connection?.edges?.map(
+          (edge: { node: StaffMemberNode }) => edge.node,
+        ) ?? [];
+      const now = new Date().toISOString();
+      const rows = staffMembers.map((staffMember) => ({
+        shop_domain: shop,
+        shopify_staff_id: normalizeStaffId(staffMember.id) ?? staffMember.id,
+        email: staffMember.email ?? null,
+        name: staffMember.name ?? null,
+        first_name: staffMember.firstName ?? null,
+        last_name: staffMember.lastName ?? null,
+        is_active: staffMember.active ?? null,
+        is_owner: staffMember.isShopOwner ?? null,
+        updated_at: now,
+      }));
+
+      await upsertInBatches({
+        supabase,
+        table: "staff_members",
+        rows,
+        onConflict: "shop_domain,shopify_staff_id",
+      });
+
+      syncedCount += rows.length;
+      hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
+      cursor = connection?.pageInfo?.endCursor ?? null;
+
+      if (rows.length === 0) {
+        break;
+      }
+    }
+
+    const result = {
+      ok: true,
+      syncedCount,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "staff_members",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const result = {
+      ok: false,
+      syncedCount,
+      error: errorMessage,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "staff_members",
+      status: "error",
+      source,
+      startedAt,
+      errorMessage,
+      details: result,
+    });
+
+    return result;
+  }
+}
+
 export async function syncOrders({
   admin,
   shop,
@@ -1439,68 +1677,102 @@ export async function syncOrders({
       }
     }
 
-    let cursor: string | null = null;
-    let hasNextPage = true;
-    let pagesProcessed = 0;
-    let totalOrdersSynced = 0;
-    let totalOrderLinesSynced = 0;
+    async function runOrdersSync(includeStaffAttribution: boolean) {
+      let cursor: string | null = null;
+      let hasNextPage = true;
+      let pagesProcessed = 0;
+      let totalOrdersSynced = 0;
+      let totalOrderLinesSynced = 0;
 
-    while (hasNextPage) {
-      const response = await admin.graphql(
-        `#graphql
-          query getOrdersForSync($cursor: String, $query: String) {
-            orders(
-              first: ${ORDERS_PAGE_SIZE},
-              after: $cursor,
-              sortKey: CREATED_AT,
-              reverse: true,
-              query: $query
-            ) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  id
-                  name
-                  createdAt
-                  displayFinancialStatus
-                  totalPriceSet {
-                    shopMoney {
-                      amount
-                      currencyCode
-                    }
-                  }
-                  retailLocation {
+      while (hasNextPage) {
+        const response = await admin.graphql(
+          `#graphql
+            query getOrdersForSync($cursor: String, $query: String) {
+              orders(
+                first: ${ORDERS_PAGE_SIZE},
+                after: $cursor,
+                sortKey: CREATED_AT,
+                reverse: true,
+                query: $query
+              ) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
                     id
                     name
-                  }
-                  lineItems(first: ${LINE_ITEMS_PAGE_SIZE}) {
-                    pageInfo {
-                      hasNextPage
-                      endCursor
+                    createdAt
+                    displayFinancialStatus
+                    ${
+                      includeStaffAttribution
+                        ? `
+                    staffMember {
+                      id
+                      name
+                      email
                     }
-                    edges {
-                      node {
+                    transactions(first: 10) {
+                      id
+                      kind
+                      status
+                      user {
                         id
-                        title
-                        quantity
-                        sku
-                        variant {
+                        name
+                        email
+                      }
+                    }
+                    `
+                        : ""
+                    }
+                    totalPriceSet {
+                      shopMoney {
+                        amount
+                        currencyCode
+                      }
+                    }
+                    retailLocation {
+                      id
+                      name
+                    }
+                    lineItems(first: ${LINE_ITEMS_PAGE_SIZE}) {
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
+                      edges {
+                        node {
                           id
                           title
+                          quantity
                           sku
-                          product {
+                          ${
+                            includeStaffAttribution
+                              ? `
+                          staffMember {
+                            id
+                            name
+                            email
+                          }
+                          `
+                              : ""
+                          }
+                          variant {
                             id
                             title
-                            vendor
+                            sku
+                            product {
+                              id
+                              title
+                              vendor
+                            }
                           }
-                        }
-                        discountedUnitPriceSet {
-                          shopMoney {
-                            amount
-                            currencyCode
+                          discountedUnitPriceSet {
+                            shopMoney {
+                              amount
+                              currencyCode
+                            }
                           }
                         }
                       }
@@ -1509,122 +1781,174 @@ export async function syncOrders({
                 }
               }
             }
-          }
-        `,
-        {
-          variables: {
-            cursor,
-            query: orderQuery || null,
+          `,
+          {
+            variables: {
+              cursor,
+              query: orderQuery || null,
+            },
           },
-        },
-      );
+        );
 
-      const data = await response.json();
+        const data = await response.json();
+        const graphqlErrorMessage = getGraphqlErrorMessage(data);
 
-      if ("errors" in data && data.errors) {
-        throw new Error(JSON.stringify(data.errors));
-      }
+        if (graphqlErrorMessage) {
+          throw new Error(graphqlErrorMessage);
+        }
 
-      const ordersConnection = data.data?.orders;
-      const orders: OrderNode[] =
-        ordersConnection?.edges?.map((edge: { node: OrderNode }) => edge.node) ??
-        [];
+        const ordersConnection = data.data?.orders;
+        const orders: OrderNode[] =
+          ordersConnection?.edges?.map(
+            (edge: { node: OrderNode }) => edge.node,
+          ) ?? [];
 
-      const orderRows = orders.map((order) => ({
-        shop_domain: shop,
-        shopify_order_id: order.id,
-        order_name: order.name,
-        created_at_shopify: order.createdAt,
-        financial_status: order.displayFinancialStatus ?? null,
-        retail_location_id: order.retailLocation?.id ?? null,
-        retail_location_name: order.retailLocation?.name ?? null,
-        total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
-        updated_at: new Date().toISOString(),
-      }));
+        const orderRows = orders.map((order) => {
+          const orderStaff = includeStaffAttribution
+            ? getOrderStaffAttribution(order)
+            : getStaffAttribution(null);
 
-      const orderLineRows: Record<string, unknown>[] = [];
-
-      for (const order of orders) {
-        const allLineItems = await getAllLineItemsForOrder({ admin, order });
-
-        for (const lineItem of allLineItems) {
-          const variantId = lineItem.variant?.id ?? null;
-          const sku = lineItem.sku ?? lineItem.variant?.sku ?? null;
-
-          const unitPrice = getNumericAmount(
-            lineItem.discountedUnitPriceSet?.shopMoney?.amount,
-          );
-
-          const revenue = unitPrice * lineItem.quantity;
-
-          const variantCost =
-            (variantId ? costByVariantId.get(variantId) : undefined) ??
-            (sku ? costBySku.get(sku) : undefined);
-
-          const costInfo = getCostInfo({
-            lineItem,
-            variantCost,
-            revenue,
-            quantity: lineItem.quantity,
-          });
-
-          orderLineRows.push({
+          return {
             shop_domain: shop,
             shopify_order_id: order.id,
-            shopify_line_item_id: lineItem.id,
             order_name: order.name,
             created_at_shopify: order.createdAt,
+            financial_status: order.displayFinancialStatus ?? null,
             retail_location_id: order.retailLocation?.id ?? null,
             retail_location_name: order.retailLocation?.name ?? null,
-            shopify_variant_id: variantId,
-            inventory_item_id: variantCost?.inventory_item_id ?? null,
-            product_title: lineItem.variant?.product?.title ?? lineItem.title,
-            variant_title: lineItem.variant?.title ?? null,
-            sku,
-            vendor: lineItem.variant?.product?.vendor ?? null,
-            quantity: lineItem.quantity,
-            unit_price: unitPrice,
-            revenue,
-            unit_cost: costInfo.unitCost,
-            cogs: costInfo.cogs,
-            gross_profit: costInfo.grossProfit,
-            cost_source: costInfo.costSource,
+            total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
+            staff_member_id: orderStaff.staffMemberId,
+            staff_member_name: orderStaff.staffMemberName,
+            staff_member_email: orderStaff.staffMemberEmail,
+            staff_source: orderStaff.staffSource,
+            updated_at: new Date().toISOString(),
+          };
+        });
+
+        const orderLineRows: Record<string, unknown>[] = [];
+
+        for (const order of orders) {
+          const orderStaff = includeStaffAttribution
+            ? getOrderStaffAttribution(order)
+            : getStaffAttribution(null);
+          const allLineItems = await getAllLineItemsForOrder({
+            admin,
+            order,
+            includeStaffAttribution,
           });
+
+          for (const lineItem of allLineItems) {
+            const variantId = lineItem.variant?.id ?? null;
+            const sku = lineItem.sku ?? lineItem.variant?.sku ?? null;
+
+            const unitPrice = getNumericAmount(
+              lineItem.discountedUnitPriceSet?.shopMoney?.amount,
+            );
+
+            const revenue = unitPrice * lineItem.quantity;
+
+            const variantCost =
+              (variantId ? costByVariantId.get(variantId) : undefined) ??
+              (sku ? costBySku.get(sku) : undefined);
+
+            const costInfo = getCostInfo({
+              lineItem,
+              variantCost,
+              revenue,
+              quantity: lineItem.quantity,
+            });
+
+            const lineStaff = includeStaffAttribution
+              ? getStaffAttribution(lineItem.staffMember, "line_item_staff")
+              : getStaffAttribution(null);
+            const staffAttribution = lineStaff.staffMemberId
+              ? lineStaff
+              : orderStaff;
+
+            orderLineRows.push({
+              shop_domain: shop,
+              shopify_order_id: order.id,
+              shopify_line_item_id: lineItem.id,
+              order_name: order.name,
+              created_at_shopify: order.createdAt,
+              retail_location_id: order.retailLocation?.id ?? null,
+              retail_location_name: order.retailLocation?.name ?? null,
+              shopify_variant_id: variantId,
+              inventory_item_id: variantCost?.inventory_item_id ?? null,
+              product_title: lineItem.variant?.product?.title ?? lineItem.title,
+              variant_title: lineItem.variant?.title ?? null,
+              sku,
+              vendor: lineItem.variant?.product?.vendor ?? null,
+              quantity: lineItem.quantity,
+              unit_price: unitPrice,
+              revenue,
+              unit_cost: costInfo.unitCost,
+              cogs: costInfo.cogs,
+              gross_profit: costInfo.grossProfit,
+              cost_source: costInfo.costSource,
+              staff_member_id: staffAttribution.staffMemberId,
+              staff_member_name: staffAttribution.staffMemberName,
+              staff_member_email: staffAttribution.staffMemberEmail,
+              staff_source: staffAttribution.staffSource,
+            });
+          }
+        }
+
+        await upsertInBatches({
+          supabase,
+          table: "orders",
+          rows: orderRows,
+          onConflict: "shop_domain,shopify_order_id",
+        });
+
+        await upsertInBatches({
+          supabase,
+          table: "order_lines",
+          rows: orderLineRows,
+          onConflict: "shop_domain,shopify_line_item_id",
+        });
+
+        totalOrdersSynced += orderRows.length;
+        totalOrderLinesSynced += orderLineRows.length;
+        pagesProcessed += 1;
+
+        hasNextPage = Boolean(ordersConnection?.pageInfo?.hasNextPage);
+        cursor = ordersConnection?.pageInfo?.endCursor ?? null;
+
+        if (orders.length === 0) {
+          break;
         }
       }
 
-      await upsertInBatches({
-        supabase,
-        table: "orders",
-        rows: orderRows,
-        onConflict: "shop_domain,shopify_order_id",
-      });
+      return {
+        ordersSynced: totalOrdersSynced,
+        orderLinesSynced: totalOrderLinesSynced,
+        pagesProcessed,
+      };
+    }
 
-      await upsertInBatches({
-        supabase,
-        table: "order_lines",
-        rows: orderLineRows,
-        onConflict: "shop_domain,shopify_line_item_id",
-      });
+    let staffAttributionAvailable = true;
+    let staffAttributionError: string | null = null;
+    let syncResult: {
+      ordersSynced: number;
+      orderLinesSynced: number;
+      pagesProcessed: number;
+    };
 
-      totalOrdersSynced += orderRows.length;
-      totalOrderLinesSynced += orderLineRows.length;
-      pagesProcessed += 1;
-
-      hasNextPage = ordersConnection.pageInfo.hasNextPage;
-      cursor = ordersConnection.pageInfo.endCursor;
-
-      if (orders.length === 0) {
-        break;
-      }
+    try {
+      syncResult = await runOrdersSync(true);
+    } catch (error) {
+      staffAttributionAvailable = false;
+      staffAttributionError = error instanceof Error ? error.message : String(error);
+      syncResult = await runOrdersSync(false);
     }
 
     const result = {
-      ordersSynced: totalOrdersSynced,
-      orderLinesSynced: totalOrderLinesSynced,
-      pagesProcessed,
+      ...syncResult,
       startDate: startDate ?? null,
       endDate: endDate ?? null,
+      staffAttributionAvailable,
+      staffAttributionError,
     };
 
     await insertSyncRun({

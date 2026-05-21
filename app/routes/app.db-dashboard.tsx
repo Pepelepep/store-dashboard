@@ -28,6 +28,10 @@ type OrderLineDbRow = {
   cogs: number | null;
   gross_profit: number | null;
   cost_source: string | null;
+  staff_member_id: string | null;
+  staff_member_name: string | null;
+  staff_member_email: string | null;
+  staff_source: string | null;
 };
 
 type InventoryLevelDbRow = {
@@ -76,6 +80,14 @@ type BestSellerRow = {
 
 type VendorRow = {
   vendor: string;
+  units: number;
+  revenue: number;
+};
+
+type StaffSalesRow = {
+  staff: string;
+  staffId: string;
+  source: string;
   units: number;
   revenue: number;
 };
@@ -129,6 +141,7 @@ type LoaderData = {
   };
   bestSellers: BestSellerRow[];
   salesByVendor: VendorRow[];
+  salesByStaff: StaffSalesRow[];
   stockAlerts: StockAlertRow[];
   recentOrders: RecentOrderRow[];
   errors: string[];
@@ -316,6 +329,39 @@ function computeSalesByVendor(orderLines: OrderLineDbRow[]) {
     } else {
       grouped.set(vendor, {
         vendor,
+        units: Number(row.quantity ?? 0),
+        revenue: Number(row.revenue ?? 0),
+      });
+    }
+  }
+
+  return Array.from(grouped.values())
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 10);
+}
+
+function computeSalesByStaff(orderLines: OrderLineDbRow[]) {
+  const grouped = new Map<string, StaffSalesRow>();
+
+  for (const row of orderLines) {
+    if (!row.staff_member_id && !row.staff_member_name) {
+      continue;
+    }
+
+    const staff = row.staff_member_name ?? row.staff_member_id ?? "Unknown staff";
+    const staffId = row.staff_member_id ?? "-";
+    const source = row.staff_source ?? "unavailable";
+    const key = `${staffId}__${staff}`;
+    const existing = grouped.get(key);
+
+    if (existing) {
+      existing.units += Number(row.quantity ?? 0);
+      existing.revenue += Number(row.revenue ?? 0);
+    } else {
+      grouped.set(key, {
+        staff,
+        staffId,
+        source,
         units: Number(row.quantity ?? 0),
         revenue: Number(row.revenue ?? 0),
       });
@@ -850,7 +896,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ? supabase
           .from("order_lines")
           .select(
-            "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source",
+            "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source",
           )
           .eq("shop_domain", session.shop)
           .eq("retail_location_id", selectedLocationId)
@@ -987,6 +1033,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
     bestSellers: computeBestSellers(orderLines),
     salesByVendor: computeSalesByVendor(orderLines),
+    salesByStaff: computeSalesByStaff(orderLines),
     stockAlerts,
     recentOrders,
     errors,
@@ -1006,6 +1053,7 @@ export default function DbDashboardPage() {
     kpis,
     bestSellers,
     salesByVendor,
+    salesByStaff,
     stockAlerts,
     recentOrders,
     errors,
@@ -1518,6 +1566,51 @@ export default function DbDashboardPage() {
               formatCurrency(row.revenue),
             ])}
           />
+        </SectionCard>
+
+        <div style={{ height: 20 }} />
+
+        <SectionCard
+          title="Sales by Staff"
+          exportConfig={
+            salesByStaff.length > 0
+              ? {
+                  filename: "sales-by-staff.csv",
+                  headers: ["Staff", "Staff ID", "Source", "Units", "Revenue"],
+                  rows: salesByStaff.map((row) => [
+                    row.staff,
+                    row.staffId,
+                    row.source,
+                    row.units,
+                    row.revenue,
+                  ]),
+                }
+              : undefined
+          }
+        >
+          {salesByStaff.length > 0 ? (
+            <Table
+              headers={["Staff", "Staff ID", "Source", "Units", "Revenue"]}
+              rows={salesByStaff.map((row) => [
+                row.staff,
+                row.staffId,
+                row.source,
+                row.units,
+                formatCurrency(row.revenue),
+              ])}
+            />
+          ) : (
+            <div
+              style={{
+                border: "1px solid #f0f0f0",
+                borderRadius: 12,
+                color: "#707070",
+                padding: 16,
+              }}
+            >
+              No staff attribution available yet.
+            </div>
+          )}
         </SectionCard>
 
         <div style={{ height: 20 }} />
