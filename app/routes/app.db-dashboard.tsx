@@ -1550,70 +1550,75 @@ export default function DbDashboardPage() {
           </SectionCard>
         </div>
 
-        <SectionCard
-          title="Sales by vendor"
-          exportConfig={{
-            filename: "sales-by-vendor.csv",
-            headers: ["Vendor", "Units", "Revenue"],
-            rows: salesByVendor.map((row) => [row.vendor, row.units, row.revenue]),
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+            gap: 20,
+            marginBottom: 20,
           }}
         >
-          <Table
-            headers={["Vendor", "Units", "Revenue"]}
-            rows={salesByVendor.map((row) => [
-              row.vendor,
-              row.units,
-              formatCurrency(row.revenue),
-            ])}
-          />
-        </SectionCard>
+          <SectionCard
+            title="Sales by Staff"
+            exportConfig={
+              salesByStaff.length > 0
+                ? {
+                    filename: "sales-by-staff.csv",
+                    headers: ["Staff", "Staff ID", "Source", "Units", "Revenue"],
+                    rows: salesByStaff.map((row) => [
+                      row.staff,
+                      row.staffId,
+                      row.source,
+                      row.units,
+                      row.revenue,
+                    ]),
+                  }
+                : undefined
+            }
+          >
+            {salesByStaff.length > 0 ? (
+              <Table
+                headers={["Staff", "Staff ID", "Source", "Units", "Revenue"]}
+                rows={salesByStaff.map((row) => [
+                  row.staff,
+                  row.staffId,
+                  row.source,
+                  row.units,
+                  formatCurrency(row.revenue),
+                ])}
+              />
+            ) : (
+              <div
+                style={{
+                  border: "1px solid #f0f0f0",
+                  borderRadius: 12,
+                  color: "#707070",
+                  padding: 16,
+                }}
+              >
+                No staff attribution available yet.
+              </div>
+            )}
+          </SectionCard>
 
-        <div style={{ height: 20 }} />
-
-        <SectionCard
-          title="Sales by Staff"
-          exportConfig={
-            salesByStaff.length > 0
-              ? {
-                  filename: "sales-by-staff.csv",
-                  headers: ["Staff", "Staff ID", "Source", "Units", "Revenue"],
-                  rows: salesByStaff.map((row) => [
-                    row.staff,
-                    row.staffId,
-                    row.source,
-                    row.units,
-                    row.revenue,
-                  ]),
-                }
-              : undefined
-          }
-        >
-          {salesByStaff.length > 0 ? (
+          <SectionCard
+            title="Sales by vendor"
+            exportConfig={{
+              filename: "sales-by-vendor.csv",
+              headers: ["Vendor", "Units", "Revenue"],
+              rows: salesByVendor.map((row) => [row.vendor, row.units, row.revenue]),
+            }}
+          >
             <Table
-              headers={["Staff", "Staff ID", "Source", "Units", "Revenue"]}
-              rows={salesByStaff.map((row) => [
-                row.staff,
-                row.staffId,
-                row.source,
+              headers={["Vendor", "Units", "Revenue"]}
+              rows={salesByVendor.map((row) => [
+                row.vendor,
                 row.units,
                 formatCurrency(row.revenue),
               ])}
             />
-          ) : (
-            <div
-              style={{
-                border: "1px solid #f0f0f0",
-                borderRadius: 12,
-                color: "#707070",
-                padding: 16,
-              }}
-            >
-              No staff attribution available yet.
-            </div>
-          )}
-        </SectionCard>
-
-        <div style={{ height: 20 }} />
+          </SectionCard>
+        </div>
 
         <SectionCard
           title="Recent order lines"
