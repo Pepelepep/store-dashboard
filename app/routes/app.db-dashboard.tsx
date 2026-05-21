@@ -1563,12 +1563,10 @@ export default function DbDashboardPage() {
             exportConfig={
               salesByStaff.length > 0
                 ? {
-                    filename: "sales-by-staff.csv",
-                    headers: ["Staff", "Staff ID", "Source", "Units", "Revenue"],
+                  filename: "sales-by-staff.csv",
+                    headers: ["Staff", "Units", "Revenue"],
                     rows: salesByStaff.map((row) => [
                       row.staff,
-                      row.staffId,
-                      row.source,
                       row.units,
                       row.revenue,
                     ]),
@@ -1578,11 +1576,9 @@ export default function DbDashboardPage() {
           >
             {salesByStaff.length > 0 ? (
               <Table
-                headers={["Staff", "Staff ID", "Source", "Units", "Revenue"]}
+                headers={["Staff", "Units", "Revenue"]}
                 rows={salesByStaff.map((row) => [
                   row.staff,
-                  row.staffId,
-                  row.source,
                   row.units,
                   formatCurrency(row.revenue),
                 ])}
@@ -1633,7 +1629,6 @@ export default function DbDashboardPage() {
               "Revenue",
               "COGS",
               "Gross profit",
-              "Cost source",
             ],
             rows: recentOrders.map((row) => [
               row.orderName,
@@ -1644,7 +1639,6 @@ export default function DbDashboardPage() {
               row.revenue,
               row.cogs ?? "-",
               row.grossProfit ?? "-",
-              row.costSource,
             ]),
           }}
         >
@@ -1658,7 +1652,6 @@ export default function DbDashboardPage() {
               "Revenue",
               "COGS",
               "Gross profit",
-              "Cost source",
             ]}
             rows={recentOrders.map((row) => [
               <a href={row.orderUrl} target="_blank" rel="noreferrer">
@@ -1671,7 +1664,6 @@ export default function DbDashboardPage() {
               formatCurrency(row.revenue),
               row.cogs === null ? "-" : formatCurrency(row.cogs),
               row.grossProfit === null ? "-" : formatCurrency(row.grossProfit),
-              row.costSource,
             ])}
           />
         </SectionCard>
