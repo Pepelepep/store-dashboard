@@ -25,6 +25,15 @@ type PermissionRow = {
   created_at: string | null;
 };
 
+type StaffMemberRow = {
+  shopify_staff_id: string;
+  email: string | null;
+  name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  is_active: boolean | null;
+};
+
 type LoaderData = {
   shop: string;
   currentUser: {
@@ -34,6 +43,7 @@ type LoaderData = {
   };
   locations: LocationRow[];
   permissions: PermissionRow[];
+  staffMembers: StaffMemberRow[];
 };
 
 type ActionData = {
@@ -46,6 +56,7 @@ type AccessFormState = {
   shopify_user_id: string;
   role: string;
   locationIds: string[];
+  selectedStaffId: string;
 };
 
 type PermissionGroup = {
@@ -63,6 +74,7 @@ const emptyAccessForm: AccessFormState = {
   shopify_user_id: "",
   role: "viewer",
   locationIds: [],
+  selectedStaffId: "",
 };
 
 const roleDescriptions: Record<string, string> = {
@@ -77,7 +89,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const supabase = getSupabaseAdminClient();
   const permissionContext = await assertAdminAccess({ request, session, supabase });
 
-  const [{ data: locationsData, error: locationsError }, { data: permissionsData, error: permissionsError }] =
+  const [
+    { data: locationsData, error: locationsError },
+    { data: permissionsData, error: permissionsError },
+    { data: staffMembersData, error: staffMembersError },
+  ] =
     await Promise.all([
       supabase
         .from("locations")
@@ -92,16 +108,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
         )
         .eq("shop_domain", session.shop)
         .order("user_email", { ascending: true }),
+      supabase
+        .from("staff_members")
+        .select("shopify_staff_id, email, name, first_name, last_name, is_active")
+        .eq("shop_domain", session.shop)
+        .order("name", { ascending: true }),
     ]);
 
   if (locationsError) throw new Response(locationsError.message, { status: 500 });
   if (permissionsError) throw new Response(permissionsError.message, { status: 500 });
+  if (staffMembersError) throw new Response(staffMembersError.message, { status: 500 });
 
   return {
     shop: session.shop,
     currentUser: permissionContext.identity,
     locations: (locationsData ?? []) as LocationRow[],
     permissions: (permissionsData ?? []) as PermissionRow[],
+    staffMembers: (staffMembersData ?? []) as StaffMemberRow[],
   } satisfies LoaderData;
 }
 
@@ -321,8 +344,19 @@ function groupPermissions(permissions: PermissionRow[]) {
   );
 }
 
+function getStaffLabel(staffMember: StaffMemberRow) {
+  const name = staffMember.name || [staffMember.first_name, staffMember.last_name].filter(Boolean).join(" ");
+  const label = name || staffMember.email || staffMember.shopify_staff_id;
+  const detail = staffMember.email && staffMember.email !== label
+    ? ` · ${staffMember.email}`
+    : "";
+
+  return `${label}${detail}`;
+}
+
 export default function AdminPermissionsPage() {
-  const { shop, currentUser, locations, permissions } = useLoaderData<LoaderData>();
+  const { shop, currentUser, locations, permissions, staffMembers } =
+    useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
   const permissionGroups = useMemo(
@@ -351,11 +385,29 @@ export default function AdminPermissionsPage() {
       shopify_user_id: group.shopify_user_id,
       role: group.role,
       locationIds: group.role === "admin" ? [] : group.locationIds,
+      selectedStaffId: staffMembers.some(
+        (staffMember) => staffMember.shopify_staff_id === group.shopify_user_id,
+      )
+        ? group.shopify_user_id
+        : "",
     });
   }
 
   function clearForm() {
     setFormState(emptyAccessForm);
+  }
+
+  function selectStaffMember(staffId: string) {
+    const staffMember = staffMembers.find(
+      (member) => member.shopify_staff_id === staffId,
+    );
+
+    setFormState((current) => ({
+      ...current,
+      selectedStaffId: staffId,
+      shopify_user_id: staffMember?.shopify_staff_id ?? current.shopify_user_id,
+      user_email: staffMember?.email ?? current.user_email,
+    }));
   }
 
   return (
@@ -395,6 +447,30 @@ export default function AdminPermissionsPage() {
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Staff member
+                  <select
+                    value={formState.selectedStaffId}
+                    onChange={(event) => selectStaffMember(event.target.value)}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                  >
+                    <option value="">Manual entry</option>
+                    {staffMembers.map((staffMember) => (
+                      <option
+                        key={staffMember.shopify_staff_id}
+                        value={staffMember.shopify_staff_id}
+                      >
+                        {getStaffLabel(staffMember)}
+                      </option>
+                    ))}
+                  </select>
+                  <FieldHelp>
+                    {staffMembers.length > 0
+                      ? "Choose synced Shopify staff or keep manual entry."
+                      : "No synced staff yet. Use manual entry or run Sync staff members."}
+                  </FieldHelp>
+                </label>
+
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
                   Email
                   <input
                     name="user_email"
@@ -427,7 +503,7 @@ export default function AdminPermissionsPage() {
                     style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
                   />
                   <FieldHelp>
-                    Required. We use this Shopify user ID to identify staff members without requesting read_users.
+                    Required. Staff dropdown fills this automatically when available.
                   </FieldHelp>
                 </label>
               </div>

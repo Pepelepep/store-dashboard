@@ -43,3 +43,6 @@ build/
 
 # Shopify local deploy bundle
 .shopify/deploy-bundle/
+.env
+.env.local
+.env.*.local
