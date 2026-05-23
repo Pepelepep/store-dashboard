@@ -49,6 +49,12 @@ type LoaderData = {
 type ActionData = {
   ok: boolean;
   message: string;
+  fieldErrors?: {
+    staff?: string;
+    shopify_user_id?: string;
+    role?: string;
+    locations?: string;
+  };
 };
 
 type AccessFormState = {
@@ -141,6 +147,10 @@ export async function action({ request }: ActionFunctionArgs) {
       return {
         ok: false,
         message: "Missing Shopify user ID.",
+        fieldErrors: {
+          staff: "Select a staff member or enter a Shopify user ID manually.",
+          shopify_user_id: "Select a staff member or enter a Shopify user ID manually.",
+        },
       } satisfies ActionData;
     }
 
@@ -172,6 +182,10 @@ export async function action({ request }: ActionFunctionArgs) {
     return {
       ok: false,
       message: "Shopify user ID is required.",
+      fieldErrors: {
+        staff: "Select a staff member or enter a Shopify user ID manually.",
+        shopify_user_id: "Select a staff member or enter a Shopify user ID manually.",
+      },
     } satisfies ActionData;
   }
 
@@ -179,6 +193,9 @@ export async function action({ request }: ActionFunctionArgs) {
     return {
       ok: false,
       message: "Role is required.",
+      fieldErrors: {
+        role: "Select a role.",
+      },
     } satisfies ActionData;
   }
 
@@ -186,6 +203,9 @@ export async function action({ request }: ActionFunctionArgs) {
     return {
       ok: false,
       message: "Select at least one location.",
+      fieldErrors: {
+        locations: "Select at least one location for this role.",
+      },
     } satisfies ActionData;
   }
 
@@ -274,6 +294,24 @@ function FieldHelp({ children }: { children: React.ReactNode }) {
         color: "#616161",
         fontSize: 13,
         fontWeight: 400,
+        lineHeight: 1.35,
+        overflowWrap: "anywhere",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function FieldError({ children }: { children?: React.ReactNode }) {
+  if (!children) return null;
+
+  return (
+    <span
+      style={{
+        color: "#b42318",
+        fontSize: 13,
+        fontWeight: 700,
         lineHeight: 1.35,
         overflowWrap: "anywhere",
       }}
@@ -389,6 +427,11 @@ export default function AdminPermissionsPage() {
   const isSaving = isSubmitting && activeIntent === "save";
   const isDeleting = isSubmitting && activeIntent === "delete";
   const isAdminRole = formState.role === "admin";
+  const fieldErrors = actionData?.ok ? undefined : actionData?.fieldErrors;
+  const hasStaffError = Boolean(fieldErrors?.staff || fieldErrors?.shopify_user_id);
+  const staffFieldBorder = hasStaffError ? "1px solid #d92d20" : "1px solid #c9cccf";
+  const roleFieldBorder = fieldErrors?.role ? "1px solid #d92d20" : "1px solid #c9cccf";
+  const locationsBorder = fieldErrors?.locations ? "1px solid #d92d20" : "1px solid transparent";
 
   function toggleLocation(locationId: string, checked: boolean) {
     setFormState((current) => ({
@@ -440,22 +483,6 @@ export default function AdminPermissionsPage() {
           </p>
         </header>
 
-        {actionData && !actionData.ok ? (
-          <div
-            style={{
-              background: "#fef3f2",
-              border: "1px solid #fecdca",
-              color: "#b42318",
-              borderRadius: 12,
-              padding: 14,
-              marginBottom: 20,
-              fontWeight: 700,
-            }}
-          >
-            {actionData.message}
-          </div>
-        ) : null}
-
         <div style={{ display: "grid", gap: 20 }}>
           <Card title="Grant access">
             <Form method="post" style={{ display: "grid", gap: 18 }}>
@@ -475,7 +502,7 @@ export default function AdminPermissionsPage() {
                   <select
                     value={formState.selectedStaffId}
                     onChange={(event) => selectStaffMember(event.target.value)}
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
                   >
                     <option value="">Manual entry</option>
                     {staffMembers.map((staffMember) => (
@@ -492,9 +519,10 @@ export default function AdminPermissionsPage() {
                       ? "The selected staff member fills the email and Shopify user ID automatically."
                       : "No staff members synced yet. Go to Sync Center and run Sync staff members."}
                   </FieldHelp>
+                  <FieldError>{fieldErrors?.staff}</FieldError>
                 </label>
 
-                <details style={{ border: "1px solid #e3e3e3", borderRadius: 10, padding: 14, background: "#fafafa" }}>
+                <details style={{ border: hasStaffError ? "1px solid #d92d20" : "1px solid #e3e3e3", borderRadius: 10, padding: 14, background: hasStaffError ? "#fff4f4" : "#fafafa" }}>
                   <summary style={{ cursor: "pointer", fontWeight: 800 }}>
                     Advanced: manual Shopify user ID
                   </summary>
@@ -529,11 +557,12 @@ export default function AdminPermissionsPage() {
                             shopify_user_id: event.target.value,
                           }))
                         }
-                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
                       />
                       <FieldHelp>
                         Use this only if the staff member is not listed.
                       </FieldHelp>
+                      <FieldError>{fieldErrors?.shopify_user_id}</FieldError>
                     </label>
                   </div>
                 </details>
@@ -566,17 +595,18 @@ export default function AdminPermissionsPage() {
                             : current.locationIds,
                       }))
                     }
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: roleFieldBorder }}
                   >
                     <option value="viewer">Viewer</option>
                     <option value="manager">Manager</option>
                     <option value="admin">Admin</option>
                   </select>
                   <FieldHelp>{roleDescriptions[formState.role]}</FieldHelp>
+                  <FieldError>{fieldErrors?.role}</FieldError>
                 </label>
               </div>
 
-              <div>
+              <div style={{ border: locationsBorder, borderRadius: 10, padding: fieldErrors?.locations ? 12 : 0, background: fieldErrors?.locations ? "#fff4f4" : "transparent" }}>
                 <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
                   Step 3
                 </div>
@@ -611,6 +641,7 @@ export default function AdminPermissionsPage() {
                     No locations synced yet. Sync locations first.
                   </p>
                 ) : null}
+                <FieldError>{fieldErrors?.locations}</FieldError>
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -623,6 +654,13 @@ export default function AdminPermissionsPage() {
                 {actionData?.ok ? (
                   <span style={{ color: "#067647", fontSize: 14, fontWeight: 700 }}>
                     {actionData.message}
+                  </span>
+                ) : null}
+                {actionData && !actionData.ok ? (
+                  <span style={{ color: "#b42318", fontSize: 14, fontWeight: 700 }}>
+                    {actionData.fieldErrors
+                      ? "Please fix the highlighted fields."
+                      : actionData.message}
                   </span>
                 ) : null}
               </div>
