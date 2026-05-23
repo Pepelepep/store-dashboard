@@ -78,10 +78,9 @@ const emptyAccessForm: AccessFormState = {
 };
 
 const roleDescriptions: Record<string, string> = {
-  admin: "Can access all locations and manage permissions.",
-  manager:
-    "Can view dashboard data and manage location-level settings for selected locations.",
-  viewer: "Can view dashboard data for selected locations.",
+  admin: "Admin — all locations and permission management.",
+  manager: "Manager — selected locations.",
+  viewer: "Viewer — read-only access to selected locations.",
 };
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -354,6 +353,17 @@ function getStaffLabel(staffMember: StaffMemberRow) {
   return `${label}${detail}`;
 }
 
+function getStaffDisplayName(staffMember?: StaffMemberRow) {
+  if (!staffMember) return null;
+
+  return (
+    staffMember.name ||
+    [staffMember.first_name, staffMember.last_name].filter(Boolean).join(" ") ||
+    staffMember.email ||
+    null
+  );
+}
+
 export default function AdminPermissionsPage() {
   const { shop, currentUser, locations, permissions, staffMembers } =
     useLoaderData<LoaderData>();
@@ -362,6 +372,16 @@ export default function AdminPermissionsPage() {
   const permissionGroups = useMemo(
     () => groupPermissions(permissions),
     [permissions],
+  );
+  const staffById = useMemo(
+    () =>
+      new Map(
+        staffMembers.map((staffMember) => [
+          staffMember.shopify_staff_id,
+          staffMember,
+        ]),
+      ),
+    [staffMembers],
   );
   const [formState, setFormState] = useState<AccessFormState>(emptyAccessForm);
   const isSubmitting = navigation.state !== "idle";
@@ -414,22 +434,18 @@ export default function AdminPermissionsPage() {
     <main style={{ minHeight: "100vh", background: "#f6f6f7", padding: 28, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <header style={{ marginBottom: 28 }}>
-          <div style={{ color: "#616161", fontSize: 14, marginBottom: 6 }}>Admin</div>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Location permissions</h1>
-          <p style={{ color: "#616161" }}>Shop: <strong>{shop}</strong></p>
-          <p style={{ color: "#616161" }}>
-            Current user: <strong>{currentUser.displayName}</strong>
-            {currentUser.email ? ` · ${currentUser.email}` : ""}
-            {currentUser.shopifyUserId ? ` · Shopify user ${currentUser.shopifyUserId}` : ""}
+          <h1 style={{ margin: 0, fontSize: 32 }}>Permissions</h1>
+          <p style={{ color: "#616161", margin: "8px 0 0" }}>
+            Manage staff access by location.
           </p>
         </header>
 
-        {actionData ? (
+        {actionData && !actionData.ok ? (
           <div
             style={{
-              background: actionData.ok ? "#ecfdf3" : "#fef3f2",
-              border: `1px solid ${actionData.ok ? "#abefc6" : "#fecdca"}`,
-              color: actionData.ok ? "#067647" : "#b42318",
+              background: "#fef3f2",
+              border: "1px solid #fecdca",
+              color: "#b42318",
               borderRadius: 12,
               padding: 14,
               marginBottom: 20,
@@ -441,11 +457,19 @@ export default function AdminPermissionsPage() {
         ) : null}
 
         <div style={{ display: "grid", gap: 20 }}>
-          <Card title="Add or replace user access">
+          <Card title="Grant access">
             <Form method="post" style={{ display: "grid", gap: 18 }}>
               <input type="hidden" name="intent" value="save" />
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
+                    Step 1
+                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>Staff member</div>
+                  <FieldHelp>Select a staff member synced from Shopify.</FieldHelp>
+                </div>
+
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
                   Staff member
                   <select
@@ -465,76 +489,101 @@ export default function AdminPermissionsPage() {
                   </select>
                   <FieldHelp>
                     {staffMembers.length > 0
-                      ? "Choose synced Shopify staff or keep manual entry."
-                      : "No synced staff yet. Use manual entry or run Sync staff members."}
+                      ? "The selected staff member fills the email and Shopify user ID automatically."
+                      : "No staff members synced yet. Go to Sync Center and run Sync staff members."}
                   </FieldHelp>
                 </label>
 
-                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Email
-                  <input
-                    name="user_email"
-                    placeholder="manager@local.ca"
-                    value={formState.user_email}
-                    onChange={(event) =>
-                      setFormState((current) => ({
-                        ...current,
-                        user_email: event.target.value,
-                      }))
-                    }
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                  />
-                  <FieldHelp>Optional display label.</FieldHelp>
-                </label>
+                <details style={{ border: "1px solid #e3e3e3", borderRadius: 10, padding: 14, background: "#fafafa" }}>
+                  <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+                    Advanced: manual Shopify user ID
+                  </summary>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginTop: 14 }}>
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                      Email
+                      <input
+                        name="user_email"
+                        placeholder="manager@local.ca"
+                        value={formState.user_email}
+                        onChange={(event) =>
+                          setFormState((current) => ({
+                            ...current,
+                            user_email: event.target.value,
+                          }))
+                        }
+                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                      />
+                      <FieldHelp>Optional display label.</FieldHelp>
+                    </label>
 
-                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Shopify user ID
-                  <input
-                    name="shopify_user_id"
-                    required
-                    placeholder="90052427974"
-                    value={formState.shopify_user_id}
-                    onChange={(event) =>
-                      setFormState((current) => ({
-                        ...current,
-                        shopify_user_id: event.target.value,
-                      }))
-                    }
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                  />
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                      Shopify user ID
+                      <input
+                        name="shopify_user_id"
+                        required
+                        placeholder="90052427974"
+                        value={formState.shopify_user_id}
+                        onChange={(event) =>
+                          setFormState((current) => ({
+                            ...current,
+                            shopify_user_id: event.target.value,
+                          }))
+                        }
+                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                      />
+                      <FieldHelp>
+                        Use this only if the staff member is not listed.
+                      </FieldHelp>
+                    </label>
+                  </div>
+                </details>
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
+                    Step 2
+                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>Role</div>
                   <FieldHelp>
-                    Required. Staff dropdown fills this automatically when available.
+                    Admin — all locations and permission management. Manager — selected locations. Viewer — read-only access to selected locations.
                   </FieldHelp>
+                </div>
+
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Role
+                  <select
+                    name="role"
+                    required
+                    value={formState.role}
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        role: event.target.value,
+                        locationIds:
+                          event.target.value === "admin"
+                            ? []
+                            : current.locationIds,
+                      }))
+                    }
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                  >
+                    <option value="viewer">Viewer</option>
+                    <option value="manager">Manager</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <FieldHelp>{roleDescriptions[formState.role]}</FieldHelp>
                 </label>
               </div>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                Role
-                <select
-                  name="role"
-                  required
-                  value={formState.role}
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      role: event.target.value,
-                      locationIds:
-                        event.target.value === "admin"
-                          ? []
-                          : current.locationIds,
-                    }))
-                  }
-                  style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                >
-                  <option value="viewer">Viewer</option>
-                  <option value="manager">Manager</option>
-                  <option value="admin">Admin</option>
-                </select>
-                <FieldHelp>{roleDescriptions[formState.role]}</FieldHelp>
-              </label>
-
               <div>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>Locations</div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
+                  Step 3
+                </div>
+                <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 4 }}>Locations</div>
+                <FieldHelp>
+                  Admin can access all locations. Manager/viewer must select one or more locations.
+                </FieldHelp>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
                   {locations.map((location) => (
                     <label key={location.shopify_location_id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -557,18 +606,25 @@ export default function AdminPermissionsPage() {
                     </label>
                   ))}
                 </div>
-                <p style={{ color: "#616161", fontSize: 13, lineHeight: 1.35 }}>
-                  For admin role, locations are ignored and access is global.
-                </p>
+                {locations.length === 0 ? (
+                  <p style={{ color: "#616161", fontSize: 13, lineHeight: 1.35 }}>
+                    No locations synced yet. Sync locations first.
+                  </p>
+                ) : null}
               </div>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #202223", background: isSubmitting ? "#8a8f93" : "#202223", color: "white", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
                   {isSaving ? "Saving..." : "Save permissions"}
                 </button>
                 <button type="button" onClick={clearForm} disabled={isSubmitting} style={{ border: "1px solid #c9cccf", background: "white", color: "#202223", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
                   New access
                 </button>
+                {actionData?.ok ? (
+                  <span style={{ color: "#067647", fontSize: 14, fontWeight: 700 }}>
+                    {actionData.message}
+                  </span>
+                ) : null}
               </div>
             </Form>
           </Card>
@@ -578,39 +634,65 @@ export default function AdminPermissionsPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr>
-                    {["User", "Shopify user id", "Role", "Locations", "Manage", ""].map((header) => (
+                    {["User", "Role", "Locations", "Manage", ""].map((header) => (
                       <th key={header} style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #ddd" }}>{header}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {permissionGroups.map((group) => (
-                    <tr key={group.key}>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.user_email || "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.shopify_user_id || "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.role}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.locationNames.join(", ") || "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.can_manage ? "Yes" : "No"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button type="button" onClick={() => editGroup(group)} disabled={isSubmitting || !group.shopify_user_id} style={{ border: "1px solid #202223", background: "white", color: "#202223", borderRadius: 8, padding: "6px 10px" }}>
-                            Edit
-                          </button>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="delete" />
-                            <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
-                            <button disabled={isSubmitting || !group.shopify_user_id} type="submit" style={{ border: "1px solid #d72c0d", background: "white", color: isSubmitting ? "#8a8f93" : "#d72c0d", borderRadius: 8, padding: "6px 10px" }}>
-                              {isDeleting ? "Deleting..." : "Delete access"}
+                  {permissionGroups.map((group) => {
+                    const staffMember = staffById.get(group.shopify_user_id);
+                    const displayName = getStaffDisplayName(staffMember);
+                    const primaryLabel =
+                      displayName || group.user_email || "Manual user";
+
+                    return (
+                      <tr key={group.key}>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee", minWidth: 220 }}>
+                          <div style={{ fontWeight: 800 }}>
+                            {primaryLabel}
+                          </div>
+                          {group.user_email && group.user_email !== primaryLabel ? (
+                            <div style={{ color: "#616161", fontSize: 13 }}>
+                              {group.user_email}
+                            </div>
+                          ) : null}
+                          {group.shopify_user_id ? (
+                            <div style={{ color: "#8a8f93", fontSize: 12 }}>
+                              Shopify user {group.shopify_user_id}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee", textTransform: "capitalize" }}>
+                          {group.role}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+                          {group.locationNames.join(", ") || "-"}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+                          {group.can_manage ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => editGroup(group)} disabled={isSubmitting || !group.shopify_user_id} style={{ border: "1px solid #202223", background: "white", color: "#202223", borderRadius: 8, padding: "6px 10px" }}>
+                              Edit
                             </button>
-                          </Form>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                            <Form method="post">
+                              <input type="hidden" name="intent" value="delete" />
+                              <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
+                              <button disabled={isSubmitting || !group.shopify_user_id} type="submit" style={{ border: "1px solid #c9cccf", background: "white", color: isSubmitting ? "#8a8f93" : "#b42318", borderRadius: 8, padding: "6px 10px" }}>
+                                {isDeleting ? "Deleting..." : "Delete access"}
+                              </button>
+                            </Form>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {permissionGroups.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ padding: 14, color: "#616161" }}>
-                        No permissions configured.
+                      <td colSpan={5} style={{ padding: 14, color: "#616161" }}>
+                        No access rules created yet.
                       </td>
                     </tr>
                   ) : null}
@@ -618,6 +700,12 @@ export default function AdminPermissionsPage() {
               </table>
             </div>
           </Card>
+
+          <div style={{ color: "#8a8f93", fontSize: 12, lineHeight: 1.5 }}>
+            Environment details: {shop}. Current admin: {currentUser.displayName}
+            {currentUser.email ? ` (${currentUser.email})` : ""}
+            {currentUser.shopifyUserId ? ` · Shopify user ${currentUser.shopifyUserId}` : ""}
+          </div>
         </div>
       </div>
     </main>
