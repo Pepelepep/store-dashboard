@@ -4,6 +4,7 @@ import {
   Link,
   useActionData,
   useLoaderData,
+  useLocation,
   useNavigation,
 } from "react-router";
 
@@ -284,7 +285,9 @@ function ButtonLink({
 export default function AdminSyncPage() {
   const { shop, counts, lastSyncRuns } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
+  const location = useLocation();
   const navigation = useNavigation();
+  const search = location.search;
 
   const isRefreshing =
     navigation.state !== "idle" &&
@@ -400,7 +403,7 @@ export default function AdminSyncPage() {
                 Refresh inventory
               </ButtonLink>
 
-              <ButtonLink to="/app/admin/sync-orders">
+              <ButtonLink to={`/app/admin/sync-orders${search}`}>
                 Refresh orders by date range
               </ButtonLink>
 

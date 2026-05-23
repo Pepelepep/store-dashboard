@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import { data, Form, useActionData, useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -57,7 +57,21 @@ export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
-  await assertAdminAccess({ request, session, supabase });
+  try {
+    await assertAdminAccess({ request, session, supabase });
+  } catch (error) {
+    if (error instanceof Response && error.status === 403) {
+      return data(
+        {
+          ok: false,
+          error: "Forbidden: admin access required",
+        } satisfies ActionData,
+        { status: 403 },
+      );
+    }
+
+    throw error;
+  }
 
   const formData = await request.formData();
   const { startDate, endDate } = getOrderDateRangeFromForm(formData);
