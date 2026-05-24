@@ -4,7 +4,7 @@ import { Form, useLoaderData } from "react-router";
 
 import { AppButton } from "../components/ui/AppButton";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { getPermissionContext } from "../lib/auth/permissions.server";
+import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
   daysBetween,
@@ -870,7 +870,7 @@ function formatCompactCurrency(value: number) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
-  const permissions = await getPermissionContext({ request, session, supabase });
+  const permissions = await assertAdminAccess({ request, session, supabase });
   const url = new URL(request.url);
   const shouldShowDebugInfo =
     url.searchParams.get("debug") === "1" && permissions.isAdmin;

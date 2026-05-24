@@ -30,6 +30,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
+  await assertAdminAccess({ request, session, supabase });
+
   const { count, error } = await supabase
     .from("locations")
     .select("*", { count: "exact", head: true })
