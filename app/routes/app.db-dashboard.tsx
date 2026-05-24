@@ -35,6 +35,87 @@ import type {
   VariantDbRow,
 } from "../lib/dashboard/dashboard-types";
 
+const UNKNOWN_STAFF_FILTER_VALUE = "__unknown_staff__";
+
+function getStaffFilterValue(row: OrderLineDbRow) {
+  return row.staff_member_id || row.staff_member_email || row.staff_member_name || "";
+}
+
+function getStaffDisplayLabel(row: OrderLineDbRow) {
+  return row.staff_member_name || row.staff_member_email || row.staff_member_id || "Unknown staff";
+}
+
+function buildStaffOptions(orderLines: OrderLineDbRow[]) {
+  const options = new Map<string, string>();
+  let hasUnknownStaff = false;
+
+  for (const row of orderLines) {
+    const value = getStaffFilterValue(row);
+
+    if (!value) {
+      hasUnknownStaff = true;
+      continue;
+    }
+
+    if (!options.has(value)) {
+      options.set(value, getStaffDisplayLabel(row));
+    }
+  }
+
+  const sortedOptions = Array.from(options.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  if (hasUnknownStaff) {
+    sortedOptions.push({
+      value: UNKNOWN_STAFF_FILTER_VALUE,
+      label: "Unknown staff",
+    });
+  }
+
+  return sortedOptions;
+}
+
+function buildVendorOptions(orderLines: OrderLineDbRow[]) {
+  const vendors = new Set<string>();
+
+  for (const row of orderLines) {
+    const vendor = row.vendor?.trim();
+
+    if (vendor) {
+      vendors.add(vendor);
+    }
+  }
+
+  return Array.from(vendors)
+    .sort((a, b) => a.localeCompare(b))
+    .map((vendor) => ({
+      value: vendor,
+      label: vendor,
+    }));
+}
+
+function filterOrderLines({
+  orderLines,
+  selectedStaff,
+  selectedVendor,
+}: {
+  orderLines: OrderLineDbRow[];
+  selectedStaff: string;
+  selectedVendor: string;
+}) {
+  return orderLines.filter((row) => {
+    const staffMatches =
+      !selectedStaff ||
+      (selectedStaff === UNKNOWN_STAFF_FILTER_VALUE
+        ? !getStaffFilterValue(row)
+        : getStaffFilterValue(row) === selectedStaff);
+    const vendorMatches = !selectedVendor || row.vendor?.trim() === selectedVendor;
+
+    return staffMatches && vendorMatches;
+  });
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
@@ -43,13 +124,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const preservedSearchParams = Array.from(url.searchParams.entries())
     .filter(
       ([name]) =>
-        !["locationId", "startDate", "endDate", "preset"].includes(name),
+        !["locationId", "startDate", "endDate", "preset", "staff", "vendor"].includes(name),
     )
     .map(([name, value]) => ({ name, value }));
   const today = getTodayStoreDate();
   const preset = url.searchParams.get("preset");
   const startDate = preset === "today" ? today : url.searchParams.get("startDate") || today;
   const endDate = preset === "today" ? today : url.searchParams.get("endDate") || today;
+  const selectedStaff = url.searchParams.get("staff") || "";
+  const selectedVendor = url.searchParams.get("vendor") || "";
   const endExclusive = nextDate(endDate);
   const startDateUtc = storeDateToUtcIso(startDate);
   const endExclusiveUtc = storeDateToUtcIso(endExclusive);
@@ -164,19 +247,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const activeInventoryRows = inventoryRows.filter((inventory) =>
     isActiveInventoryProduct({ inventory, variantsById, productsById }),
   );
-  const revenue = orderLines.reduce(
+  const staffOptions = buildStaffOptions(orderLines);
+  const vendorOptions = buildVendorOptions(orderLines);
+  const filteredOrderLines = filterOrderLines({
+    orderLines,
+    selectedStaff,
+    selectedVendor,
+  });
+  const revenue = filteredOrderLines.reduce(
     (sum, row) => sum + Number(row.revenue ?? 0),
     0,
   );
-  const cogs = orderLines.reduce((sum, row) => sum + Number(row.cogs ?? 0), 0);
-  const grossProfit = orderLines.reduce(
+  const cogs = filteredOrderLines.reduce((sum, row) => sum + Number(row.cogs ?? 0), 0);
+  const grossProfit = filteredOrderLines.reduce(
     (sum, row) => sum + Number(row.gross_profit ?? 0),
     0,
   );
   const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : null;
-  const uniqueOrders = new Set(orderLines.map((row) => row.shopify_order_id));
+  const uniqueOrders = new Set(filteredOrderLines.map((row) => row.shopify_order_id));
   const ordersCount = uniqueOrders.size;
-  const unitsSold = orderLines.reduce(
+  const unitsSold = filteredOrderLines.reduce(
     (sum, row) => sum + Number(row.quantity ?? 0),
     0,
   );
@@ -201,11 +291,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     variantsById,
     productsById,
     periodDays: selectedDays,
-  });
+  }).filter((row) => !selectedVendor || row.vendor === selectedVendor);
   const criticalStockCount = stockAlerts.filter(
     (row) => row.status === "Critical",
   ).length;
-  const recentOrders: RecentOrderRow[] = orderLines.slice(0, 30).map((row) => ({
+  const recentOrders: RecentOrderRow[] = filteredOrderLines.slice(0, 30).map((row) => ({
     orderName: row.order_name,
     orderUrl: buildShopifyOrderUrl(session.shop, row.shopify_order_id),
     date: row.created_at_shopify,
@@ -224,6 +314,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     locations,
     selectedLocationId,
     selectedLocationName,
+    selectedStaff,
+    selectedVendor,
+    staffOptions,
+    vendorOptions,
     startDate,
     endDate,
     preservedSearchParams,
@@ -242,9 +336,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       expenses: expensesToDate,
       netProfit,
     },
-    bestSellers: computeBestSellers(orderLines),
-    salesByVendor: computeSalesByVendor(orderLines),
-    salesByStaff: computeSalesByStaff(orderLines),
+    bestSellers: computeBestSellers(filteredOrderLines),
+    salesByVendor: computeSalesByVendor(filteredOrderLines),
+    salesByStaff: computeSalesByStaff(filteredOrderLines),
     stockAlerts,
     recentOrders,
     errors,
@@ -256,6 +350,10 @@ export default function DbDashboardPage() {
     locations,
     selectedLocationId,
     selectedLocationName,
+    selectedStaff,
+    selectedVendor,
+    staffOptions,
+    vendorOptions,
     startDate,
     endDate,
     preservedSearchParams,
@@ -285,6 +383,10 @@ export default function DbDashboardPage() {
           locations={locations}
           selectedLocationId={selectedLocationId}
           selectedLocationName={selectedLocationName}
+          selectedStaff={selectedStaff}
+          selectedVendor={selectedVendor}
+          staffOptions={staffOptions}
+          vendorOptions={vendorOptions}
           startDate={startDate}
           endDate={endDate}
           preservedSearchParams={preservedSearchParams}
