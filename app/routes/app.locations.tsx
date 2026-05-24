@@ -115,6 +115,7 @@ type LoaderData = {
   salesRows: LocationsSalesRow[];
   hasGlobalExpenses: boolean;
   errors: string[];
+  debugInfo?: Record<string, string | number | boolean | null | string[]>;
 };
 
 const ORDER_LINES_PAGE_SIZE = 2000;
@@ -174,6 +175,35 @@ async function fetchLocationOrderLines({
       return { data: rows, error: null };
     }
   }
+}
+
+function summarizeOrderLinesForDebug(orderLines: OrderLineDbRow[]) {
+  let minCreatedAt: string | null = null;
+  let maxCreatedAt: string | null = null;
+  let revenueSum = 0;
+  const orderIds = new Set<string>();
+
+  for (const row of orderLines) {
+    if (row.created_at_shopify) {
+      if (!minCreatedAt || row.created_at_shopify < minCreatedAt) {
+        minCreatedAt = row.created_at_shopify;
+      }
+      if (!maxCreatedAt || row.created_at_shopify > maxCreatedAt) {
+        maxCreatedAt = row.created_at_shopify;
+      }
+    }
+
+    revenueSum += Number(row.revenue ?? 0);
+    if (row.shopify_order_id) orderIds.add(row.shopify_order_id);
+  }
+
+  return {
+    count: orderLines.length,
+    minCreatedAt,
+    maxCreatedAt,
+    revenueSum,
+    uniqueOrdersCount: orderIds.size,
+  };
 }
 
 function parseDateOnlyUtc(value: string) {
@@ -842,6 +872,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const supabase = getSupabaseAdminClient();
   const permissions = await getPermissionContext({ request, session, supabase });
   const url = new URL(request.url);
+  const shouldShowDebugInfo =
+    url.searchParams.get("debug") === "1" && permissions.isAdmin;
   const preservedSearchParams = Array.from(url.searchParams.entries())
     .filter(
       ([name]) =>
@@ -1003,6 +1035,54 @@ export async function loader({ request }: LoaderFunctionArgs) {
     revenue: Number(row.revenue ?? 0),
     cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
   }));
+  const rawDebugSummary = shouldShowDebugInfo
+    ? summarizeOrderLinesForDebug(orderLines)
+    : null;
+  const filteredDebugSummary = shouldShowDebugInfo
+    ? summarizeOrderLinesForDebug(filteredOrderLines)
+    : null;
+  const debugInfo =
+    shouldShowDebugInfo && rawDebugSummary && filteredDebugSummary
+      ? {
+          startDate,
+          endDate,
+          startDateUtc,
+          endExclusiveUtc,
+          period,
+          rawLocationsParamValues: url.searchParams.getAll("locations"),
+          selectedLocationIdsCount: selectedLocationIds.length,
+          accessibleLocationsCount: accessibleLocations.length,
+          isAllAccessibleLocationsSelected,
+          staffFilter: selectedStaff || "All staff",
+          vendorFilter: selectedVendor || "All vendors",
+          rawOrderLinesCount: rawDebugSummary.count,
+          rawMinCreatedAt: rawDebugSummary.minCreatedAt,
+          rawMaxCreatedAt: rawDebugSummary.maxCreatedAt,
+          rawRevenueSum: rawDebugSummary.revenueSum,
+          rawUniqueOrdersCount: rawDebugSummary.uniqueOrdersCount,
+          filteredOrderLinesCount: filteredDebugSummary.count,
+          filteredMinCreatedAt: filteredDebugSummary.minCreatedAt,
+          filteredMaxCreatedAt: filteredDebugSummary.maxCreatedAt,
+          filteredRevenueSum: filteredDebugSummary.revenueSum,
+          filteredUniqueOrdersCount: filteredDebugSummary.uniqueOrdersCount,
+          kpiRevenue: kpis.revenue,
+          kpiOrders: kpis.ordersCount,
+          kpiUnits: kpis.unitsSold,
+          kpiCogs: kpis.cogs,
+          kpiGrossProfit: kpis.grossProfit,
+          kpiExpenses: kpis.expenses,
+          kpiNetProfit: kpis.netProfit,
+          locationRowsCount: metrics.rows.length,
+          locationRowsRevenueSum: metrics.rows.reduce(
+            (sum, row) => sum + row.revenue,
+            0,
+          ),
+          locationRowsOrdersSum: metrics.rows.reduce(
+            (sum, row) => sum + row.ordersCount,
+            0,
+          ),
+        }
+      : undefined;
 
   return {
     locations: accessibleLocations,
@@ -1024,6 +1104,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     salesRows,
     hasGlobalExpenses,
     errors,
+    debugInfo,
   } satisfies LoaderData;
 }
 
@@ -2060,6 +2141,7 @@ export default function LocationsPage() {
     period,
     hasGlobalExpenses,
     errors,
+    debugInfo,
   } = useLoaderData<LoaderData>();
   const [draftLocationIds, setDraftLocationIds] = useState(selectedLocationIds);
   const [isDirty, setIsDirty] = useState(false);
@@ -2421,6 +2503,34 @@ export default function LocationsPage() {
             <strong>Errors</strong>
             <pre style={{ whiteSpace: "pre-wrap" }}>
               {JSON.stringify(errors, null, 2)}
+            </pre>
+          </section>
+        ) : null}
+
+        {debugInfo ? (
+          <section
+            style={{
+              background: "#111827",
+              border: "1px solid #374151",
+              borderRadius: 12,
+              color: "#f9fafb",
+              marginBottom: 20,
+              padding: 14,
+            }}
+          >
+            <strong style={{ display: "block", marginBottom: 8 }}>
+              TEMP DEBUG — admin only
+            </strong>
+            <pre
+              style={{
+                fontSize: 12,
+                lineHeight: 1.45,
+                margin: 0,
+                overflowX: "auto",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {JSON.stringify(debugInfo, null, 2)}
             </pre>
           </section>
         ) : null}
