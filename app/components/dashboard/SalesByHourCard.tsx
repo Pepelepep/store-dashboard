@@ -9,6 +9,15 @@ function formatHourLabel(hour: number) {
   return String(hour).padStart(2, "0") + ":00";
 }
 
+function formatCompactCurrency(value: number) {
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    notation: "compact",
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+  }).format(value);
+}
+
 function getBarTitle(row: SalesByHourRow) {
   return [
     `Hour: ${formatHourLabel(row.hour)}`,
@@ -19,129 +28,34 @@ function getBarTitle(row: SalesByHourRow) {
   ].join("\n");
 }
 
-function HourBarChart({
-  title,
-  subtitle,
-  rows,
-  valueType,
-  maxHeight,
+function LegendItem({
+  color,
+  label,
 }: {
-  title: string;
-  subtitle: string;
-  rows: SalesByHourRow[];
-  valueType: "revenue" | "orders";
-  maxHeight: number;
+  color: string;
+  label: string;
 }) {
-  const maxValue = Math.max(
-    ...rows.map((row) =>
-      valueType === "revenue" ? row.revenue : row.ordersCount,
-    ),
-    0,
-  );
-
   return (
-    <div>
-      <div style={{ marginBottom: 12 }}>
-        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>{title}</h3>
-        <p
-          style={{
-            margin: "4px 0 0",
-            color: "#616161",
-            fontSize: 13,
-            lineHeight: 1.4,
-          }}
-        >
-          {subtitle}
-        </p>
-      </div>
-
-      <div
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        color: "#616161",
+        fontSize: 12,
+        fontWeight: 700,
+      }}
+    >
+      <span
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(24, minmax(24px, 1fr))",
-          gap: 6,
-          alignItems: "end",
-          overflowX: "auto",
-          paddingTop: 6,
+          width: 10,
+          height: 10,
+          borderRadius: 999,
+          background: color,
         }}
-      >
-        {rows.map((row) => {
-          const value = valueType === "revenue" ? row.revenue : row.ordersCount;
-          const barHeight =
-            maxValue > 0
-              ? Math.max((value / maxValue) * maxHeight, value > 0 ? 6 : 0)
-              : 0;
-          const label =
-            valueType === "revenue" ? formatCurrency(value) : formatNumber(value);
-
-          return (
-            <div
-              key={`${valueType}-${row.hour}`}
-              style={{
-                display: "grid",
-                gap: 6,
-                justifyItems: "center",
-                alignItems: "end",
-                minWidth: 24,
-              }}
-            >
-              <div
-                style={{
-                  minHeight: 18,
-                  color: "#374151",
-                  fontSize: valueType === "revenue" ? 10 : 11,
-                  fontWeight: 800,
-                  lineHeight: 1,
-                  textAlign: "center",
-                  whiteSpace: "nowrap",
-                  transform:
-                    valueType === "revenue" && value > 0
-                      ? "rotate(-35deg)"
-                      : undefined,
-                  transformOrigin: "center",
-                }}
-              >
-                {value > 0 ? label : ""}
-              </div>
-
-              <div
-                title={getBarTitle(row)}
-                style={{
-                  width: "100%",
-                  minWidth: 18,
-                  height: maxHeight,
-                  display: "flex",
-                  alignItems: "flex-end",
-                  justifyContent: "center",
-                }}
-              >
-                <div
-                  style={{
-                    width: "100%",
-                    maxWidth: 28,
-                    height: barHeight,
-                    borderRadius: "6px 6px 2px 2px",
-                    background: value > 0 ? "#2563eb" : "#e5e7eb",
-                    transition: "height 120ms ease",
-                  }}
-                />
-              </div>
-
-              <div
-                style={{
-                  color: "#616161",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  lineHeight: 1,
-                }}
-              >
-                {row.hour}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+      />
+      {label}
+    </span>
   );
 }
 
@@ -150,30 +64,145 @@ export function SalesByHourCard({
 }: {
   salesByHour: SalesByHourRow[];
 }) {
+  const maxRevenue = Math.max(...salesByHour.map((row) => row.revenue), 0);
+  const maxOrders = Math.max(...salesByHour.map((row) => row.ordersCount), 0);
   const hasSales = salesByHour.some(
     (row) => row.revenue > 0 || row.ordersCount > 0,
   );
+  const revenueMaxHeight = 170;
+  const ordersMaxHeight = 96;
 
   return (
-    <SectionCard title="Sales by hour">
+    <SectionCard
+      title="Sales by hour"
+      subtitle="Revenue and order count grouped by order hour."
+    >
       {hasSales ? (
-        <div style={{ display: "grid", gap: 28 }}>
-          <HourBarChart
-            title="Revenue by hour"
-            subtitle="Revenue grouped by order hour."
-            rows={salesByHour}
-            valueType="revenue"
-            maxHeight={190}
-          />
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <LegendItem color="#2563eb" label="Revenue" />
+            <LegendItem color="#14b8a6" label="Orders" />
+          </div>
 
-          <div style={{ borderTop: "1px solid #f0f0f0", paddingTop: 22 }}>
-            <HourBarChart
-              title="Orders by hour"
-              subtitle="Order count grouped by order hour."
-              rows={salesByHour}
-              valueType="orders"
-              maxHeight={120}
-            />
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(24, minmax(26px, 1fr))",
+              gap: 6,
+              overflowX: "auto",
+              paddingTop: 6,
+            }}
+          >
+            {salesByHour.map((row) => {
+              const revenueHeight =
+                maxRevenue > 0
+                  ? Math.max(
+                      (row.revenue / maxRevenue) * revenueMaxHeight,
+                      row.revenue > 0 ? 6 : 0,
+                    )
+                  : 0;
+              const ordersHeight =
+                maxOrders > 0
+                  ? Math.max(
+                      (row.ordersCount / maxOrders) * ordersMaxHeight,
+                      row.ordersCount > 0 ? 6 : 0,
+                    )
+                  : 0;
+
+              return (
+                <div
+                  key={row.hour}
+                  title={getBarTitle(row)}
+                  style={{
+                    display: "grid",
+                    gridTemplateRows: "22px 170px 24px 96px 18px",
+                    justifyItems: "center",
+                    minWidth: 26,
+                  }}
+                >
+                  <div
+                    style={{
+                      color: "#374151",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      lineHeight: 1,
+                      textAlign: "center",
+                      whiteSpace: "nowrap",
+                      transform: row.revenue > 0 ? "rotate(-35deg)" : undefined,
+                      transformOrigin: "center",
+                    }}
+                  >
+                    {row.revenue > 0 ? formatCompactCurrency(row.revenue) : ""}
+                  </div>
+
+                  <div
+                    style={{
+                      width: "100%",
+                      height: revenueMaxHeight,
+                      display: "flex",
+                      alignItems: "flex-end",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: "100%",
+                        maxWidth: 28,
+                        height: revenueHeight,
+                        borderRadius: "6px 6px 2px 2px",
+                        background: row.revenue > 0 ? "#2563eb" : "#e5e7eb",
+                      }}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      width: "100%",
+                      borderTop: "1px solid #d1d5db",
+                      color: "#616161",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      lineHeight: "23px",
+                      textAlign: "center",
+                    }}
+                  >
+                    {row.hour}
+                  </div>
+
+                  <div
+                    style={{
+                      width: "100%",
+                      height: ordersMaxHeight,
+                      display: "flex",
+                      alignItems: "flex-start",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: "100%",
+                        maxWidth: 28,
+                        height: ordersHeight,
+                        borderRadius: "2px 2px 6px 6px",
+                        background: row.ordersCount > 0 ? "#14b8a6" : "#e5e7eb",
+                      }}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      color: "#374151",
+                      fontSize: 11,
+                      fontWeight: 800,
+                      lineHeight: 1,
+                      textAlign: "center",
+                    }}
+                  >
+                    {row.ordersCount > 0 ? formatNumber(row.ordersCount) : ""}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : (
