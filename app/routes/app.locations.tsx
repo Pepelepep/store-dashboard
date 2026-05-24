@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Form, useLoaderData } from "react-router";
 
 import { AppButton } from "../components/ui/AppButton";
@@ -44,10 +44,25 @@ type LocationMetricRow = {
 
 type TrendRow = {
   period: string;
+  label: string;
   revenue: number;
   ordersCount: number;
   unitsSold: number;
 };
+
+type Period = "day" | "week" | "month" | "year";
+
+type SortKey =
+  | "location"
+  | "revenue"
+  | "orders"
+  | "units"
+  | "cogs"
+  | "grossProfit"
+  | "grossMargin"
+  | "expenses"
+  | "netProfit"
+  | "aov";
 
 type LoaderData = {
   locations: LocationRow[];
@@ -60,7 +75,7 @@ type LoaderData = {
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;
   selectedDays: number;
-  bucketLabel: string;
+  period: Period;
   kpis: Omit<LocationMetricRow, "locationId" | "locationName">;
   locationRows: LocationMetricRow[];
   trendRows: TrendRow[];
@@ -370,21 +385,125 @@ function computeMetrics({
   };
 }
 
+function getDefaultPeriod(selectedDays: number): Period {
+  if (selectedDays <= 31) return "day";
+  if (selectedDays <= 180) return "week";
+  if (selectedDays <= 731) return "month";
+  return "year";
+}
+
+function getSelectedPeriod(value: string | null, selectedDays: number): Period {
+  if (
+    value === "day" ||
+    value === "week" ||
+    value === "month" ||
+    value === "year"
+  ) {
+    return value;
+  }
+
+  return getDefaultPeriod(selectedDays);
+}
+
+function getIsoWeek(date: Date) {
+  const target = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+  const dayNumber = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  const weekNumber = Math.ceil(
+    ((target.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
+  );
+
+  return { year: target.getUTCFullYear(), week: weekNumber };
+}
+
+function getPeriodBucketKey(date: Date, period: Period) {
+  if (period === "day") return formatDateOnlyUtc(date);
+  if (period === "week") {
+    const { year, week } = getIsoWeek(date);
+    return `${year}-W${String(week).padStart(2, "0")}`;
+  }
+  if (period === "month") return getMonthKey(date);
+  return getYearKey(date);
+}
+
+function getPeriodLabel(periodKey: string, period: Period) {
+  if (period === "day") return periodKey.slice(5);
+  if (period === "week") return periodKey.replace(/^(\d{4})-W/, "W");
+  if (period === "month") return periodKey.slice(5);
+  return periodKey;
+}
+
+function getOrderLinePeriodKey(value: string, period: Period) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: STORE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  const dateOnly = parseDateOnlyUtc(
+    `${values.year}-${values.month}-${values.day}`,
+  );
+
+  return getPeriodBucketKey(dateOnly, period);
+}
+
+function buildPeriodKeys({
+  startDate,
+  endDate,
+  period,
+}: {
+  startDate: string;
+  endDate: string;
+  period: Period;
+}) {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  const endExclusiveDate = addDays(parseDateOnlyUtc(endDate), 1);
+
+  for (
+    let current = parseDateOnlyUtc(startDate);
+    current < endExclusiveDate;
+    current = addDays(current, 1)
+  ) {
+    const key = getPeriodBucketKey(current, period);
+    if (!seen.has(key)) {
+      keys.push(key);
+      seen.add(key);
+    }
+  }
+
+  return keys;
+}
+
 function computeTrendRows({
   orderLines,
   startDate,
   endDate,
-  selectedDays,
+  period,
 }: {
   orderLines: OrderLineDbRow[];
   startDate: string;
   endDate: string;
-  selectedDays: number;
+  period: Period;
 }) {
-  const { bucketKind, keys } = buildBucketKeys({
+  const keys = buildPeriodKeys({
     startDate,
     endDate,
-    selectedDays,
+    period,
   });
   const ordersByBucket = new Map<string, Set<string>>();
   const rowsByBucket = new Map<string, TrendRow>(
@@ -392,6 +511,7 @@ function computeTrendRows({
       key,
       {
         period: key,
+        label: getPeriodLabel(key, period),
         revenue: 0,
         ordersCount: 0,
         unitsSold: 0,
@@ -400,7 +520,7 @@ function computeTrendRows({
   );
 
   for (const row of orderLines) {
-    const key = getBucketKey(row.created_at_shopify, bucketKind);
+    const key = getOrderLinePeriodKey(row.created_at_shopify, period);
     const existing = rowsByBucket.get(key);
     if (!existing) continue;
 
@@ -418,7 +538,6 @@ function computeTrendRows({
   }
 
   return {
-    bucketLabel: bucketKind === "day" ? "day" : bucketKind,
     rows: Array.from(rowsByBucket.values()),
   };
 }
@@ -435,6 +554,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           "startDate",
           "endDate",
           "preset",
+          "period",
           "staff",
           "vendor",
           "locations",
@@ -457,6 +577,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .filter(Boolean),
   );
   const selectedDays = daysBetween(startDate, nextDate(endDate));
+  const period = getSelectedPeriod(url.searchParams.get("period"), selectedDays);
   const startDateUtc = storeDateToUtcIso(startDate);
   const endExclusiveUtc = storeDateToUtcIso(nextDate(endDate));
   const errors: string[] = [];
@@ -550,7 +671,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     orderLines: filteredOrderLines,
     startDate,
     endDate,
-    selectedDays,
+    period,
   });
 
   return {
@@ -564,7 +685,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     endDate,
     preservedSearchParams,
     selectedDays,
-    bucketLabel: trend.bucketLabel,
+    period,
     kpis: metrics.totals,
     locationRows: metrics.rows,
     trendRows: trend.rows,
@@ -575,14 +696,19 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 function KpiGrid({ kpis }: { kpis: LoaderData["kpis"] }) {
   const items = [
-    ["Revenue", formatCurrency(kpis.revenue)],
-    ["Orders", formatNumber(kpis.ordersCount)],
-    ["Units sold", formatNumber(kpis.unitsSold)],
-    ["COGS", formatCurrency(kpis.cogs)],
-    ["Gross profit", formatCurrency(kpis.grossProfit)],
-    ["Gross margin", formatPercent(kpis.grossMarginPct)],
-    ["Expenses", formatCurrency(kpis.expenses)],
-    ["Net profit", formatCurrency(kpis.netProfit)],
+    { label: "Revenue", value: formatCurrency(kpis.revenue) },
+    { label: "Orders", value: formatNumber(kpis.ordersCount) },
+    { label: "Units sold", value: formatNumber(kpis.unitsSold) },
+    { label: "COGS", value: formatCurrency(kpis.cogs) },
+    { label: "Gross profit", value: formatCurrency(kpis.grossProfit) },
+    { label: "Gross margin", value: formatPercent(kpis.grossMarginPct) },
+    { label: "Expenses", value: formatCurrency(kpis.expenses) },
+    { label: "Net profit", value: formatCurrency(kpis.netProfit) },
+    {
+      label: "AOV",
+      value: formatCurrency(kpis.averageOrderValue),
+      title: "Average Order Value = Revenue / Orders",
+    },
   ];
 
   return (
@@ -594,9 +720,10 @@ function KpiGrid({ kpis }: { kpis: LoaderData["kpis"] }) {
         marginBottom: 20,
       }}
     >
-      {items.map(([label, value]) => (
+      {items.map((item) => (
         <div
-          key={label}
+          key={item.label}
+          title={item.title}
           style={{
             background: "white",
             border: "1px solid #e3e3e3",
@@ -605,10 +732,10 @@ function KpiGrid({ kpis }: { kpis: LoaderData["kpis"] }) {
           }}
         >
           <div style={{ color: "#616161", fontSize: 12, fontWeight: 800 }}>
-            {label}
+            {item.label}
           </div>
           <div style={{ color: "#202223", fontSize: 22, fontWeight: 800 }}>
-            {value}
+            {item.value}
           </div>
         </div>
       ))}
@@ -618,10 +745,10 @@ function KpiGrid({ kpis }: { kpis: LoaderData["kpis"] }) {
 
 function TrendChart({
   rows,
-  bucketLabel,
+  period,
 }: {
   rows: TrendRow[];
-  bucketLabel: string;
+  period: Period;
 }) {
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
   const maxOrders = Math.max(...rows.map((row) => row.ordersCount), 0);
@@ -642,7 +769,7 @@ function TrendChart({
       <div style={{ marginBottom: 14 }}>
         <h2 style={{ fontSize: 18, margin: 0 }}>Sales trend by period</h2>
         <p style={{ color: "#616161", margin: "4px 0 0" }}>
-          Revenue and orders grouped by {bucketLabel}.
+          Revenue and orders grouped by {period}.
         </p>
       </div>
 
@@ -656,7 +783,19 @@ function TrendChart({
             paddingTop: 8,
           }}
         >
-          {rows.map((row) => {
+          {rows.map((row, index) => {
+            const labelStep =
+              rows.length > 36
+                ? 6
+                : rows.length > 24
+                  ? 4
+                  : rows.length > 14
+                    ? 2
+                    : 1;
+            const showLabel =
+              index === 0 ||
+              index === rows.length - 1 ||
+              index % labelStep === 0;
             const revenueHeight =
               maxRevenue > 0
                 ? Math.max((row.revenue / maxRevenue) * revenueMaxHeight, 4)
@@ -721,8 +860,8 @@ function TrendChart({
                     textAlign: "center",
                     width: "100%",
                   }}
-                >
-                  {row.period}
+                  >
+                  {showLabel ? row.label : ""}
                 </div>
                 <div
                   style={{
@@ -764,6 +903,70 @@ function TrendChart({
 }
 
 function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
+  const [sort, setSort] = useState<{ key: SortKey; direction: "asc" | "desc" }>(
+    {
+      key: "revenue",
+      direction: "desc",
+    },
+  );
+  const headers: Array<{
+    label: string;
+    key: SortKey;
+    title?: string;
+  }> = [
+    { label: "Location", key: "location" },
+    { label: "Revenue", key: "revenue" },
+    { label: "Orders", key: "orders" },
+    { label: "Units", key: "units" },
+    { label: "COGS", key: "cogs" },
+    { label: "Gross profit", key: "grossProfit" },
+    { label: "Gross margin", key: "grossMargin" },
+    { label: "Expenses", key: "expenses" },
+    { label: "Net profit", key: "netProfit" },
+    {
+      label: "AOV",
+      key: "aov",
+      title: "Average Order Value = Revenue / Orders",
+    },
+  ];
+  const sortedRows = useMemo(() => {
+    const getValue = (row: LocationMetricRow) => {
+      if (sort.key === "location") return row.locationName.toLowerCase();
+      if (sort.key === "revenue") return row.revenue;
+      if (sort.key === "orders") return row.ordersCount;
+      if (sort.key === "units") return row.unitsSold;
+      if (sort.key === "cogs") return row.cogs;
+      if (sort.key === "grossProfit") return row.grossProfit;
+      if (sort.key === "grossMargin") return row.grossMarginPct ?? -Infinity;
+      if (sort.key === "expenses") return row.expenses;
+      if (sort.key === "netProfit") return row.netProfit;
+      return row.averageOrderValue;
+    };
+
+    return [...rows].sort((a, b) => {
+      const aValue = getValue(a);
+      const bValue = getValue(b);
+      const direction = sort.direction === "asc" ? 1 : -1;
+
+      if (typeof aValue === "string" && typeof bValue === "string") {
+        return aValue.localeCompare(bValue) * direction;
+      }
+
+      if (aValue === bValue) {
+        return a.locationName.localeCompare(b.locationName);
+      }
+
+      return (Number(aValue) - Number(bValue)) * direction;
+    });
+  }, [rows, sort]);
+  const updateSort = (key: SortKey) => {
+    setSort((current) => ({
+      key,
+      direction:
+        current.key === key && current.direction === "desc" ? "asc" : "desc",
+    }));
+  };
+
   return (
     <section
       style={{
@@ -780,20 +983,10 @@ function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
         <table style={{ borderCollapse: "collapse", fontSize: 14, width: "100%" }}>
           <thead>
             <tr>
-              {[
-                "Location",
-                "Revenue",
-                "Orders",
-                "Units",
-                "COGS",
-                "Gross profit",
-                "Gross margin",
-                "Expenses",
-                "Net profit",
-                "AOV",
-              ].map((header) => (
+              {headers.map((header) => (
                 <th
-                  key={header}
+                  key={header.key}
+                  title={header.title}
                   style={{
                     background: "white",
                     borderBottom: "1px solid #dcdcdc",
@@ -806,14 +999,36 @@ function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {header}
+                  <button
+                    type="button"
+                    onClick={() => updateSort(header.key)}
+                    style={{
+                      alignItems: "center",
+                      background: "transparent",
+                      border: 0,
+                      color: "inherit",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      font: "inherit",
+                      fontWeight: "inherit",
+                      gap: 4,
+                      padding: 0,
+                    }}
+                  >
+                    {header.label}
+                    {sort.key === header.key
+                      ? sort.direction === "desc"
+                        ? "↓"
+                        : "↑"
+                      : ""}
+                  </button>
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.length > 0 ? (
-              rows.map((row) => (
+              sortedRows.map((row) => (
                 <tr key={row.locationId}>
                   <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
                     <div style={{ display: "grid", gap: 4 }}>
@@ -880,7 +1095,7 @@ export default function LocationsPage() {
     kpis,
     locationRows,
     trendRows,
-    bucketLabel,
+    period,
     hasGlobalExpenses,
     errors,
   } = useLoaderData<LoaderData>();
@@ -889,6 +1104,13 @@ export default function LocationsPage() {
     setDraftLocationIds(selectedLocationIds);
   }, [selectedLocationIds]);
   const allLocationsSelected = draftLocationIds.length === locations.length;
+  const locationSummary = allLocationsSelected
+    ? "All locations"
+    : draftLocationIds.length === 1
+      ? locations.find(
+          (location) => location.shopify_location_id === draftLocationIds[0],
+        )?.name || "1 location selected"
+      : `${draftLocationIds.length} locations selected`;
 
   return (
     <main
@@ -987,8 +1209,67 @@ export default function LocationsPage() {
             </div>
 
             <div>
-              <div style={{ color: "#616161", fontSize: 13, fontWeight: 800, marginBottom: 8 }}>
-                Locations
+              <div
+                style={{
+                  color: "#616161",
+                  fontSize: 13,
+                  fontWeight: 800,
+                  marginBottom: 8,
+                }}
+              >
+                Group by
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {(["day", "week", "month", "year"] as Period[]).map((option) => {
+                  const isSelected = period === option;
+
+                  return (
+                    <label
+                      key={option}
+                      style={{
+                        alignItems: "center",
+                        background: isSelected ? "#eff6ff" : "white",
+                        border: `1px solid ${
+                          isSelected ? "#2563eb" : "#dcdcdc"
+                        }`,
+                        borderRadius: 999,
+                        color: "#202223",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        gap: 8,
+                        padding: "7px 10px",
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="period"
+                        value={option}
+                        defaultChecked={isSelected}
+                      />
+                      {option}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div
+                style={{
+                  alignItems: "baseline",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginBottom: 8,
+                }}
+              >
+                <div style={{ color: "#616161", fontSize: 13, fontWeight: 800 }}>
+                  Locations
+                </div>
+                <div style={{ color: "#707070", fontSize: 13 }}>
+                  {locationSummary}
+                </div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                 <button
@@ -1064,11 +1345,11 @@ export default function LocationsPage() {
           </Form>
         </section>
 
-        {hasGlobalExpenses ? (
-          <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
-            Global expenses are not allocated across locations in this V1 view.
-          </p>
-        ) : null}
+        <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
+          V1 expenses include location-specific active fixed expenses only.
+          Global/unassigned expenses are not allocated
+          {hasGlobalExpenses ? " in this view." : "."}
+        </p>
 
         {errors.length > 0 ? (
           <section
@@ -1088,7 +1369,7 @@ export default function LocationsPage() {
         ) : null}
 
         <KpiGrid kpis={kpis} />
-        <TrendChart rows={trendRows} bucketLabel={bucketLabel} />
+        <TrendChart rows={trendRows} period={period} />
         <LocationTable rows={locationRows} />
       </div>
     </main>
