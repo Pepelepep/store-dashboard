@@ -117,6 +117,65 @@ type LoaderData = {
   errors: string[];
 };
 
+const ORDER_LINES_PAGE_SIZE = 2000;
+const LOCATION_ORDER_LINES_SELECT =
+  "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, staff_member_id, staff_member_name, staff_member_email";
+
+function getTrendLabelStep(rowCount: number) {
+  if (rowCount > 120) return 30;
+  if (rowCount > 90) return 20;
+  if (rowCount > 60) return 12;
+  if (rowCount > 48) return 8;
+  if (rowCount > 32) return 6;
+  if (rowCount > 20) return 4;
+  if (rowCount > 12) return 2;
+  return 1;
+}
+
+async function fetchLocationOrderLines({
+  supabase,
+  shop,
+  startDateUtc,
+  endExclusiveUtc,
+  selectedLocationIds,
+  shouldFilterByLocation,
+}: {
+  supabase: ReturnType<typeof getSupabaseAdminClient>;
+  shop: string;
+  startDateUtc: string;
+  endExclusiveUtc: string;
+  selectedLocationIds: string[];
+  shouldFilterByLocation: boolean;
+}) {
+  const rows: OrderLineDbRow[] = [];
+
+  for (let from = 0; ; from += ORDER_LINES_PAGE_SIZE) {
+    let query = supabase
+      .from("order_lines")
+      .select(LOCATION_ORDER_LINES_SELECT)
+      .eq("shop_domain", shop)
+      .gte("created_at_shopify", startDateUtc)
+      .lt("created_at_shopify", endExclusiveUtc);
+
+    if (shouldFilterByLocation) {
+      query = query.in("retail_location_id", selectedLocationIds);
+    }
+
+    const { data, error } = await query
+      .order("created_at_shopify", { ascending: false })
+      .range(from, from + ORDER_LINES_PAGE_SIZE - 1);
+
+    if (error) return { data: [], error };
+
+    const pageRows = (data ?? []) as OrderLineDbRow[];
+    rows.push(...pageRows);
+
+    if (pageRows.length < ORDER_LINES_PAGE_SIZE) {
+      return { data: rows, error: null };
+    }
+  }
+}
+
 function parseDateOnlyUtc(value: string) {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day));
@@ -815,25 +874,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     accessibleLocations.every((location) =>
       selectedLocationIdSet.has(location.shopify_location_id),
     );
-
-  let orderLinesQuery = supabase
-    .from("order_lines")
-    .select(
-      "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source",
-    )
-    .eq("shop_domain", session.shop)
-    .gte("created_at_shopify", startDateUtc)
-    .lt("created_at_shopify", endExclusiveUtc);
-
-  if (!permissions.isAdmin || !isAllAccessibleLocationsSelected) {
-    orderLinesQuery = orderLinesQuery.in(
-      "retail_location_id",
-      selectedLocationIds,
-    );
-  }
+  const shouldFilterOrderLinesByLocation =
+    !permissions.isAdmin || !isAllAccessibleLocationsSelected;
 
   const [orderLinesResult, expensesResult] = await Promise.all([
-    orderLinesQuery.order("created_at_shopify", { ascending: false }),
+    selectedLocationIds.length > 0
+      ? fetchLocationOrderLines({
+          supabase,
+          shop: session.shop,
+          startDateUtc,
+          endExclusiveUtc,
+          selectedLocationIds,
+          shouldFilterByLocation: shouldFilterOrderLinesByLocation,
+        })
+      : Promise.resolve({ data: [], error: null }),
     supabase
       .from("fixed_expenses")
       .select(
@@ -1095,16 +1149,7 @@ function TrendChart({
             {rows.map((row, index) => {
               const isSelected = selectedPeriod === row.period;
               const isHovered = hoveredPeriod === row.period;
-              const labelStep =
-                rows.length > 48
-                  ? 8
-                  : rows.length > 32
-                    ? 6
-                    : rows.length > 20
-                      ? 4
-                      : rows.length > 12
-                        ? 2
-                        : 1;
+              const labelStep = getTrendLabelStep(rows.length);
               const showLabel =
                 index === 0 ||
                 index === rows.length - 1 ||
