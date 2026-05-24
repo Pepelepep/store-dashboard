@@ -1,5 +1,7 @@
 import type {
   BestSellerRow,
+  DashboardDrilldown,
+  DashboardSalesOrderLineRow,
   FixedExpenseDbRow,
   InventoryLevelDbRow,
   OrderLineDbRow,
@@ -12,6 +14,7 @@ import type {
 } from "./dashboard-types";
 
 export const STORE_TIME_ZONE = "America/Toronto";
+export const UNKNOWN_STAFF_FILTER_VALUE = "__unknown_staff__";
 
 function getDatePartsInStoreTimezone(date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -150,14 +153,105 @@ export function buildShopifyOrderUrl(shopDomain: string, shopifyOrderId: string)
   return `https://admin.shopify.com/store/${storeHandle}/orders/${numericId}`;
 }
 
-export function computeBestSellers(orderLines: OrderLineDbRow[]) {
+type SalesMetricOrderLine = DashboardSalesOrderLineRow & {
+  staff_source?: string | null;
+};
+
+export function getStaffFilterValue(row: DashboardSalesOrderLineRow) {
+  return (
+    row.staff_member_id ||
+    row.staff_member_email ||
+    row.staff_member_name ||
+    ""
+  );
+}
+
+export function getStaffDrilldownValue(row: DashboardSalesOrderLineRow) {
+  return getStaffFilterValue(row) || UNKNOWN_STAFF_FILTER_VALUE;
+}
+
+export function getStaffDisplayLabel(row: DashboardSalesOrderLineRow) {
+  return (
+    row.staff_member_name ||
+    row.staff_member_email ||
+    row.staff_member_id ||
+    "Unknown staff"
+  );
+}
+
+export function getVendorFilterValue(row: DashboardSalesOrderLineRow) {
+  return row.vendor?.trim() || "-";
+}
+
+export function getBestSellerDrilldownValue(row: {
+  product?: string | null;
+  product_title?: string | null;
+  sku?: string | null;
+}) {
+  const product = row.product ?? row.product_title ?? "Unknown product";
+  const sku = row.sku ?? "-";
+
+  return `${product}__${sku}`;
+}
+
+export function getStoreHourFromTimestamp(value: string) {
+  const orderDate = new Date(value);
+
+  if (Number.isNaN(orderDate.getTime())) {
+    return null;
+  }
+
+  const hour = Number(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: STORE_TIME_ZONE,
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).format(orderDate),
+  );
+
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null;
+}
+
+export function applyDashboardDrilldown(
+  orderLines: DashboardSalesOrderLineRow[],
+  activeDrilldown: DashboardDrilldown | null,
+) {
+  if (!activeDrilldown) {
+    return orderLines;
+  }
+
+  return orderLines.filter((row) => {
+    if (activeDrilldown.type === "hour") {
+      return (
+        getStoreHourFromTimestamp(row.created_at_shopify) ===
+        Number(activeDrilldown.value)
+      );
+    }
+
+    if (activeDrilldown.type === "product") {
+      return getBestSellerDrilldownValue(row) === String(activeDrilldown.value);
+    }
+
+    if (activeDrilldown.type === "staff") {
+      return getStaffDrilldownValue(row) === String(activeDrilldown.value);
+    }
+
+    if (activeDrilldown.type === "vendor") {
+      return getVendorFilterValue(row) === String(activeDrilldown.value);
+    }
+
+    return true;
+  });
+}
+
+export function computeBestSellers(orderLines: DashboardSalesOrderLineRow[]) {
   const grouped = new Map<string, BestSellerRow>();
 
   for (const row of orderLines) {
     const product = row.product_title ?? "Unknown product";
     const sku = row.sku ?? "-";
-    const vendor = row.vendor ?? "-";
-    const key = `${product}__${sku}`;
+    const vendor = getVendorFilterValue(row);
+    const key = getBestSellerDrilldownValue({ product, sku });
 
     const existing = grouped.get(key);
 
@@ -180,11 +274,11 @@ export function computeBestSellers(orderLines: OrderLineDbRow[]) {
     .slice(0, 10);
 }
 
-export function computeSalesByVendor(orderLines: OrderLineDbRow[]) {
+export function computeSalesByVendor(orderLines: DashboardSalesOrderLineRow[]) {
   const grouped = new Map<string, VendorRow>();
 
   for (const row of orderLines) {
-    const vendor = row.vendor ?? "-";
+    const vendor = getVendorFilterValue(row);
     const existing = grouped.get(vendor);
 
     if (existing) {
@@ -204,18 +298,14 @@ export function computeSalesByVendor(orderLines: OrderLineDbRow[]) {
     .slice(0, 10);
 }
 
-export function computeSalesByStaff(orderLines: OrderLineDbRow[]) {
+export function computeSalesByStaff(orderLines: SalesMetricOrderLine[]) {
   const grouped = new Map<string, StaffSalesRow>();
 
   for (const row of orderLines) {
-    if (!row.staff_member_id && !row.staff_member_name) {
-      continue;
-    }
-
-    const staff = row.staff_member_name ?? row.staff_member_id ?? "Unknown staff";
+    const staff = getStaffDisplayLabel(row);
     const staffId = row.staff_member_id ?? "-";
     const source = row.staff_source ?? "unavailable";
-    const key = `${staffId}__${staff}`;
+    const key = getStaffDrilldownValue(row);
     const existing = grouped.get(key);
 
     if (existing) {
@@ -225,6 +315,7 @@ export function computeSalesByStaff(orderLines: OrderLineDbRow[]) {
       grouped.set(key, {
         staff,
         staffId,
+        staffKey: key,
         source,
         units: Number(row.quantity ?? 0),
         revenue: Number(row.revenue ?? 0),
@@ -237,7 +328,7 @@ export function computeSalesByStaff(orderLines: OrderLineDbRow[]) {
     .slice(0, 10);
 }
 
-export function computeSalesByHour(orderLines: OrderLineDbRow[]) {
+export function computeSalesByHour(orderLines: DashboardSalesOrderLineRow[]) {
   const orderIdsByHour = new Map<number, Set<string>>();
   const rows: SalesByHourRow[] = Array.from({ length: 24 }, (_, hour) => {
     orderIdsByHour.set(hour, new Set<string>());
@@ -256,21 +347,9 @@ export function computeSalesByHour(orderLines: OrderLineDbRow[]) {
       continue;
     }
 
-    const orderDate = new Date(row.created_at_shopify);
+    const hour = getStoreHourFromTimestamp(row.created_at_shopify);
 
-    if (Number.isNaN(orderDate.getTime())) {
-      continue;
-    }
-
-    const hour = Number(
-      new Intl.DateTimeFormat("en-CA", {
-        timeZone: STORE_TIME_ZONE,
-        hour: "2-digit",
-        hourCycle: "h23",
-      }).format(orderDate),
-    );
-
-    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    if (hour === null) {
       continue;
     }
 

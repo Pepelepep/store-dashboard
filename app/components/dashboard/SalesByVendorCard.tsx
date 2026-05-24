@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { formatCurrency } from "../../lib/dashboard/dashboard-metrics";
 import type { VendorRow } from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
@@ -5,10 +7,20 @@ import { SectionCard } from "./SectionCard";
 function SalesTable({
   headers,
   rows,
+  selectedRowKey,
+  onRowClick,
 }: {
   headers: string[];
-  rows: Array<Array<string | number>>;
+  rows: Array<{
+    key: string;
+    values: Array<string | number>;
+    source: VendorRow;
+  }>;
+  selectedRowKey?: string | null;
+  onRowClick?: (row: VendorRow) => void;
 }) {
+  const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
+
   return (
     <div
       style={{
@@ -47,22 +59,50 @@ function SalesTable({
         </thead>
         <tbody>
           {rows.length > 0 ? (
-            rows.map((row, index) => (
-              <tr key={index}>
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    style={{
-                      padding: "12px 10px",
-                      borderBottom: "1px solid #f0f0f0",
-                      verticalAlign: "top",
-                    }}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))
+            rows.map((row) => {
+              const isSelected = selectedRowKey === row.key;
+              const isHovered = hoveredRowKey === row.key;
+
+              return (
+                <tr
+                  key={row.key}
+                  title="Filter sales sections by this vendor"
+                  role={onRowClick ? "button" : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  onClick={() => onRowClick?.(row.source)}
+                  onKeyDown={(event) => {
+                    if (!onRowClick) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onRowClick(row.source);
+                    }
+                  }}
+                  onMouseEnter={() => setHoveredRowKey(row.key)}
+                  onMouseLeave={() => setHoveredRowKey(null)}
+                  style={{
+                    background: isSelected
+                      ? "#eff6ff"
+                      : isHovered && onRowClick
+                        ? "#fafafa"
+                        : undefined,
+                    cursor: onRowClick ? "pointer" : undefined,
+                  }}
+                >
+                  {row.values.map((cell, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      style={{
+                        padding: "12px 10px",
+                        borderBottom: "1px solid #f0f0f0",
+                        verticalAlign: "top",
+                      }}
+                    >
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })
           ) : (
             <tr>
               <td
@@ -81,8 +121,12 @@ function SalesTable({
 
 export function SalesByVendorCard({
   salesByVendor,
+  selectedVendorKey,
+  onSelectVendor,
 }: {
   salesByVendor: VendorRow[];
+  selectedVendorKey?: string | null;
+  onSelectVendor?: (row: VendorRow) => void;
 }) {
   return (
     <SectionCard
@@ -99,11 +143,13 @@ export function SalesByVendorCard({
     >
       <SalesTable
         headers={["Vendor", "Units", "Revenue"]}
-        rows={salesByVendor.map((row) => [
-          row.vendor,
-          row.units,
-          formatCurrency(row.revenue),
-        ])}
+        selectedRowKey={selectedVendorKey}
+        onRowClick={onSelectVendor}
+        rows={salesByVendor.map((row) => ({
+          key: row.vendor,
+          source: row,
+          values: [row.vendor, row.units, formatCurrency(row.revenue)],
+        }))}
       />
     </SectionCard>
   );

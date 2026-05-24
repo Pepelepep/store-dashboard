@@ -1,14 +1,29 @@
-import { formatCurrency } from "../../lib/dashboard/dashboard-metrics";
+import { useState } from "react";
+
+import {
+  formatCurrency,
+  getBestSellerDrilldownValue,
+} from "../../lib/dashboard/dashboard-metrics";
 import type { BestSellerRow } from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
 function Table({
   headers,
   rows,
+  selectedRowKey,
+  onRowClick,
 }: {
   headers: string[];
-  rows: Array<Array<string | number>>;
+  rows: Array<{
+    key: string;
+    values: Array<string | number>;
+    source: BestSellerRow;
+  }>;
+  selectedRowKey?: string | null;
+  onRowClick?: (row: BestSellerRow) => void;
 }) {
+  const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
+
   return (
     <div
       style={{
@@ -47,22 +62,50 @@ function Table({
         </thead>
         <tbody>
           {rows.length > 0 ? (
-            rows.map((row, index) => (
-              <tr key={index}>
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    style={{
-                      padding: "12px 10px",
-                      borderBottom: "1px solid #f0f0f0",
-                      verticalAlign: "top",
-                    }}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))
+            rows.map((row) => {
+              const isSelected = selectedRowKey === row.key;
+              const isHovered = hoveredRowKey === row.key;
+
+              return (
+                <tr
+                  key={row.key}
+                  title="Filter sales sections by this product"
+                  role={onRowClick ? "button" : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  onClick={() => onRowClick?.(row.source)}
+                  onKeyDown={(event) => {
+                    if (!onRowClick) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onRowClick(row.source);
+                    }
+                  }}
+                  onMouseEnter={() => setHoveredRowKey(row.key)}
+                  onMouseLeave={() => setHoveredRowKey(null)}
+                  style={{
+                    background: isSelected
+                      ? "#eff6ff"
+                      : isHovered && onRowClick
+                        ? "#fafafa"
+                        : undefined,
+                    cursor: onRowClick ? "pointer" : undefined,
+                  }}
+                >
+                  {row.values.map((cell, cellIndex) => (
+                    <td
+                      key={cellIndex}
+                      style={{
+                        padding: "12px 10px",
+                        borderBottom: "1px solid #f0f0f0",
+                        verticalAlign: "top",
+                      }}
+                    >
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })
           ) : (
             <tr>
               <td
@@ -81,8 +124,12 @@ function Table({
 
 export function BestSellersCard({
   bestSellers,
+  selectedProductKey,
+  onSelectBestSeller,
 }: {
   bestSellers: BestSellerRow[];
+  selectedProductKey?: string | null;
+  onSelectBestSeller?: (row: BestSellerRow) => void;
 }) {
   return (
     <SectionCard
@@ -101,13 +148,19 @@ export function BestSellersCard({
     >
       <Table
         headers={["Product", "SKU", "Vendor", "Units", "Revenue"]}
-        rows={bestSellers.map((row) => [
-          row.product,
-          row.sku,
-          row.vendor,
-          row.units,
-          formatCurrency(row.revenue),
-        ])}
+        selectedRowKey={selectedProductKey}
+        onRowClick={onSelectBestSeller}
+        rows={bestSellers.map((row) => ({
+          key: getBestSellerDrilldownValue(row),
+          source: row,
+          values: [
+            row.product,
+            row.sku,
+            row.vendor,
+            row.units,
+            formatCurrency(row.revenue),
+          ],
+        }))}
       />
     </SectionCard>
   );
