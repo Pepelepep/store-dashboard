@@ -42,6 +42,7 @@ export default function App() {
           Dashboard
         </a>
         <a href={`/app/locations${search}`}>Locations</a>
+        <a href={`/app/data-quality${search}`}>Data Quality</a>
         {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expenses</a> : null}
         {canAdmin ? <a href={`/app/admin/permissions${search}`}>Permissions</a> : null}
         {canAdmin ? <a href={`/app/admin/sync${search}`}>Data Sync</a> : null}
