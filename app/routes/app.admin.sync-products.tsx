@@ -1,10 +1,20 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import {
+  Form,
+  Link,
+  useActionData,
+  useLoaderData,
+  useLocation,
+  useNavigation,
+} from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { syncProducts } from "../lib/sync/shopify-sync.server";
+import { AppButton } from "../components/ui/AppButton";
+import { HelperText } from "../components/ui/HelperText";
+import { InlineResult } from "../components/ui/InlineResult";
 
 type LoaderData = {
   shop: string;
@@ -73,9 +83,21 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function SyncProductsPage() {
   const loaderData = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
+  const location = useLocation();
+  const navigation = useNavigation();
+  const isSyncing = navigation.state !== "idle";
 
   return (
     <main style={{ padding: 28, fontFamily: "system-ui" }}>
+      <Link
+        to={`/app/admin/sync${location.search}`}
+        style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}
+      >
+        Back to Data Sync
+      </Link>
+      <HelperText>
+        Refresh Shopify products and variants used by sales and inventory reporting.
+      </HelperText>
       <h1>Sync products & variants</h1>
 
       <section
@@ -101,20 +123,14 @@ export default function SyncProductsPage() {
       </section>
 
       <Form method="post">
-        <button
+        <AppButton
           type="submit"
-          style={{
-            border: "1px solid #202223",
-            background: "#202223",
-            color: "white",
-            borderRadius: 10,
-            padding: "10px 14px",
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
+          disabled={isSyncing}
         >
-          Refresh products & variants
-        </button>
+          {isSyncing
+            ? "Refreshing products & variants..."
+            : "Refresh products & variants"}
+        </AppButton>
       </Form>
 
       {actionData ? (
@@ -129,6 +145,9 @@ export default function SyncProductsPage() {
         >
           {actionData.ok ? (
             <div>
+              <InlineResult variant="success">
+                Products sync completed.
+              </InlineResult>
               <p>
                 Synced <strong>{actionData.productsSynced}</strong> products.
               </p>
@@ -137,7 +156,9 @@ export default function SyncProductsPage() {
               </p>
             </div>
           ) : (
-            <pre style={{ whiteSpace: "pre-wrap" }}>{actionData.error}</pre>
+            <InlineResult variant="error">
+              {actionData.error ?? "Product sync failed."}
+            </InlineResult>
           )}
         </section>
       ) : null}
