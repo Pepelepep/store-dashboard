@@ -1,0 +1,239 @@
+import { Form } from "react-router";
+
+import type { LocationRow } from "../../lib/dashboard/dashboard-types";
+
+export function DashboardFilters({
+  locations,
+  selectedLocationId,
+  startDate,
+  endDate,
+  preservedSearchParams,
+}: {
+  locations: LocationRow[];
+  selectedLocationId: string | null;
+  startDate: string;
+  endDate: string;
+  preservedSearchParams: Array<{ name: string; value: string }>;
+}) {
+  const canSwitchLocation = locations.length > 1;
+
+  return (
+    <Form method="get">
+      {preservedSearchParams.map(({ name, value }, index) => (
+        <input
+          key={`${name}-${index}`}
+          type="hidden"
+          name={name}
+          value={value}
+        />
+      ))}
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 24,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ minWidth: 260, flex: "1 1 420px" }}>
+          <div
+            style={{
+              color: "#5f6368",
+              fontSize: 14,
+              marginBottom: 6,
+              fontWeight: 700,
+            }}
+          >
+            Synced Shopify data
+          </div>
+
+          <h1 style={{ margin: 0, fontSize: 34, fontWeight: 850 }}>
+            Store dashboard
+          </h1>
+
+          <p style={{ marginTop: 8, color: "#6b7280", fontSize: 16 }}>
+            Sales, margin and operational risks by location.
+          </p>
+        </div>
+
+        <div
+          style={{
+            width: 360,
+            maxWidth: "100%",
+            flex: "0 1 360px",
+          }}
+        >
+          <label
+            htmlFor="locationId"
+            style={{
+              display: "block",
+              fontSize: 14,
+              fontWeight: 800,
+              marginBottom: 6,
+            }}
+          >
+            Location
+          </label>
+          <select
+            id="locationId"
+            name="locationId"
+            defaultValue={selectedLocationId ?? ""}
+            disabled={!canSwitchLocation}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid #c9c9c9",
+              background: canSwitchLocation ? "white" : "#f3f4f6",
+              color: canSwitchLocation ? "#202223" : "#6b7280",
+              fontSize: 14,
+              minHeight: 44,
+              boxSizing: "border-box",
+              cursor: canSwitchLocation ? "pointer" : "not-allowed",
+            }}
+          >
+            {locations.map((location) => (
+              <option
+                key={location.shopify_location_id}
+                value={location.shopify_location_id}
+              >
+                {location.name}
+              </option>
+            ))}
+          </select>
+          {!canSwitchLocation ? (
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 12,
+                color: "#6b7280",
+              }}
+            >
+              Location locked for this user.
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div
+        style={{
+          marginTop: 22,
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(160px, 220px))",
+          gap: 14,
+          alignItems: "end",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <label
+            htmlFor="startDate"
+            style={{
+              display: "block",
+              fontSize: 14,
+              fontWeight: 800,
+              marginBottom: 6,
+            }}
+          >
+            Start date
+          </label>
+          <input
+            id="startDate"
+            name="startDate"
+            type="date"
+            defaultValue={startDate}
+            style={{
+              width: "100%",
+              padding: "9px 10px",
+              borderRadius: 12,
+              border: "1px solid #c9c9c9",
+              background: "white",
+              fontSize: 14,
+              minHeight: 44,
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        <div style={{ minWidth: 0 }}>
+          <label
+            htmlFor="endDate"
+            style={{
+              display: "block",
+              fontSize: 14,
+              fontWeight: 800,
+              marginBottom: 6,
+            }}
+          >
+            End date
+          </label>
+          <input
+            id="endDate"
+            name="endDate"
+            type="date"
+            defaultValue={endDate}
+            style={{
+              width: "100%",
+              padding: "9px 10px",
+              borderRadius: 12,
+              border: "1px solid #c9c9c9",
+              background: "white",
+              fontSize: 14,
+              minHeight: 44,
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+      </div>
+
+      <div
+        style={{
+          marginTop: 16,
+          display: "flex",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <button
+          type="submit"
+          name="preset"
+          value="today"
+          style={{
+            border: "1px solid #202223",
+            background: "#202223",
+            color: "white",
+            borderRadius: 12,
+            padding: "10px 22px",
+            fontSize: 14,
+            fontWeight: 800,
+            cursor: "pointer",
+            minHeight: 44,
+            minWidth: 150,
+            whiteSpace: "nowrap",
+          }}
+        >
+          Today
+        </button>
+
+        <button
+          type="submit"
+          style={{
+            border: "1px solid #c9c9c9",
+            background: "white",
+            borderRadius: 12,
+            padding: "10px 22px",
+            fontSize: 14,
+            fontWeight: 800,
+            cursor: "pointer",
+            minHeight: 44,
+            minWidth: 150,
+            whiteSpace: "nowrap",
+          }}
+        >
+          Apply
+        </button>
+      </div>
+    </Form>
+  );
+}
