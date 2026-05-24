@@ -52,10 +52,33 @@ type TrendRow = {
 
 type RevenueBreakdownRow = {
   label: string;
+  value: string;
   revenue: number;
   ordersCount: number;
   unitsSold: number;
   percent: number;
+};
+
+type LocationsSalesRow = Pick<
+  OrderLineDbRow,
+  | "created_at_shopify"
+  | "retail_location_id"
+  | "retail_location_name"
+  | "vendor"
+  | "staff_member_id"
+  | "staff_member_name"
+  | "staff_member_email"
+  | "shopify_order_id"
+  | "quantity"
+  | "revenue"
+  | "cogs"
+>;
+
+type ActiveLocationDrilldowns = {
+  period?: { value: string; label: string } | null;
+  vendor?: { value: string; label: string } | null;
+  staff?: { value: string; label: string } | null;
+  location?: { value: string; label: string } | null;
 };
 
 type Period = "day" | "week" | "month" | "year";
@@ -89,6 +112,7 @@ type LoaderData = {
   trendRows: TrendRow[];
   revenueByVendor: RevenueBreakdownRow[];
   revenueByStaff: RevenueBreakdownRow[];
+  salesRows: LocationsSalesRow[];
   hasGlobalExpenses: boolean;
   errors: string[];
 };
@@ -309,13 +333,78 @@ function computeLocationExpenses({
   return selectedDays > 0 ? totals : new Map<string, number>();
 }
 
+function getVendorDrilldownValue(row: LocationsSalesRow) {
+  return row.vendor?.trim() || "Unknown vendor";
+}
+
+function getStaffDrilldownValue(row: LocationsSalesRow) {
+  return (
+    row.staff_member_id ||
+    row.staff_member_email ||
+    row.staff_member_name ||
+    "Unknown staff"
+  );
+}
+
+function getStaffDrilldownLabel(row: LocationsSalesRow) {
+  return (
+    row.staff_member_name ||
+    row.staff_member_email ||
+    row.staff_member_id ||
+    "Unknown staff"
+  );
+}
+
+function applyLocationDrilldowns({
+  orderLines,
+  activeDrilldowns,
+  period,
+}: {
+  orderLines: LocationsSalesRow[];
+  activeDrilldowns: ActiveLocationDrilldowns;
+  period: Period;
+}) {
+  return orderLines.filter((row) => {
+    if (
+      activeDrilldowns.period &&
+      getOrderLinePeriodKey(row.created_at_shopify, period) !==
+        activeDrilldowns.period.value
+    ) {
+      return false;
+    }
+
+    if (
+      activeDrilldowns.vendor &&
+      getVendorDrilldownValue(row) !== activeDrilldowns.vendor.value
+    ) {
+      return false;
+    }
+
+    if (
+      activeDrilldowns.staff &&
+      getStaffDrilldownValue(row) !== activeDrilldowns.staff.value
+    ) {
+      return false;
+    }
+
+    if (
+      activeDrilldowns.location &&
+      row.retail_location_id !== activeDrilldowns.location.value
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
 function computeMetrics({
   locations,
   orderLines,
   expensesByLocation,
 }: {
   locations: LocationRow[];
-  orderLines: OrderLineDbRow[];
+  orderLines: LocationsSalesRow[];
   expensesByLocation: Map<string, number>;
 }) {
   const rows = locations.map((location): LocationMetricRow => {
@@ -505,7 +594,7 @@ function computeTrendRows({
   endDate,
   period,
 }: {
-  orderLines: OrderLineDbRow[];
+  orderLines: LocationsSalesRow[];
   startDate: string;
   endDate: string;
   period: Period;
@@ -555,16 +644,19 @@ function computeTrendRows({
 function computeRevenueBreakdown({
   orderLines,
   getLabel,
+  getValue,
   limit = 8,
 }: {
-  orderLines: OrderLineDbRow[];
-  getLabel: (row: OrderLineDbRow) => string;
+  orderLines: LocationsSalesRow[];
+  getLabel: (row: LocationsSalesRow) => string;
+  getValue: (row: LocationsSalesRow) => string;
   limit?: number;
 }) {
   const grouped = new Map<
     string,
     {
       label: string;
+      value: string;
       revenue: number;
       orderIds: Set<string>;
       unitsSold: number;
@@ -573,14 +665,16 @@ function computeRevenueBreakdown({
 
   for (const row of orderLines) {
     const label = getLabel(row);
-    const existing = grouped.get(label);
+    const value = getValue(row);
+    const existing = grouped.get(value);
 
     if (existing) {
       existing.revenue += Number(row.revenue ?? 0);
       existing.unitsSold += Number(row.quantity ?? 0);
       if (row.shopify_order_id) existing.orderIds.add(row.shopify_order_id);
     } else {
-      grouped.set(label, {
+      grouped.set(value, {
+        value,
         label,
         revenue: Number(row.revenue ?? 0),
         orderIds: new Set(row.shopify_order_id ? [row.shopify_order_id] : []),
@@ -597,6 +691,7 @@ function computeRevenueBreakdown({
   const sortedRows = Array.from(grouped.values())
     .map((row) => ({
       label: row.label,
+      value: row.value,
       revenue: row.revenue,
       ordersCount: row.orderIds.size,
       unitsSold: row.unitsSold,
@@ -613,6 +708,7 @@ function computeRevenueBreakdown({
   const others = otherRows.reduce(
     (sum, row) => ({
       label: "Others",
+      value: "Others",
       revenue: sum.revenue + row.revenue,
       ordersCount: sum.ordersCount + row.ordersCount,
       unitsSold: sum.unitsSold + row.unitsSold,
@@ -620,6 +716,7 @@ function computeRevenueBreakdown({
     }),
     {
       label: "Others",
+      value: "Others",
       revenue: 0,
       ordersCount: 0,
       unitsSold: 0,
@@ -773,17 +870,28 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const revenueByVendor = computeRevenueBreakdown({
     orderLines: filteredOrderLines,
     limit: 8,
-    getLabel: (row) => row.vendor?.trim() || "Unknown vendor",
+    getLabel: getVendorDrilldownValue,
+    getValue: getVendorDrilldownValue,
   });
   const revenueByStaff = computeRevenueBreakdown({
     orderLines: filteredOrderLines,
     limit: 8,
-    getLabel: (row) =>
-      row.staff_member_name ||
-      row.staff_member_email ||
-      row.staff_member_id ||
-      "Unknown staff",
+    getLabel: getStaffDrilldownLabel,
+    getValue: getStaffDrilldownValue,
   });
+  const salesRows: LocationsSalesRow[] = filteredOrderLines.map((row) => ({
+    created_at_shopify: row.created_at_shopify,
+    retail_location_id: row.retail_location_id,
+    retail_location_name: row.retail_location_name,
+    vendor: row.vendor,
+    staff_member_id: row.staff_member_id,
+    staff_member_name: row.staff_member_name,
+    staff_member_email: row.staff_member_email,
+    shopify_order_id: row.shopify_order_id,
+    quantity: Number(row.quantity ?? 0),
+    revenue: Number(row.revenue ?? 0),
+    cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
+  }));
 
   return {
     locations: accessibleLocations,
@@ -802,6 +910,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     trendRows: trend.rows,
     revenueByVendor,
     revenueByStaff,
+    salesRows,
     hasGlobalExpenses,
     errors,
   } satisfies LoaderData;
@@ -885,11 +994,16 @@ function TrendChart({
   rows,
   period,
   onFilterChange,
+  selectedPeriod,
+  onSelectPeriod,
 }: {
   rows: TrendRow[];
   period: Period;
   onFilterChange: () => void;
+  selectedPeriod?: string | null;
+  onSelectPeriod?: (row: TrendRow) => void;
 }) {
+  const [hoveredPeriod, setHoveredPeriod] = useState<string | null>(null);
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
   const maxOrders = Math.max(...rows.map((row) => row.ordersCount), 0);
   const hasSales = rows.some((row) => row.revenue > 0 || row.ordersCount > 0);
@@ -968,6 +1082,8 @@ function TrendChart({
             }}
           >
             {rows.map((row, index) => {
+              const isSelected = selectedPeriod === row.period;
+              const isHovered = hoveredPeriod === row.period;
               const labelStep =
                 rows.length > 48
                   ? 8
@@ -1004,11 +1120,32 @@ function TrendChart({
                     `Orders: ${formatNumber(row.ordersCount)}`,
                     `Units: ${formatNumber(row.unitsSold)}`,
                   ].join("\n")}
+                  role={onSelectPeriod ? "button" : undefined}
+                  tabIndex={onSelectPeriod ? 0 : undefined}
+                  onClick={() => onSelectPeriod?.(row)}
+                  onKeyDown={(event) => {
+                    if (!onSelectPeriod) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectPeriod(row);
+                    }
+                  }}
+                  onMouseEnter={() => setHoveredPeriod(row.period)}
+                  onMouseLeave={() => setHoveredPeriod(null)}
                   style={{
+                    background: isSelected
+                      ? "#eff6ff"
+                      : isHovered && onSelectPeriod
+                        ? "#fafafa"
+                        : undefined,
+                    borderRadius: 8,
+                    cursor: onSelectPeriod ? "pointer" : undefined,
                     display: "grid",
                     gridTemplateRows: "22px 150px 24px 84px 18px",
                     justifyItems: "center",
                     minWidth: 0,
+                    outline: isSelected ? "2px solid #2563eb" : undefined,
+                    outlineOffset: 2,
                   }}
                 >
                   <div
@@ -1124,7 +1261,15 @@ function TrendChart({
   );
 }
 
-function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
+function LocationTable({
+  rows,
+  selectedLocation,
+  onSelectLocation,
+}: {
+  rows: LocationMetricRow[];
+  selectedLocation?: string | null;
+  onSelectLocation?: (row: LocationMetricRow) => void;
+}) {
   const [sort, setSort] = useState<{ key: SortKey; direction: "asc" | "desc" }>(
     {
       key: "revenue",
@@ -1188,6 +1333,7 @@ function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
         current.key === key && current.direction === "desc" ? "asc" : "desc",
     }));
   };
+  const [hoveredLocation, setHoveredLocation] = useState<string | null>(null);
 
   return (
     <section
@@ -1250,8 +1396,35 @@ function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
           </thead>
           <tbody>
             {rows.length > 0 ? (
-              sortedRows.map((row) => (
-                <tr key={row.locationId}>
+              sortedRows.map((row) => {
+                const isSelected = selectedLocation === row.locationId;
+                const isHovered = hoveredLocation === row.locationId;
+
+                return (
+                <tr
+                  key={row.locationId}
+                  title="Filter charts by this location"
+                  role={onSelectLocation ? "button" : undefined}
+                  tabIndex={onSelectLocation ? 0 : undefined}
+                  onClick={() => onSelectLocation?.(row)}
+                  onKeyDown={(event) => {
+                    if (!onSelectLocation) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectLocation(row);
+                    }
+                  }}
+                  onMouseEnter={() => setHoveredLocation(row.locationId)}
+                  onMouseLeave={() => setHoveredLocation(null)}
+                  style={{
+                    background: isSelected
+                      ? "#eff6ff"
+                      : isHovered && onSelectLocation
+                        ? "#fafafa"
+                        : undefined,
+                    cursor: onSelectLocation ? "pointer" : undefined,
+                  }}
+                >
                   <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
                     <div style={{ display: "grid", gap: 4 }}>
                       <strong>{row.locationName}</strong>
@@ -1288,7 +1461,8 @@ function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
                     {formatCurrency(row.averageOrderValue)}
                   </td>
                 </tr>
-              ))
+                );
+              })
             ) : (
               <tr>
                 <td colSpan={10} style={{ color: "#707070", padding: 16 }}>
@@ -1314,7 +1488,16 @@ const breakdownColors = [
   "#db2777",
 ];
 
-function RevenueByVendorCard({ rows }: { rows: RevenueBreakdownRow[] }) {
+function RevenueByVendorCard({
+  rows,
+  selectedVendor,
+  onSelectVendor,
+}: {
+  rows: RevenueBreakdownRow[];
+  selectedVendor?: string | null;
+  onSelectVendor?: (row: RevenueBreakdownRow) => void;
+}) {
+  const [hoveredVendor, setHoveredVendor] = useState<string | null>(null);
   const hasRevenue = rows.some((row) => row.revenue > 0);
   let currentPercent = 0;
   const gradientStops = rows
@@ -1378,11 +1561,32 @@ function RevenueByVendorCard({ rows }: { rows: RevenueBreakdownRow[] }) {
                   `Percent: ${row.percent.toFixed(1)}%`,
                   `Orders: ${formatNumber(row.ordersCount)}`,
                 ].join("\n")}
+                role={onSelectVendor ? "button" : undefined}
+                tabIndex={onSelectVendor ? 0 : undefined}
+                onClick={() => onSelectVendor?.(row)}
+                onKeyDown={(event) => {
+                  if (!onSelectVendor) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectVendor(row);
+                  }
+                }}
+                onMouseEnter={() => setHoveredVendor(row.value)}
+                onMouseLeave={() => setHoveredVendor(null)}
                 style={{
                   alignItems: "center",
+                  background:
+                    selectedVendor === row.value
+                      ? "#eff6ff"
+                      : hoveredVendor === row.value && onSelectVendor
+                        ? "#fafafa"
+                        : undefined,
+                  borderRadius: 8,
+                  cursor: onSelectVendor ? "pointer" : undefined,
                   display: "grid",
                   gap: 8,
                   gridTemplateColumns: "10px minmax(0, 1fr) auto",
+                  padding: "4px 6px",
                 }}
               >
                 <span
@@ -1436,7 +1640,16 @@ function RevenueByVendorCard({ rows }: { rows: RevenueBreakdownRow[] }) {
   );
 }
 
-function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
+function RevenueByStaffCard({
+  rows,
+  selectedStaff,
+  onSelectStaff,
+}: {
+  rows: RevenueBreakdownRow[];
+  selectedStaff?: string | null;
+  onSelectStaff?: (row: RevenueBreakdownRow) => void;
+}) {
+  const [hoveredStaff, setHoveredStaff] = useState<string | null>(null);
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
 
   return (
@@ -1463,6 +1676,8 @@ function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
         >
           {rows.map((row) => {
             const width = Math.max((row.revenue / maxRevenue) * 100, 2);
+            const isSelected = selectedStaff === row.value;
+            const isHovered = hoveredStaff === row.value;
 
             return (
               <Fragment key={row.label}>
@@ -1470,13 +1685,24 @@ function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
                   title={row.label}
                   style={{
                     alignSelf: "center",
+                    background: isSelected
+                      ? "#eff6ff"
+                      : isHovered && onSelectStaff
+                        ? "#fafafa"
+                        : undefined,
+                    borderRadius: 8,
                     color: "#202223",
+                    cursor: onSelectStaff ? "pointer" : undefined,
                     fontSize: 13,
                     fontWeight: 700,
                     overflow: "hidden",
+                    padding: "4px 6px",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                   }}
+                  onClick={() => onSelectStaff?.(row)}
+                  onMouseEnter={() => setHoveredStaff(row.value)}
+                  onMouseLeave={() => setHoveredStaff(null)}
                 >
                   {row.label}
                 </div>
@@ -1489,11 +1715,31 @@ function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
                   ].join("\n")}
                   style={{
                     alignItems: "center",
+                    background: isSelected
+                      ? "#eff6ff"
+                      : isHovered && onSelectStaff
+                        ? "#fafafa"
+                        : undefined,
+                    borderRadius: 8,
+                    cursor: onSelectStaff ? "pointer" : undefined,
                     display: "grid",
                     gridTemplateColumns: "minmax(0, 1fr) auto",
                     gap: 8,
                     minWidth: 0,
+                    padding: "4px 6px",
                   }}
+                  role={onSelectStaff ? "button" : undefined}
+                  tabIndex={onSelectStaff ? 0 : undefined}
+                  onClick={() => onSelectStaff?.(row)}
+                  onKeyDown={(event) => {
+                    if (!onSelectStaff) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectStaff(row);
+                    }
+                  }}
+                  onMouseEnter={() => setHoveredStaff(row.value)}
+                  onMouseLeave={() => setHoveredStaff(null)}
                 >
                   <div
                     style={{
@@ -1549,9 +1795,15 @@ function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
 function RevenueBreakdownSection({
   revenueByVendor,
   revenueByStaff,
+  activeDrilldowns,
+  onSelectVendor,
+  onSelectStaff,
 }: {
   revenueByVendor: RevenueBreakdownRow[];
   revenueByStaff: RevenueBreakdownRow[];
+  activeDrilldowns: ActiveLocationDrilldowns;
+  onSelectVendor: (row: RevenueBreakdownRow) => void;
+  onSelectStaff: (row: RevenueBreakdownRow) => void;
 }) {
   return (
     <div
@@ -1562,8 +1814,129 @@ function RevenueBreakdownSection({
         marginBottom: 20,
       }}
     >
-      <RevenueByVendorCard rows={revenueByVendor} />
-      <RevenueByStaffCard rows={revenueByStaff} />
+      <RevenueByVendorCard
+        rows={revenueByVendor}
+        selectedVendor={activeDrilldowns.vendor?.value ?? null}
+        onSelectVendor={onSelectVendor}
+      />
+      <RevenueByStaffCard
+        rows={revenueByStaff}
+        selectedStaff={activeDrilldowns.staff?.value ?? null}
+        onSelectStaff={onSelectStaff}
+      />
+    </div>
+  );
+}
+
+function ActiveLocationsDrilldownChips({
+  activeDrilldowns,
+  onClearOne,
+  onClearAll,
+}: {
+  activeDrilldowns: ActiveLocationDrilldowns;
+  onClearOne: (key: keyof ActiveLocationDrilldowns) => void;
+  onClearAll: () => void;
+}) {
+  const chips: Array<{
+    key: keyof ActiveLocationDrilldowns;
+    label: string;
+    value: string;
+  }> = [];
+
+  if (activeDrilldowns.period) {
+    chips.push({
+      key: "period",
+      label: "Period",
+      value: activeDrilldowns.period.label,
+    });
+  }
+  if (activeDrilldowns.vendor) {
+    chips.push({
+      key: "vendor",
+      label: "Vendor",
+      value: activeDrilldowns.vendor.label,
+    });
+  }
+  if (activeDrilldowns.staff) {
+    chips.push({
+      key: "staff",
+      label: "Staff",
+      value: activeDrilldowns.staff.label,
+    });
+  }
+  if (activeDrilldowns.location) {
+    chips.push({
+      key: "location",
+      label: "Location",
+      value: activeDrilldowns.location.label,
+    });
+  }
+
+  if (chips.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        alignItems: "center",
+        background: "white",
+        border: "1px solid #e3e3e3",
+        borderRadius: 12,
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 10,
+        justifyContent: "space-between",
+        marginBottom: 16,
+        padding: "10px 12px",
+      }}
+    >
+      <div
+        style={{
+          alignItems: "center",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
+        <span style={{ color: "#616161", fontSize: 13, fontWeight: 700 }}>
+          Filtered by:
+        </span>
+        {chips.map((chip) => (
+          <StatusBadge
+            key={chip.key}
+            variant="info"
+            style={{ gap: 6, paddingRight: 6 }}
+          >
+            {chip.label}: {chip.value}
+            <button
+              type="button"
+              aria-label={`Clear ${chip.label} drilldown`}
+              onClick={() => onClearOne(chip.key)}
+              style={{
+                alignItems: "center",
+                background: "transparent",
+                border: 0,
+                borderRadius: 999,
+                color: "inherit",
+                cursor: "pointer",
+                display: "inline-flex",
+                fontSize: 13,
+                fontWeight: 900,
+                height: 18,
+                justifyContent: "center",
+                lineHeight: 1,
+                marginLeft: 2,
+                padding: 0,
+                width: 18,
+              }}
+            >
+              ×
+            </button>
+          </StatusBadge>
+        ))}
+      </div>
+      <AppButton variant="ghost" compact onClick={onClearAll}>
+        Clear all
+      </AppButton>
     </div>
   );
 }
@@ -1581,18 +1954,19 @@ export default function LocationsPage() {
     preservedSearchParams,
     kpis,
     locationRows,
-    trendRows,
-    revenueByVendor,
-    revenueByStaff,
+    salesRows,
     period,
     hasGlobalExpenses,
     errors,
   } = useLoaderData<LoaderData>();
   const [draftLocationIds, setDraftLocationIds] = useState(selectedLocationIds);
   const [isDirty, setIsDirty] = useState(false);
+  const [activeDrilldowns, setActiveDrilldowns] =
+    useState<ActiveLocationDrilldowns>({});
   useEffect(() => {
     setDraftLocationIds(selectedLocationIds);
     setIsDirty(false);
+    setActiveDrilldowns({});
   }, [selectedLocationIds]);
   const allLocationsSelected = draftLocationIds.length === locations.length;
   const locationSummary = allLocationsSelected
@@ -1602,6 +1976,104 @@ export default function LocationsPage() {
           (location) => location.shopify_location_id === draftLocationIds[0],
         )?.name || "1 location selected"
       : `${draftLocationIds.length} locations selected`;
+  const selectedLocationKey = selectedLocationIds.join("|");
+  const selectedLocationsForMetrics = useMemo(
+    () =>
+      locations.filter((location) =>
+        selectedLocationIds.includes(location.shopify_location_id),
+      ),
+    [locations, selectedLocationKey],
+  );
+  const expensesByLocation = useMemo(
+    () =>
+      new Map(
+        locationRows.map((row) => [row.locationId, row.expenses] as const),
+      ),
+    [locationRows],
+  );
+  const drilldownRows = useMemo(
+    () =>
+      applyLocationDrilldowns({
+        orderLines: salesRows,
+        activeDrilldowns,
+        period,
+      }),
+    [salesRows, activeDrilldowns, period],
+  );
+  const hasActiveDrilldowns = Boolean(
+    activeDrilldowns.period ||
+      activeDrilldowns.vendor ||
+      activeDrilldowns.staff ||
+      activeDrilldowns.location,
+  );
+  const locationsForDrilldownMetrics = useMemo(() => {
+    if (!hasActiveDrilldowns) return selectedLocationsForMetrics;
+
+    const locationIdsWithRows = new Set(
+      drilldownRows
+        .map((row) => row.retail_location_id)
+        .filter((value): value is string => Boolean(value)),
+    );
+
+    return selectedLocationsForMetrics.filter((location) =>
+      activeDrilldowns.location
+        ? location.shopify_location_id === activeDrilldowns.location.value
+        : locationIdsWithRows.has(location.shopify_location_id),
+    );
+  }, [
+    activeDrilldowns.location,
+    drilldownRows,
+    hasActiveDrilldowns,
+    selectedLocationsForMetrics,
+  ]);
+  const drilldownTrendRows = useMemo(
+    () =>
+      computeTrendRows({
+        orderLines: drilldownRows,
+        startDate,
+        endDate,
+        period,
+      }).rows,
+    [drilldownRows, startDate, endDate, period],
+  );
+  const drilldownRevenueByVendor = useMemo(
+    () =>
+      computeRevenueBreakdown({
+        orderLines: drilldownRows,
+        limit: 8,
+        getLabel: getVendorDrilldownValue,
+        getValue: getVendorDrilldownValue,
+      }),
+    [drilldownRows],
+  );
+  const drilldownRevenueByStaff = useMemo(
+    () =>
+      computeRevenueBreakdown({
+        orderLines: drilldownRows,
+        limit: 8,
+        getLabel: getStaffDrilldownLabel,
+        getValue: getStaffDrilldownValue,
+      }),
+    [drilldownRows],
+  );
+  const drilldownLocationRows = useMemo(
+    () =>
+      computeMetrics({
+        locations: locationsForDrilldownMetrics,
+        orderLines: drilldownRows,
+        expensesByLocation,
+      }).rows,
+    [locationsForDrilldownMetrics, drilldownRows, expensesByLocation],
+  );
+  const toggleDrilldown = (
+    key: keyof ActiveLocationDrilldowns,
+    next: { value: string; label: string },
+  ) => {
+    setActiveDrilldowns((current) => ({
+      ...current,
+      [key]: current[key]?.value === next.value ? null : next,
+    }));
+  };
 
   return (
     <main
@@ -1852,16 +2324,55 @@ export default function LocationsPage() {
         ) : null}
 
         <KpiGrid kpis={kpis} />
+        <ActiveLocationsDrilldownChips
+          activeDrilldowns={activeDrilldowns}
+          onClearOne={(key) =>
+            setActiveDrilldowns((current) => ({
+              ...current,
+              [key]: null,
+            }))
+          }
+          onClearAll={() => setActiveDrilldowns({})}
+        />
         <TrendChart
-          rows={trendRows}
+          rows={drilldownTrendRows}
           period={period}
           onFilterChange={() => setIsDirty(true)}
+          selectedPeriod={activeDrilldowns.period?.value ?? null}
+          onSelectPeriod={(row) =>
+            toggleDrilldown("period", {
+              value: row.period,
+              label: row.period,
+            })
+          }
         />
         <RevenueBreakdownSection
-          revenueByVendor={revenueByVendor}
-          revenueByStaff={revenueByStaff}
+          revenueByVendor={drilldownRevenueByVendor}
+          revenueByStaff={drilldownRevenueByStaff}
+          activeDrilldowns={activeDrilldowns}
+          onSelectVendor={(row) =>
+            toggleDrilldown("vendor", {
+              value: row.value,
+              label: row.label,
+            })
+          }
+          onSelectStaff={(row) =>
+            toggleDrilldown("staff", {
+              value: row.value,
+              label: row.label,
+            })
+          }
         />
-        <LocationTable rows={locationRows} />
+        <LocationTable
+          rows={drilldownLocationRows}
+          selectedLocation={activeDrilldowns.location?.value ?? null}
+          onSelectLocation={(row) =>
+            toggleDrilldown("location", {
+              value: row.locationId,
+              label: row.locationName,
+            })
+          }
+        />
       </div>
     </main>
   );
