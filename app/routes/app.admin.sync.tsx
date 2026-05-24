@@ -15,6 +15,10 @@ import {
   runFullSync,
   syncStaffMembers,
 } from "../lib/sync/shopify-sync.server";
+import { AppButton } from "../components/ui/AppButton";
+import { HelperText } from "../components/ui/HelperText";
+import { InlineResult } from "../components/ui/InlineResult";
+import { StatusBadge } from "../components/ui/StatusBadge";
 
 type TableCount = {
   table: string;
@@ -78,6 +82,17 @@ function formatDateTime(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function getSyncStatusVariant(status: string) {
+  const normalized = status.toLowerCase();
+
+  if (normalized === "success") return "success";
+  if (normalized === "error" || normalized === "failed") return "error";
+  if (normalized === "running") return "info";
+  if (normalized === "partial") return "warning";
+
+  return "neutral";
 }
 
 function formatSyncRunDetails(run: SyncRun) {
@@ -295,6 +310,9 @@ export default function AdminSyncPage() {
   const isSyncingStaff =
     navigation.state !== "idle" &&
     navigation.formData?.get("intent") === "sync_staff_members";
+  const lastSuccessfulSync = lastSyncRuns.find(
+    (run) => run.status === "success" && run.finished_at,
+  );
 
   return (
     <main
@@ -308,30 +326,31 @@ export default function AdminSyncPage() {
     >
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <header style={{ marginBottom: 28 }}>
-          <div style={{ color: "#616161", fontSize: 14, marginBottom: 6 }}>
-            Admin
-          </div>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Data sync center</h1>
-          <p style={{ color: "#616161" }}>
-            Shop: <strong>{shop}</strong>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Data Sync</h1>
+          <p style={{ color: "#616161", margin: "8px 0 0" }}>
+            Refresh Shopify data and monitor data freshness.
           </p>
+          <div style={{ color: "#8a8f93", fontSize: 12, marginTop: 8 }}>
+            Shop: {shop}
+          </div>
         </header>
 
-        {actionData ? (
-          <div
-            style={{
-              background: actionData.ok ? "#ecfdf3" : "#fef3f2",
-              border: `1px solid ${actionData.ok ? "#abefc6" : "#fecdca"}`,
-              color: actionData.ok ? "#067647" : "#b42318",
-              borderRadius: 12,
-              padding: 14,
-              marginBottom: 20,
-              fontWeight: 700,
-            }}
-          >
-            {actionData.message}
-          </div>
-        ) : null}
+        <section
+          style={{
+            background: "white",
+            border: "1px solid #e3e3e3",
+            borderRadius: 12,
+            padding: 14,
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ fontWeight: 800 }}>Last successful sync</div>
+          <HelperText>
+            {lastSuccessfulSync?.finished_at
+              ? formatDateTime(lastSuccessfulSync.finished_at)
+              : "No successful sync run recorded yet."}
+          </HelperText>
+        </section>
 
         <div
           style={{
@@ -365,23 +384,20 @@ export default function AdminSyncPage() {
             <div style={{ display: "grid", gap: 12 }}>
               <Form method="post">
                 <input type="hidden" name="intent" value="refresh_all" />
-                <button
+                <AppButton
                   type="submit"
                   disabled={isRefreshing}
-                  style={{
-                    width: "100%",
-                    border: "1px solid #006fbb",
-                    background: isRefreshing ? "#8cc5ff" : "#006fbb",
-                    color: "white",
-                    borderRadius: 10,
-                    padding: "12px 14px",
-                    fontWeight: 800,
-                    cursor: isRefreshing ? "not-allowed" : "pointer",
-                  }}
+                  fullWidth
                 >
                   {isRefreshing ? "Refreshing all data..." : "Refresh all data"}
-                </button>
+                </AppButton>
               </Form>
+
+              {actionData ? (
+                <InlineResult variant={actionData.ok ? "success" : "error"}>
+                  {actionData.message}
+                </InlineResult>
+              ) : null}
 
               <div
                 style={{
@@ -391,15 +407,15 @@ export default function AdminSyncPage() {
                 }}
               />
 
-              <ButtonLink to="/app/admin/sync-locations">
+              <ButtonLink to={`/app/admin/sync-locations${search}`}>
                 Refresh locations
               </ButtonLink>
 
-              <ButtonLink to="/app/admin/sync-products">
+              <ButtonLink to={`/app/admin/sync-products${search}`}>
                 Refresh products & variants
               </ButtonLink>
 
-              <ButtonLink to="/app/admin/sync-inventory">
+              <ButtonLink to={`/app/admin/sync-inventory${search}`}>
                 Refresh inventory
               </ButtonLink>
 
@@ -409,22 +425,14 @@ export default function AdminSyncPage() {
 
               <Form method="post">
                 <input type="hidden" name="intent" value="sync_staff_members" />
-                <button
+                <AppButton
                   type="submit"
                   disabled={isSyncingStaff}
-                  style={{
-                    width: "100%",
-                    border: "1px solid #006fbb",
-                    background: isSyncingStaff ? "#8cc5ff" : "white",
-                    color: isSyncingStaff ? "white" : "#006fbb",
-                    borderRadius: 10,
-                    padding: "12px 14px",
-                    fontWeight: 800,
-                    cursor: isSyncingStaff ? "not-allowed" : "pointer",
-                  }}
+                  variant="secondary"
+                  fullWidth
                 >
                   {isSyncingStaff ? "Syncing staff..." : "Sync staff members"}
-                </button>
+                </AppButton>
               </Form>
             </div>
           </Card>
@@ -455,7 +463,7 @@ export default function AdminSyncPage() {
         </div>
 
         <Card title="Last sync runs">
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
             <table
               style={{
                 width: "100%",
@@ -504,7 +512,9 @@ export default function AdminSyncPage() {
                         borderBottom: "1px solid #eee",
                       }}
                     >
-                      {run.status}
+                      <StatusBadge variant={getSyncStatusVariant(run.status)}>
+                        {run.status}
+                      </StatusBadge>
                     </td>
                     <td
                       style={{

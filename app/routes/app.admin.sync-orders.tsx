@@ -1,10 +1,21 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { data, Form, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  Link,
+  useActionData,
+  useLoaderData,
+  useLocation,
+  useNavigation,
+} from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { syncOrders } from "../lib/sync/shopify-sync.server";
+import { AppButton } from "../components/ui/AppButton";
+import { HelperText } from "../components/ui/HelperText";
+import { InlineResult } from "../components/ui/InlineResult";
 
 type LoaderData = {
   shop: string;
@@ -103,10 +114,24 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function SyncOrdersPage() {
   const loaderData = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
+  const location = useLocation();
+  const navigation = useNavigation();
+  const isSyncing = navigation.state !== "idle";
 
   return (
     <main style={{ padding: 28, fontFamily: "system-ui" }}>
-      <h1>Sync orders & order lines</h1>
+      <div style={{ marginBottom: 20 }}>
+        <Link
+          to={`/app/admin/sync${location.search}`}
+          style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}
+        >
+          Back to Data Sync
+        </Link>
+        <h1 style={{ marginBottom: 8 }}>Sync orders & order lines</h1>
+        <HelperText>
+          Refresh Shopify orders and order lines for the selected date range.
+        </HelperText>
+      </div>
 
       <section
         style={{
@@ -203,20 +228,12 @@ export default function SyncOrdersPage() {
             />
           </div>
 
-          <button
+          <AppButton
             type="submit"
-            style={{
-              border: "1px solid #202223",
-              background: "#202223",
-              color: "white",
-              borderRadius: 10,
-              padding: "10px 14px",
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
+            disabled={isSyncing}
           >
-            Refresh orders
-          </button>
+            {isSyncing ? "Refreshing orders..." : "Refresh orders"}
+          </AppButton>
         </div>
       </Form>
 
@@ -232,6 +249,7 @@ export default function SyncOrdersPage() {
         >
           {actionData.ok ? (
             <div>
+              <InlineResult variant="success">Orders sync completed.</InlineResult>
               <p>
                 Processed <strong>{actionData.pagesProcessed}</strong> order
                 pages.
@@ -245,7 +263,9 @@ export default function SyncOrdersPage() {
               </p>
             </div>
           ) : (
-            <pre style={{ whiteSpace: "pre-wrap" }}>{actionData.error}</pre>
+            <InlineResult variant="error">
+              {actionData.error ?? "Orders sync failed."}
+            </InlineResult>
           )}
         </section>
       ) : null}
