@@ -262,7 +262,18 @@ export function computeSalesByHour(orderLines: OrderLineDbRow[]) {
       continue;
     }
 
-    const hour = orderDate.getHours();
+    const hour = Number(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: STORE_TIME_ZONE,
+        hour: "2-digit",
+        hourCycle: "h23",
+      }).format(orderDate),
+    );
+
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+      continue;
+    }
+
     const hourRow = rows[hour];
 
     hourRow.revenue += Number(row.revenue ?? 0);
