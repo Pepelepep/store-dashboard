@@ -543,6 +543,48 @@ function computeMetrics({
   };
 }
 
+function computeGlobalKpis({
+  orderLines,
+  expensesByLocation,
+}: {
+  orderLines: LocationsSalesRow[];
+  expensesByLocation: Map<string, number>;
+}): Omit<LocationMetricRow, "locationId" | "locationName"> {
+  const revenue = orderLines.reduce(
+    (sum, row) => sum + Number(row.revenue ?? 0),
+    0,
+  );
+  const cogs = orderLines.reduce(
+    (sum, row) => sum + Number(row.cogs ?? 0),
+    0,
+  );
+  const grossProfit = revenue - cogs;
+  const orderIds = new Set(
+    orderLines.map((row) => row.shopify_order_id).filter(Boolean),
+  );
+  const ordersCount = orderIds.size;
+  const unitsSold = orderLines.reduce(
+    (sum, row) => sum + Number(row.quantity ?? 0),
+    0,
+  );
+  const expenses = Array.from(expensesByLocation.values()).reduce(
+    (sum, value) => sum + value,
+    0,
+  );
+
+  return {
+    revenue,
+    ordersCount,
+    unitsSold,
+    cogs,
+    grossProfit,
+    grossMarginPct: revenue > 0 ? (grossProfit / revenue) * 100 : null,
+    expenses,
+    netProfit: grossProfit - expenses,
+    averageOrderValue: ordersCount > 0 ? revenue / ordersCount : 0,
+  };
+}
+
 function getDefaultPeriod(selectedDays: number): Period {
   if (selectedDays <= 31) return "day";
   if (selectedDays <= 180) return "week";
@@ -926,6 +968,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     orderLines: filteredOrderLines,
     expensesByLocation,
   });
+  const kpis = computeGlobalKpis({
+    orderLines: filteredOrderLines,
+    expensesByLocation,
+  });
   const trend = computeTrendRows({
     orderLines: filteredOrderLines,
     startDate,
@@ -970,7 +1016,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     preservedSearchParams,
     selectedDays,
     period,
-    kpis: metrics.totals,
+    kpis,
     locationRows: metrics.rows,
     trendRows: trend.rows,
     revenueByVendor,
