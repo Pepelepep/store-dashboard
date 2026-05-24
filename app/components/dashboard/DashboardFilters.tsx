@@ -1,6 +1,9 @@
 import { Form } from "react-router";
+import { useState } from "react";
 
 import type { LocationRow } from "../../lib/dashboard/dashboard-types";
+import { AppButton } from "../ui/AppButton";
+import { InlineResult } from "../ui/InlineResult";
 
 export function DashboardFilters({
   locations,
@@ -16,6 +19,7 @@ export function DashboardFilters({
   preservedSearchParams: Array<{ name: string; value: string }>;
 }) {
   const canSwitchLocation = locations.length > 1;
+  const [hasUnsavedFilters, setHasUnsavedFilters] = useState(false);
 
   return (
     <Form method="get">
@@ -81,6 +85,7 @@ export function DashboardFilters({
             name="locationId"
             defaultValue={selectedLocationId ?? ""}
             disabled={!canSwitchLocation}
+            onChange={() => setHasUnsavedFilters(true)}
             style={{
               width: "100%",
               padding: "10px 12px",
@@ -143,6 +148,7 @@ export function DashboardFilters({
             name="startDate"
             type="date"
             defaultValue={startDate}
+            onChange={() => setHasUnsavedFilters(true)}
             style={{
               width: "100%",
               padding: "9px 10px",
@@ -173,6 +179,7 @@ export function DashboardFilters({
             name="endDate"
             type="date"
             defaultValue={endDate}
+            onChange={() => setHasUnsavedFilters(true)}
             style={{
               width: "100%",
               padding: "9px 10px",
@@ -195,44 +202,29 @@ export function DashboardFilters({
           flexWrap: "wrap",
         }}
       >
-        <button
+        <AppButton
           type="submit"
           name="preset"
           value="today"
-          style={{
-            border: "1px solid #202223",
-            background: "#202223",
-            color: "white",
-            borderRadius: 12,
-            padding: "10px 22px",
-            fontSize: 14,
-            fontWeight: 800,
-            cursor: "pointer",
-            minHeight: 44,
-            minWidth: 150,
-            whiteSpace: "nowrap",
-          }}
+          variant="secondary"
+          style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
         >
           Today
-        </button>
+        </AppButton>
 
-        <button
+        <AppButton
           type="submit"
-          style={{
-            border: "1px solid #c9c9c9",
-            background: "white",
-            borderRadius: 12,
-            padding: "10px 22px",
-            fontSize: 14,
-            fontWeight: 800,
-            cursor: "pointer",
-            minHeight: 44,
-            minWidth: 150,
-            whiteSpace: "nowrap",
-          }}
+          variant="primary"
+          style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
         >
           Apply
-        </button>
+        </AppButton>
+
+        {hasUnsavedFilters ? (
+          <InlineResult variant="info">
+            Filters changed. Click Apply to update.
+          </InlineResult>
+        ) : null}
       </div>
     </Form>
   );
