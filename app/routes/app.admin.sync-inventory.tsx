@@ -32,6 +32,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
+  await assertAdminAccess({ request, session, supabase });
+
   const [{ count: variantsWithInventoryItemCount }, { count: inventoryLevelsCount }] =
     await Promise.all([
       supabase
