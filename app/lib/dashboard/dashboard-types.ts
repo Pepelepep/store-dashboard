@@ -27,6 +27,29 @@ export type OrderLineDbRow = {
   staff_source: string | null;
 };
 
+export type DashboardSalesOrderLineRow = Pick<
+  OrderLineDbRow,
+  | "order_name"
+  | "shopify_order_id"
+  | "created_at_shopify"
+  | "product_title"
+  | "sku"
+  | "quantity"
+  | "revenue"
+  | "cogs"
+  | "gross_profit"
+  | "vendor"
+  | "staff_member_id"
+  | "staff_member_name"
+  | "staff_member_email"
+>;
+
+export type DashboardDrilldown = {
+  type: "hour" | "product" | "staff" | "vendor";
+  value: string | number;
+  label: string;
+};
+
 export type InventoryLevelDbRow = {
   shopify_location_id: string;
   shopify_variant_id: string | null;
@@ -80,6 +103,7 @@ export type VendorRow = {
 export type StaffSalesRow = {
   staff: string;
   staffId: string;
+  staffKey: string;
   source: string;
   units: number;
   revenue: number;
@@ -149,11 +173,7 @@ export type DashboardLoaderData = {
     expenses: number | null;
     netProfit: number | null;
   };
-  bestSellers: BestSellerRow[];
-  salesByVendor: VendorRow[];
-  salesByStaff: StaffSalesRow[];
-  salesByHour: SalesByHourRow[];
   stockAlerts: StockAlertRow[];
-  recentOrders: RecentOrderRow[];
+  salesOrderLines: DashboardSalesOrderLineRow[];
   errors: string[];
 };

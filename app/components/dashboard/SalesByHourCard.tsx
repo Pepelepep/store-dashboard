@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import {
   formatCurrency,
   formatNumber,
@@ -61,9 +63,14 @@ function LegendItem({
 
 export function SalesByHourCard({
   salesByHour,
+  selectedHour,
+  onSelectHour,
 }: {
   salesByHour: SalesByHourRow[];
+  selectedHour?: number | null;
+  onSelectHour?: (hour: number) => void;
 }) {
+  const [hoveredHour, setHoveredHour] = useState<number | null>(null);
   const maxRevenue = Math.max(...salesByHour.map((row) => row.revenue), 0);
   const maxOrders = Math.max(...salesByHour.map((row) => row.ordersCount), 0);
   const hasSales = salesByHour.some(
@@ -94,6 +101,8 @@ export function SalesByHourCard({
             }}
           >
             {salesByHour.map((row) => {
+              const isSelected = selectedHour === row.hour;
+              const isHovered = hoveredHour === row.hour;
               const revenueHeight =
                 maxRevenue > 0
                   ? Math.max(
@@ -113,11 +122,34 @@ export function SalesByHourCard({
                 <div
                   key={row.hour}
                   title={getBarTitle(row)}
+                  role={onSelectHour ? "button" : undefined}
+                  tabIndex={onSelectHour ? 0 : undefined}
+                  onClick={() => onSelectHour?.(row.hour)}
+                  onKeyDown={(event) => {
+                    if (!onSelectHour) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectHour(row.hour);
+                    }
+                  }}
+                  onMouseEnter={() => setHoveredHour(row.hour)}
+                  onMouseLeave={() => setHoveredHour(null)}
                   style={{
                     display: "grid",
                     gridTemplateRows: "22px 170px 24px 96px 18px",
                     justifyItems: "center",
                     minWidth: 26,
+                    borderRadius: 8,
+                    cursor: onSelectHour ? "pointer" : undefined,
+                    outline: isSelected ? "2px solid #2563eb" : undefined,
+                    outlineOffset: 2,
+                    background: isSelected
+                      ? "#eff6ff"
+                      : isHovered && onSelectHour
+                        ? "#fafafa"
+                        : undefined,
+                    transition:
+                      "background-color 120ms ease, outline-color 120ms ease",
                   }}
                 >
                   <div
@@ -150,7 +182,12 @@ export function SalesByHourCard({
                         maxWidth: 28,
                         height: revenueHeight,
                         borderRadius: "6px 6px 2px 2px",
-                        background: row.revenue > 0 ? "#2563eb" : "#e5e7eb",
+                        background:
+                          row.revenue > 0
+                            ? isSelected
+                              ? "#1d4ed8"
+                              : "#2563eb"
+                            : "#e5e7eb",
                       }}
                     />
                   </div>
@@ -184,7 +221,12 @@ export function SalesByHourCard({
                         maxWidth: 28,
                         height: ordersHeight,
                         borderRadius: "2px 2px 6px 6px",
-                        background: row.ordersCount > 0 ? "#14b8a6" : "#e5e7eb",
+                        background:
+                          row.ordersCount > 0
+                            ? isSelected
+                              ? "#0f766e"
+                              : "#14b8a6"
+                            : "#e5e7eb",
                       }}
                     />
                   </div>

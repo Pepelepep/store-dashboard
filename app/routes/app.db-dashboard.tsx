@@ -1,9 +1,11 @@
 import type { LoaderFunctionArgs } from "react-router";
+import { useMemo, useState } from "react";
 import { useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
+import { ActiveDrilldownBadge } from "../components/dashboard/ActiveDrilldownBadge";
 import { BestSellersCard } from "../components/dashboard/BestSellersCard";
 import { DashboardHeader } from "../components/dashboard/DashboardHeader";
 import { KpiCards } from "../components/dashboard/KpiCards";
@@ -14,6 +16,7 @@ import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
 import {
   buildShopifyOrderUrl,
+  applyDashboardDrilldown,
   computeBestSellers,
   computeExpensesForRange,
   computeSalesByHour,
@@ -21,13 +24,20 @@ import {
   computeSalesByVendor,
   computeStockAlerts,
   daysBetween,
+  getBestSellerDrilldownValue,
+  getStaffDisplayLabel,
+  getStaffFilterValue,
   getTodayStoreDate,
+  getVendorFilterValue,
   isActiveInventoryProduct,
   nextDate,
   storeDateToUtcIso,
+  UNKNOWN_STAFF_FILTER_VALUE,
 } from "../lib/dashboard/dashboard-metrics";
 import type {
+  DashboardDrilldown,
   DashboardLoaderData as LoaderData,
+  DashboardSalesOrderLineRow,
   FixedExpenseDbRow,
   InventoryLevelDbRow,
   LocationRow,
@@ -36,16 +46,6 @@ import type {
   RecentOrderRow,
   VariantDbRow,
 } from "../lib/dashboard/dashboard-types";
-
-const UNKNOWN_STAFF_FILTER_VALUE = "__unknown_staff__";
-
-function getStaffFilterValue(row: OrderLineDbRow) {
-  return row.staff_member_id || row.staff_member_email || row.staff_member_name || "";
-}
-
-function getStaffDisplayLabel(row: OrderLineDbRow) {
-  return row.staff_member_name || row.staff_member_email || row.staff_member_id || "Unknown staff";
-}
 
 function buildStaffOptions(orderLines: OrderLineDbRow[]) {
   const options = new Map<string, string>();
@@ -112,7 +112,8 @@ function filterOrderLines({
       (selectedStaff === UNKNOWN_STAFF_FILTER_VALUE
         ? !getStaffFilterValue(row)
         : getStaffFilterValue(row) === selectedStaff);
-    const vendorMatches = !selectedVendor || row.vendor?.trim() === selectedVendor;
+    const vendorMatches =
+      !selectedVendor || getVendorFilterValue(row) === selectedVendor;
 
     return staffMatches && vendorMatches;
   });
@@ -297,19 +298,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const criticalStockCount = stockAlerts.filter(
     (row) => row.status === "Critical",
   ).length;
-  const recentOrders: RecentOrderRow[] = filteredOrderLines.slice(0, 30).map((row) => ({
-    orderName: row.order_name,
-    orderUrl: buildShopifyOrderUrl(session.shop, row.shopify_order_id),
-    date: row.created_at_shopify,
-    product: row.product_title ?? "-",
-    sku: row.sku ?? "-",
-    quantity: Number(row.quantity ?? 0),
-    revenue: Number(row.revenue ?? 0),
-    cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
-    grossProfit:
-      row.gross_profit === null ? null : Number(row.gross_profit ?? 0),
-    costSource: row.cost_source ?? "-",
-  }));
+  const salesOrderLines: DashboardSalesOrderLineRow[] = filteredOrderLines.map(
+    (row) => ({
+      order_name: row.order_name,
+      shopify_order_id: row.shopify_order_id,
+      created_at_shopify: row.created_at_shopify,
+      product_title: row.product_title,
+      sku: row.sku,
+      quantity: Number(row.quantity ?? 0),
+      revenue: Number(row.revenue ?? 0),
+      cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
+      gross_profit:
+        row.gross_profit === null ? null : Number(row.gross_profit ?? 0),
+      vendor: row.vendor,
+      staff_member_id: row.staff_member_id,
+      staff_member_name: row.staff_member_name,
+      staff_member_email: row.staff_member_email,
+    }),
+  );
 
   return {
     shop: session.shop,
@@ -338,18 +344,46 @@ export async function loader({ request }: LoaderFunctionArgs) {
       expenses: expensesToDate,
       netProfit,
     },
-    bestSellers: computeBestSellers(filteredOrderLines),
-    salesByVendor: computeSalesByVendor(filteredOrderLines),
-    salesByStaff: computeSalesByStaff(filteredOrderLines),
-    salesByHour: computeSalesByHour(filteredOrderLines),
     stockAlerts,
-    recentOrders,
+    salesOrderLines,
     errors,
   } satisfies LoaderData;
 }
 
+function createRecentOrders({
+  shop,
+  orderLines,
+}: {
+  shop: string;
+  orderLines: DashboardSalesOrderLineRow[];
+}): RecentOrderRow[] {
+  return orderLines.slice(0, 30).map((row) => ({
+    orderName: row.order_name,
+    orderUrl: buildShopifyOrderUrl(shop, row.shopify_order_id),
+    date: row.created_at_shopify,
+    product: row.product_title ?? "-",
+    sku: row.sku ?? "-",
+    quantity: Number(row.quantity ?? 0),
+    revenue: Number(row.revenue ?? 0),
+    cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
+    grossProfit:
+      row.gross_profit === null ? null : Number(row.gross_profit ?? 0),
+    costSource: "-",
+  }));
+}
+
+function isSameDrilldown(
+  current: DashboardDrilldown | null,
+  next: DashboardDrilldown,
+) {
+  return (
+    current?.type === next.type && String(current.value) === String(next.value)
+  );
+}
+
 export default function DbDashboardPage() {
   const {
+    shop,
     locations,
     selectedLocationId,
     selectedLocationName,
@@ -363,14 +397,49 @@ export default function DbDashboardPage() {
     lastSuccessfulSync,
     selectedDays,
     kpis,
-    bestSellers,
-    salesByVendor,
-    salesByStaff,
-    salesByHour,
     stockAlerts,
-    recentOrders,
+    salesOrderLines,
     errors,
   } = useLoaderData<LoaderData>();
+  const [activeDrilldown, setActiveDrilldown] =
+    useState<DashboardDrilldown | null>(null);
+  const drilldownOrderLines = useMemo(
+    () => applyDashboardDrilldown(salesOrderLines, activeDrilldown),
+    [salesOrderLines, activeDrilldown],
+  );
+  const drilldownBestSellers = useMemo(
+    () => computeBestSellers(drilldownOrderLines),
+    [drilldownOrderLines],
+  );
+  const drilldownSalesByVendor = useMemo(
+    () => computeSalesByVendor(drilldownOrderLines),
+    [drilldownOrderLines],
+  );
+  const drilldownSalesByStaff = useMemo(
+    () => computeSalesByStaff(drilldownOrderLines),
+    [drilldownOrderLines],
+  );
+  const drilldownSalesByHour = useMemo(
+    () => computeSalesByHour(drilldownOrderLines),
+    [drilldownOrderLines],
+  );
+  const drilldownRecentOrders = useMemo(
+    () => createRecentOrders({ shop, orderLines: drilldownOrderLines }),
+    [shop, drilldownOrderLines],
+  );
+  const selectedHour =
+    activeDrilldown?.type === "hour" ? Number(activeDrilldown.value) : null;
+  const selectedProductKey =
+    activeDrilldown?.type === "product" ? String(activeDrilldown.value) : null;
+  const selectedStaffKey =
+    activeDrilldown?.type === "staff" ? String(activeDrilldown.value) : null;
+  const selectedVendorKey =
+    activeDrilldown?.type === "vendor" ? String(activeDrilldown.value) : null;
+  const toggleDrilldown = (next: DashboardDrilldown) => {
+    setActiveDrilldown((current) =>
+      isSameDrilldown(current, next) ? null : next,
+    );
+  };
 
   return (
     <main
@@ -422,8 +491,23 @@ export default function DbDashboardPage() {
           endDate={endDate}
         />
 
+        <ActiveDrilldownBadge
+          activeDrilldown={activeDrilldown}
+          onClear={() => setActiveDrilldown(null)}
+        />
+
         <div style={{ marginBottom: 20 }}>
-          <SalesByHourCard salesByHour={salesByHour} />
+          <SalesByHourCard
+            salesByHour={drilldownSalesByHour}
+            selectedHour={selectedHour}
+            onSelectHour={(hour) =>
+              toggleDrilldown({
+                type: "hour",
+                value: hour,
+                label: `${String(hour).padStart(2, "0")}:00`,
+              })
+            }
+          />
         </div>
 
         <div
@@ -434,7 +518,20 @@ export default function DbDashboardPage() {
             marginBottom: 20,
           }}
         >
-          <BestSellersCard bestSellers={bestSellers} />
+          <BestSellersCard
+            bestSellers={drilldownBestSellers}
+            selectedProductKey={selectedProductKey}
+            onSelectBestSeller={(row) =>
+              toggleDrilldown({
+                type: "product",
+                value: getBestSellerDrilldownValue(row),
+                label:
+                  row.sku && row.sku !== "-"
+                    ? `${row.product} / ${row.sku}`
+                    : row.product,
+              })
+            }
+          />
 
           <StockAlertsCard stockAlerts={stockAlerts} />
         </div>
@@ -447,12 +544,32 @@ export default function DbDashboardPage() {
             marginBottom: 20,
           }}
         >
-          <SalesByStaffCard salesByStaff={salesByStaff} />
+          <SalesByStaffCard
+            salesByStaff={drilldownSalesByStaff}
+            selectedStaffKey={selectedStaffKey}
+            onSelectStaff={(row) =>
+              toggleDrilldown({
+                type: "staff",
+                value: row.staffKey,
+                label: row.staff,
+              })
+            }
+          />
 
-          <SalesByVendorCard salesByVendor={salesByVendor} />
+          <SalesByVendorCard
+            salesByVendor={drilldownSalesByVendor}
+            selectedVendorKey={selectedVendorKey}
+            onSelectVendor={(row) =>
+              toggleDrilldown({
+                type: "vendor",
+                value: row.vendor,
+                label: row.vendor,
+              })
+            }
+          />
         </div>
 
-        <RecentOrderLinesCard recentOrders={recentOrders} />
+        <RecentOrderLinesCard recentOrders={drilldownRecentOrders} />
       </div>
     </main>
   );
