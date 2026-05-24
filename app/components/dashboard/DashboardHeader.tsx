@@ -53,8 +53,8 @@ export function DashboardHeader({
             background: "white",
             border: "1px solid #e5e7eb",
             borderRadius: 999,
-            padding: "7px 12px",
-            fontSize: 13,
+            padding: "5px 9px",
+            fontSize: 12,
             fontWeight: 800,
           }}
         >
@@ -66,8 +66,8 @@ export function DashboardHeader({
             background: "white",
             border: "1px solid #e5e7eb",
             borderRadius: 999,
-            padding: "7px 12px",
-            fontSize: 13,
+            padding: "5px 9px",
+            fontSize: 12,
             fontWeight: 800,
           }}
         >
@@ -79,8 +79,8 @@ export function DashboardHeader({
             background: "white",
             border: "1px solid #e5e7eb",
             borderRadius: 999,
-            padding: "7px 12px",
-            fontSize: 13,
+            padding: "5px 9px",
+            fontSize: 12,
             fontWeight: 800,
           }}
         >
@@ -92,8 +92,8 @@ export function DashboardHeader({
             background: "white",
             border: "1px solid #e5e7eb",
             borderRadius: 999,
-            padding: "7px 12px",
-            fontSize: 13,
+            padding: "5px 9px",
+            fontSize: 12,
             fontWeight: 800,
           }}
         >

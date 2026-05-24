@@ -83,19 +83,19 @@ export function KpiCards({
         title="COGS"
         value={formatCurrency(kpis.cogs)}
         subtitle="Product costs"
-        explanation="Cost of goods sold from product cost data attached to order lines."
+        explanation="COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
       />
       <KpiCard
         title="Gross profit"
         value={formatCurrency(kpis.grossProfit)}
         subtitle="Revenue minus COGS"
-        explanation="Revenue minus cost of goods sold for the selected range."
+        explanation="Revenue minus COGS. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
       />
       <KpiCard
         title="Gross margin"
         value={formatPercent(kpis.grossMarginPct)}
         subtitle="Gross profit / revenue"
-        explanation="Gross profit as a percentage of revenue."
+        explanation="Gross profit as a percentage of revenue. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
       />
       <KpiCard
         title="Expenses"

@@ -309,24 +309,6 @@ export default function DbDashboardPage() {
           </section>
         ) : null}
 
-        <div
-          style={{
-            background: "white",
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            color: "#5f6368",
-            fontSize: 13,
-            lineHeight: 1.5,
-            marginBottom: 14,
-            padding: "10px 12px",
-          }}
-        >
-          COGS uses the latest Shopify Cost per item by variant. If a cost is
-          corrected in Shopify, related order lines are recalculated
-          automatically when the update is received. Missing costs appear as
-          MISSING_COST.
-        </div>
-
         <KpiCards
           kpis={kpis}
           selectedLocationName={selectedLocationName}
