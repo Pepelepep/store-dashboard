@@ -4,7 +4,7 @@ import { useLoaderData } from "react-router";
 import { AppButtonLink } from "../components/ui/AppButton";
 import { HelperText } from "../components/ui/HelperText";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { getPermissionContext } from "../lib/auth/permissions.server";
+import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
   buildShopifyOrderUrl,
@@ -154,7 +154,7 @@ function getFreshnessStatus(finishedAt: string | null) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
-  const permissions = await getPermissionContext({ request, session, supabase });
+  const permissions = await assertAdminAccess({ request, session, supabase });
   const url = new URL(request.url);
   const preservedSearch = url.search;
   const errors: string[] = [];
