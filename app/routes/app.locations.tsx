@@ -809,20 +809,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const selectedLocationIds = safeSelectedLocations.map(
     (location) => location.shopify_location_id,
   );
+  const selectedLocationIdSet = new Set(selectedLocationIds);
+  const isAllAccessibleLocationsSelected =
+    selectedLocationIds.length === accessibleLocations.length &&
+    accessibleLocations.every((location) =>
+      selectedLocationIdSet.has(location.shopify_location_id),
+    );
+
+  let orderLinesQuery = supabase
+    .from("order_lines")
+    .select(
+      "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source",
+    )
+    .eq("shop_domain", session.shop)
+    .gte("created_at_shopify", startDateUtc)
+    .lt("created_at_shopify", endExclusiveUtc);
+
+  if (!permissions.isAdmin || !isAllAccessibleLocationsSelected) {
+    orderLinesQuery = orderLinesQuery.in(
+      "retail_location_id",
+      selectedLocationIds,
+    );
+  }
 
   const [orderLinesResult, expensesResult] = await Promise.all([
-    selectedLocationIds.length > 0
-      ? supabase
-          .from("order_lines")
-          .select(
-            "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source",
-          )
-          .eq("shop_domain", session.shop)
-          .in("retail_location_id", selectedLocationIds)
-          .gte("created_at_shopify", startDateUtc)
-          .lt("created_at_shopify", endExclusiveUtc)
-          .order("created_at_shopify", { ascending: false })
-      : Promise.resolve({ data: [], error: null }),
+    orderLinesQuery.order("created_at_shopify", { ascending: false }),
     supabase
       .from("fixed_expenses")
       .select(
