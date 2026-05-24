@@ -16,7 +16,7 @@ import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
 import {
   buildShopifyOrderUrl,
-  applyDashboardDrilldown,
+  applyDashboardDrilldowns,
   computeBestSellers,
   computeExpensesForRange,
   computeSalesByHour,
@@ -35,7 +35,7 @@ import {
   UNKNOWN_STAFF_FILTER_VALUE,
 } from "../lib/dashboard/dashboard-metrics";
 import type {
-  DashboardDrilldown,
+  ActiveDrilldowns,
   DashboardLoaderData as LoaderData,
   DashboardSalesOrderLineRow,
   FixedExpenseDbRow,
@@ -373,13 +373,13 @@ function createRecentOrders({
 }
 
 function isSameDrilldown(
-  current: DashboardDrilldown | null,
-  next: DashboardDrilldown,
+  current: { value: string; label: string } | null | undefined,
+  next: { value: string; label: string },
 ) {
-  return (
-    current?.type === next.type && String(current.value) === String(next.value)
-  );
+  return String(current?.value) === String(next.value);
 }
+
+const emptyDrilldowns: ActiveDrilldowns = {};
 
 export default function DbDashboardPage() {
   const {
@@ -401,11 +401,11 @@ export default function DbDashboardPage() {
     salesOrderLines,
     errors,
   } = useLoaderData<LoaderData>();
-  const [activeDrilldown, setActiveDrilldown] =
-    useState<DashboardDrilldown | null>(null);
+  const [activeDrilldowns, setActiveDrilldowns] =
+    useState<ActiveDrilldowns>(emptyDrilldowns);
   const drilldownOrderLines = useMemo(
-    () => applyDashboardDrilldown(salesOrderLines, activeDrilldown),
-    [salesOrderLines, activeDrilldown],
+    () => applyDashboardDrilldowns(salesOrderLines, activeDrilldowns),
+    [salesOrderLines, activeDrilldowns],
   );
   const drilldownBestSellers = useMemo(
     () => computeBestSellers(drilldownOrderLines),
@@ -427,18 +427,24 @@ export default function DbDashboardPage() {
     () => createRecentOrders({ shop, orderLines: drilldownOrderLines }),
     [shop, drilldownOrderLines],
   );
-  const selectedHour =
-    activeDrilldown?.type === "hour" ? Number(activeDrilldown.value) : null;
-  const selectedProductKey =
-    activeDrilldown?.type === "product" ? String(activeDrilldown.value) : null;
-  const selectedStaffKey =
-    activeDrilldown?.type === "staff" ? String(activeDrilldown.value) : null;
-  const selectedVendorKey =
-    activeDrilldown?.type === "vendor" ? String(activeDrilldown.value) : null;
-  const toggleDrilldown = (next: DashboardDrilldown) => {
-    setActiveDrilldown((current) =>
-      isSameDrilldown(current, next) ? null : next,
-    );
+  const selectedHour = activeDrilldowns.hour ?? null;
+  const selectedProductKey = activeDrilldowns.product?.value ?? null;
+  const selectedStaffKey = activeDrilldowns.staff?.value ?? null;
+  const selectedVendorKey = activeDrilldowns.vendor?.value ?? null;
+  const toggleHourDrilldown = (hour: number) => {
+    setActiveDrilldowns((current) => ({
+      ...current,
+      hour: current.hour === hour ? null : hour,
+    }));
+  };
+  const toggleDrilldown = (
+    key: "product" | "staff" | "vendor",
+    next: { value: string; label: string },
+  ) => {
+    setActiveDrilldowns((current) => ({
+      ...current,
+      [key]: isSameDrilldown(current[key], next) ? null : next,
+    }));
   };
 
   return (
@@ -492,21 +498,21 @@ export default function DbDashboardPage() {
         />
 
         <ActiveDrilldownBadge
-          activeDrilldown={activeDrilldown}
-          onClear={() => setActiveDrilldown(null)}
+          activeDrilldowns={activeDrilldowns}
+          onClearOne={(key) =>
+            setActiveDrilldowns((current) => ({
+              ...current,
+              [key]: null,
+            }))
+          }
+          onClearAll={() => setActiveDrilldowns(emptyDrilldowns)}
         />
 
         <div style={{ marginBottom: 20 }}>
           <SalesByHourCard
             salesByHour={drilldownSalesByHour}
             selectedHour={selectedHour}
-            onSelectHour={(hour) =>
-              toggleDrilldown({
-                type: "hour",
-                value: hour,
-                label: `${String(hour).padStart(2, "0")}:00`,
-              })
-            }
+            onSelectHour={toggleHourDrilldown}
           />
         </div>
 
@@ -522,8 +528,7 @@ export default function DbDashboardPage() {
             bestSellers={drilldownBestSellers}
             selectedProductKey={selectedProductKey}
             onSelectBestSeller={(row) =>
-              toggleDrilldown({
-                type: "product",
+              toggleDrilldown("product", {
                 value: getBestSellerDrilldownValue(row),
                 label:
                   row.sku && row.sku !== "-"
@@ -548,8 +553,7 @@ export default function DbDashboardPage() {
             salesByStaff={drilldownSalesByStaff}
             selectedStaffKey={selectedStaffKey}
             onSelectStaff={(row) =>
-              toggleDrilldown({
-                type: "staff",
+              toggleDrilldown("staff", {
                 value: row.staffKey,
                 label: row.staff,
               })
@@ -560,8 +564,7 @@ export default function DbDashboardPage() {
             salesByVendor={drilldownSalesByVendor}
             selectedVendorKey={selectedVendorKey}
             onSelectVendor={(row) =>
-              toggleDrilldown({
-                type: "vendor",
+              toggleDrilldown("vendor", {
                 value: row.vendor,
                 label: row.vendor,
               })

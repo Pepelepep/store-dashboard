@@ -44,10 +44,20 @@ export type DashboardSalesOrderLineRow = Pick<
   | "staff_member_email"
 >;
 
-export type DashboardDrilldown = {
-  type: "hour" | "product" | "staff" | "vendor";
-  value: string | number;
-  label: string;
+export type ActiveDrilldowns = {
+  hour?: number | null;
+  product?: {
+    value: string;
+    label: string;
+  } | null;
+  staff?: {
+    value: string;
+    label: string;
+  } | null;
+  vendor?: {
+    value: string;
+    label: string;
+  } | null;
 };
 
 export type InventoryLevelDbRow = {
