@@ -856,12 +856,39 @@ function KpiGrid({ kpis }: { kpis: LoaderData["kpis"] }) {
   );
 }
 
+function LegendItem({ color, label }: { color: string; label: string }) {
+  return (
+    <span
+      style={{
+        alignItems: "center",
+        color: "#616161",
+        display: "inline-flex",
+        fontSize: 12,
+        fontWeight: 700,
+        gap: 6,
+      }}
+    >
+      <span
+        style={{
+          background: color,
+          borderRadius: 999,
+          height: 10,
+          width: 10,
+        }}
+      />
+      {label}
+    </span>
+  );
+}
+
 function TrendChart({
   rows,
   period,
+  onFilterChange,
 }: {
   rows: TrendRow[];
   period: Period;
+  onFilterChange: () => void;
 }) {
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
   const maxOrders = Math.max(...rows.map((row) => row.ordersCount), 0);
@@ -911,6 +938,7 @@ function TrendChart({
             form="locations-filter-form"
             name="period"
             defaultValue={period}
+            onChange={onFilterChange}
             style={{
               border: "1px solid #c9cccf",
               borderRadius: 10,
@@ -926,29 +954,10 @@ function TrendChart({
       </div>
 
       {hasSales ? (
-        <div
-          style={{
-            display: "grid",
-            gap: 10,
-            gridTemplateColumns: "72px minmax(0, 1fr)",
-            width: "100%",
-          }}
-        >
-          <div
-            style={{
-              color: "#616161",
-              display: "grid",
-              fontSize: 12,
-              fontWeight: 800,
-              gridTemplateRows: "22px 150px 24px 84px 18px",
-              textAlign: "right",
-            }}
-          >
-            <div>Revenue</div>
-            <div />
-            <div />
-            <div style={{ alignSelf: "end" }}>Order volume</div>
-            <div />
+        <div style={{ display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+            <LegendItem color="#2563eb" label="Revenue" />
+            <LegendItem color="#14b8a6" label="Orders" />
           </div>
           <div
             style={{
@@ -1429,7 +1438,6 @@ function RevenueByVendorCard({ rows }: { rows: RevenueBreakdownRow[] }) {
 
 function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
-  const axisTicks = [0, 0.5, 1];
 
   return (
     <section
@@ -1453,30 +1461,6 @@ function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
             gridTemplateColumns: "minmax(96px, 132px) minmax(0, 1fr)",
           }}
         >
-          <div />
-          <div
-            style={{
-              color: "#8a8f93",
-              display: "grid",
-              fontSize: 11,
-              fontWeight: 700,
-              gridColumn: "2",
-              gridTemplateColumns: "repeat(3, 1fr)",
-              marginBottom: 2,
-            }}
-          >
-            {axisTicks.map((tick) => (
-              <span
-                key={tick}
-                style={{
-                  textAlign:
-                    tick === 0 ? "left" : tick === 0.5 ? "center" : "right",
-                }}
-              >
-                {tick === 0 ? "$0" : formatCompactCurrency(maxRevenue * tick)}
-              </span>
-            ))}
-          </div>
           {rows.map((row) => {
             const width = Math.max((row.revenue / maxRevenue) * 100, 2);
 
@@ -1513,22 +1497,20 @@ function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
                 >
                   <div
                     style={{
-                      background:
-                        "linear-gradient(to right, transparent calc(50% - 1px), #e5e7eb calc(50% - 1px), #e5e7eb calc(50% + 1px), transparent calc(50% + 1px))",
-                      borderBottom: "1px solid #eef2f7",
-                      borderTop: "1px solid #eef2f7",
-                      height: 22,
+                      background: "#eef2f7",
+                      borderRadius: 999,
+                      height: 12,
                       position: "relative",
                     }}
                   >
                     <div
                       style={{
                         background: "#2563eb",
-                        borderRadius: "0 999px 999px 0",
-                        height: 12,
+                        borderRadius: 999,
+                        height: "100%",
                         left: 0,
                         position: "absolute",
-                        top: 4,
+                        top: 0,
                         width: `${width}%`,
                       }}
                     />
@@ -1607,8 +1589,10 @@ export default function LocationsPage() {
     errors,
   } = useLoaderData<LoaderData>();
   const [draftLocationIds, setDraftLocationIds] = useState(selectedLocationIds);
+  const [isDirty, setIsDirty] = useState(false);
   useEffect(() => {
     setDraftLocationIds(selectedLocationIds);
+    setIsDirty(false);
   }, [selectedLocationIds]);
   const allLocationsSelected = draftLocationIds.length === locations.length;
   const locationSummary = allLocationsSelected
@@ -1651,6 +1635,7 @@ export default function LocationsPage() {
           <Form
             id="locations-filter-form"
             method="get"
+            onSubmit={() => setIsDirty(false)}
             style={{ display: "grid", gap: 16 }}
           >
             {preservedSearchParams.map(({ name, value }, index) => (
@@ -1675,6 +1660,7 @@ export default function LocationsPage() {
                   name="startDate"
                   type="date"
                   defaultValue={startDate}
+                  onChange={() => setIsDirty(true)}
                   style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
                 />
               </label>
@@ -1684,6 +1670,7 @@ export default function LocationsPage() {
                   name="endDate"
                   type="date"
                   defaultValue={endDate}
+                  onChange={() => setIsDirty(true)}
                   style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
                 />
               </label>
@@ -1692,6 +1679,7 @@ export default function LocationsPage() {
                 <select
                   name="staff"
                   defaultValue={selectedStaff}
+                  onChange={() => setIsDirty(true)}
                   style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
                 >
                   <option value="">All staff</option>
@@ -1707,6 +1695,7 @@ export default function LocationsPage() {
                 <select
                   name="vendor"
                   defaultValue={selectedVendor}
+                  onChange={() => setIsDirty(true)}
                   style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
                 >
                   <option value="">All vendors</option>
@@ -1739,11 +1728,12 @@ export default function LocationsPage() {
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
                     setDraftLocationIds(
                       locations.map((location) => location.shopify_location_id),
-                    )
-                  }
+                    );
+                    setIsDirty(true);
+                  }}
                   style={{
                     alignItems: "center",
                     background: "white",
@@ -1778,7 +1768,7 @@ export default function LocationsPage() {
                     <input
                       type="checkbox"
                       checked={draftLocationIds.includes(location.shopify_location_id)}
-                      onChange={(event) =>
+                      onChange={(event) => {
                         setDraftLocationIds((current) =>
                           event.target.checked
                             ? Array.from(
@@ -1790,8 +1780,9 @@ export default function LocationsPage() {
                             : current.filter(
                                 (id) => id !== location.shopify_location_id,
                               ),
-                        )
-                      }
+                        );
+                        setIsDirty(true);
+                      }}
                     />
                     {location.name}
                   </label>
@@ -1799,11 +1790,38 @@ export default function LocationsPage() {
               </div>
             </div>
 
+            {isDirty ? (
+              <div
+                style={{
+                  background: "#eff8ff",
+                  border: "1px solid #b2ddff",
+                  borderRadius: 10,
+                  color: "#175cd3",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  padding: "8px 10px",
+                  width: "fit-content",
+                }}
+              >
+                Filters changed. Click Apply to update.
+              </div>
+            ) : null}
+
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <AppButton type="submit" name="preset" value="today" variant="secondary">
+              <AppButton
+                type="submit"
+                name="preset"
+                value="today"
+                variant="secondary"
+                onClick={() => setIsDirty(false)}
+              >
                 Today
               </AppButton>
-              <AppButton type="submit" variant="primary">
+              <AppButton
+                type="submit"
+                variant="primary"
+                onClick={() => setIsDirty(false)}
+              >
                 Apply
               </AppButton>
             </div>
@@ -1834,7 +1852,11 @@ export default function LocationsPage() {
         ) : null}
 
         <KpiGrid kpis={kpis} />
-        <TrendChart rows={trendRows} period={period} />
+        <TrendChart
+          rows={trendRows}
+          period={period}
+          onFilterChange={() => setIsDirty(true)}
+        />
         <RevenueBreakdownSection
           revenueByVendor={revenueByVendor}
           revenueByStaff={revenueByStaff}
