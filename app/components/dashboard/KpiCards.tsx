@@ -5,84 +5,20 @@ import {
 } from "../../lib/dashboard/dashboard-metrics";
 import type { DashboardLoaderData } from "../../lib/dashboard/dashboard-types";
 
-function escapeCsvValue(value: unknown) {
-  const stringValue = String(value ?? "");
-  const escaped = stringValue.replace(/"/g, '""');
-
-  return `"${escaped}"`;
-}
-
-function downloadCsv(
-  filename: string,
-  headers: string[],
-  rows: Array<Array<unknown>>,
-) {
-  const csvContent = [
-    headers.map(escapeCsvValue).join(","),
-    ...rows.map((row) => row.map(escapeCsvValue).join(",")),
-  ].join("\n");
-
-  const blob = new Blob([csvContent], {
-    type: "text/csv;charset=utf-8;",
-  });
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-
-  link.href = url;
-  link.download = filename;
-  link.click();
-
-  URL.revokeObjectURL(url);
-}
-
-function ExportButton({
-  label = "CSV",
-  onClick,
-}: {
-  label?: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        border: "1px solid #d1d5db",
-        background: "#ffffff",
-        borderRadius: 10,
-        padding: "7px 10px",
-        fontSize: 12,
-        fontWeight: 700,
-        cursor: "pointer",
-        color: "#202223",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
 function KpiCard({
   title,
   value,
   subtitle,
-  exportValue,
-  selectedLocationName,
-  startDate,
-  endDate,
+  explanation,
 }: {
   title: string;
   value: string;
   subtitle: string;
-  exportValue: string | number;
-  selectedLocationName: string | null;
-  startDate: string;
-  endDate: string;
+  explanation: string;
 }) {
   return (
     <section
+      title={explanation}
       style={{
         background: "white",
         border: "1px solid #e5e7eb",
@@ -92,35 +28,8 @@ function KpiCard({
         minHeight: 132,
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "flex-start",
-          marginBottom: 10,
-        }}
-      >
-        <div style={{ color: "#5f6368", fontSize: 14, fontWeight: 700 }}>
-          {title}
-        </div>
-        <ExportButton
-          onClick={() =>
-            downloadCsv(
-              `${title.toLowerCase().replaceAll(" ", "-")}.csv`,
-              ["Metric", "Value", "Location", "Start date", "End date"],
-              [
-                [
-                  title,
-                  exportValue,
-                  selectedLocationName ?? "-",
-                  startDate,
-                  endDate,
-                ],
-              ],
-            )
-          }
-        />
+      <div style={{ color: "#5f6368", fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
+        {title}
       </div>
       <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
         {value}
@@ -156,55 +65,37 @@ export function KpiCards({
         title="Revenue"
         value={formatCurrency(kpis.revenue)}
         subtitle="Synced retail sales"
-        exportValue={kpis.revenue}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Total synced sales revenue for the selected location and date range."
       />
       <KpiCard
         title="Orders"
         value={formatNumber(kpis.ordersCount)}
         subtitle="Unique orders for this location"
-        exportValue={kpis.ordersCount}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Unique Shopify orders represented in the selected location and date range."
       />
       <KpiCard
         title="Units sold"
         value={formatNumber(kpis.unitsSold)}
         subtitle="Quantity sold from order lines"
-        exportValue={kpis.unitsSold}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Total quantity sold across synced order lines in the selected range."
       />
       <KpiCard
         title="COGS"
         value={formatCurrency(kpis.cogs)}
         subtitle="Product costs"
-        exportValue={kpis.cogs}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Cost of goods sold from product cost data attached to order lines."
       />
       <KpiCard
         title="Gross profit"
         value={formatCurrency(kpis.grossProfit)}
         subtitle="Revenue minus COGS"
-        exportValue={kpis.grossProfit}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Revenue minus cost of goods sold for the selected range."
       />
       <KpiCard
         title="Gross margin"
         value={formatPercent(kpis.grossMarginPct)}
         subtitle="Gross profit / revenue"
-        exportValue={kpis.grossMarginPct ?? ""}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Gross profit as a percentage of revenue."
       />
       <KpiCard
         title="Expenses"
@@ -212,10 +103,7 @@ export function KpiCards({
           kpis.expenses === null ? "Not configured" : formatCurrency(kpis.expenses)
         }
         subtitle="Fixed expenses from DB"
-        exportValue={kpis.expenses ?? "Not configured"}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Fixed expenses allocated to the selected location and date range."
       />
       <KpiCard
         title="Net profit"
@@ -223,10 +111,7 @@ export function KpiCards({
           kpis.netProfit === null ? "Not available" : formatCurrency(kpis.netProfit)
         }
         subtitle="Gross profit minus expenses"
-        exportValue={kpis.netProfit ?? "Not available"}
-        selectedLocationName={selectedLocationName}
-        startDate={startDate}
-        endDate={endDate}
+        explanation="Gross profit minus configured fixed expenses."
       />
     </section>
   );

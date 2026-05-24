@@ -12,7 +12,7 @@ type AppButtonProps = {
   style?: CSSProperties;
 } & Pick<
   ButtonHTMLAttributes<HTMLButtonElement>,
-  "type" | "disabled" | "onClick"
+  "type" | "disabled" | "onClick" | "name" | "value"
 >;
 
 type AppButtonLinkProps = {
@@ -100,6 +100,8 @@ export function AppButton({
   fullWidth = false,
   children,
   onClick,
+  name,
+  value,
   style,
 }: AppButtonProps) {
   const [isHovered, setIsHovered] = useState(false);
@@ -122,6 +124,8 @@ export function AppButton({
     <button
       type={type}
       disabled={disabled}
+      name={name}
+      value={value}
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => {
