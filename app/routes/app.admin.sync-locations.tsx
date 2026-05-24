@@ -1,9 +1,18 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useLocation,
+  useNavigation,
+} from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { AppButton, AppButtonLink } from "../components/ui/AppButton";
+import { HelperText } from "../components/ui/HelperText";
+import { InlineResult } from "../components/ui/InlineResult";
 import { syncLocations } from "../lib/sync/shopify-sync.server";
 
 type LoaderData = {
@@ -65,10 +74,22 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function SyncLocationsPage() {
   const loaderData = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
+  const location = useLocation();
+  const navigation = useNavigation();
+  const isSyncing = navigation.state !== "idle";
 
   return (
     <main style={{ padding: 28, fontFamily: "system-ui" }}>
+      <div style={{ marginBottom: 14 }}>
+        <AppButtonLink
+          to={`/app/admin/sync${location.search}`}
+          variant="secondary"
+        >
+          ← Back to Data Sync
+        </AppButtonLink>
+      </div>
       <h1>Sync locations</h1>
+      <HelperText>Refresh Shopify locations used by dashboard filters and permissions.</HelperText>
 
       <section
         style={{
@@ -89,20 +110,12 @@ export default function SyncLocationsPage() {
       </section>
 
       <Form method="post">
-        <button
-          type="submit"
-          style={{
-            border: "1px solid #202223",
-            background: "#202223",
-            color: "white",
-            borderRadius: 10,
-            padding: "10px 14px",
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          Refresh locations
-        </button>
+          <AppButton
+            type="submit"
+            disabled={isSyncing}
+          >
+            {isSyncing ? "Refreshing locations..." : "Refresh locations"}
+          </AppButton>
       </Form>
 
       {actionData ? (
@@ -116,11 +129,18 @@ export default function SyncLocationsPage() {
           }}
         >
           {actionData.ok ? (
-            <p>
-              Synced <strong>{actionData.syncedCount}</strong> locations.
-            </p>
+            <div>
+              <InlineResult variant="success">
+                Locations sync completed.
+              </InlineResult>
+              <p>
+                Synced <strong>{actionData.syncedCount}</strong> locations.
+              </p>
+            </div>
           ) : (
-            <pre style={{ whiteSpace: "pre-wrap" }}>{actionData.error}</pre>
+            <InlineResult variant="error">
+              {actionData.error ?? "Location sync failed."}
+            </InlineResult>
           )}
         </section>
       ) : null}

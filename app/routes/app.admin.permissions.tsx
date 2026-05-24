@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -49,6 +49,12 @@ type LoaderData = {
 type ActionData = {
   ok: boolean;
   message: string;
+  fieldErrors?: {
+    staff?: string;
+    shopify_user_id?: string;
+    role?: string;
+    locations?: string;
+  };
 };
 
 type AccessFormState = {
@@ -69,6 +75,8 @@ type PermissionGroup = {
   can_manage: boolean;
 };
 
+type ButtonVariant = "primary" | "secondary" | "danger";
+
 const emptyAccessForm: AccessFormState = {
   user_email: "",
   shopify_user_id: "",
@@ -78,11 +86,110 @@ const emptyAccessForm: AccessFormState = {
 };
 
 const roleDescriptions: Record<string, string> = {
-  admin: "Can access all locations and manage permissions.",
-  manager:
-    "Can view dashboard data and manage location-level settings for selected locations.",
-  viewer: "Can view dashboard data for selected locations.",
+  admin: "Admin — all locations and permission management.",
+  manager: "Manager — selected locations.",
+  viewer: "Viewer — read-only access to selected locations.",
 };
+
+const buttonBaseStyle = {
+  borderRadius: 10,
+  padding: "10px 14px",
+  fontWeight: 700,
+  transition:
+    "background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 80ms ease",
+};
+
+const buttonVariants: Record<
+  ButtonVariant,
+  {
+    border: string;
+    background: string;
+    color: string;
+    hoverBackground: string;
+    hoverBorder: string;
+    activeBackground: string;
+    disabledBackground: string;
+    disabledBorder: string;
+    disabledColor: string;
+  }
+> = {
+  primary: {
+    border: "#202223",
+    background: "#202223",
+    color: "white",
+    hoverBackground: "#303336",
+    hoverBorder: "#303336",
+    activeBackground: "#111213",
+    disabledBackground: "#8a8f93",
+    disabledBorder: "#8a8f93",
+    disabledColor: "white",
+  },
+  secondary: {
+    border: "#c9cccf",
+    background: "white",
+    color: "#202223",
+    hoverBackground: "#f6f6f7",
+    hoverBorder: "#8a8f93",
+    activeBackground: "#eceff1",
+    disabledBackground: "white",
+    disabledBorder: "#dde0e4",
+    disabledColor: "#8a8f93",
+  },
+  danger: {
+    border: "#c9cccf",
+    background: "white",
+    color: "#b42318",
+    hoverBackground: "#fff4f4",
+    hoverBorder: "#d92d20",
+    activeBackground: "#fee4e2",
+    disabledBackground: "white",
+    disabledBorder: "#dde0e4",
+    disabledColor: "#8a8f93",
+  },
+};
+
+function getButtonStyle({
+  variant,
+  disabled,
+  isHovered,
+  isActive,
+  compact = false,
+  fullWidth = false,
+}: {
+  variant: ButtonVariant;
+  disabled: boolean;
+  isHovered: boolean;
+  isActive: boolean;
+  compact?: boolean;
+  fullWidth?: boolean;
+}) {
+  const colors = buttonVariants[variant];
+  const background = disabled
+    ? colors.disabledBackground
+    : isActive
+      ? colors.activeBackground
+      : isHovered
+        ? colors.hoverBackground
+        : colors.background;
+  const borderColor = disabled
+    ? colors.disabledBorder
+    : isHovered || isActive
+      ? colors.hoverBorder
+      : colors.border;
+
+  return {
+    ...buttonBaseStyle,
+    width: fullWidth ? "100%" : undefined,
+    border: `1px solid ${borderColor}`,
+    background,
+    color: disabled ? colors.disabledColor : colors.color,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.72 : 1,
+    padding: compact ? "6px 10px" : buttonBaseStyle.padding,
+    borderRadius: compact ? 8 : buttonBaseStyle.borderRadius,
+    transform: isActive && !disabled ? "translateY(1px)" : "translateY(0)",
+  };
+}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
@@ -173,6 +280,10 @@ export async function action({ request }: ActionFunctionArgs) {
     return {
       ok: false,
       message: "Shopify user ID is required.",
+      fieldErrors: {
+        staff: "Select a staff member or enter a Shopify user ID manually.",
+        shopify_user_id: "Select a staff member or enter a Shopify user ID manually.",
+      },
     } satisfies ActionData;
   }
 
@@ -180,6 +291,9 @@ export async function action({ request }: ActionFunctionArgs) {
     return {
       ok: false,
       message: "Role is required.",
+      fieldErrors: {
+        role: "Select a role.",
+      },
     } satisfies ActionData;
   }
 
@@ -187,6 +301,9 @@ export async function action({ request }: ActionFunctionArgs) {
     return {
       ok: false,
       message: "Select at least one location.",
+      fieldErrors: {
+        locations: "Select at least one location for this role.",
+      },
     } satisfies ActionData;
   }
 
@@ -284,6 +401,24 @@ function FieldHelp({ children }: { children: React.ReactNode }) {
   );
 }
 
+function FieldError({ children }: { children?: React.ReactNode }) {
+  if (!children) return null;
+
+  return (
+    <span
+      style={{
+        color: "#b42318",
+        fontSize: 13,
+        fontWeight: 700,
+        lineHeight: 1.35,
+        overflowWrap: "anywhere",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 function groupPermissions(permissions: PermissionRow[]) {
   const groups = new Map<string, PermissionGroup>();
 
@@ -354,6 +489,17 @@ function getStaffLabel(staffMember: StaffMemberRow) {
   return `${label}${detail}`;
 }
 
+function getStaffDisplayName(staffMember?: StaffMemberRow) {
+  if (!staffMember) return null;
+
+  return (
+    staffMember.name ||
+    [staffMember.first_name, staffMember.last_name].filter(Boolean).join(" ") ||
+    staffMember.email ||
+    null
+  );
+}
+
 export default function AdminPermissionsPage() {
   const { shop, currentUser, locations, permissions, staffMembers } =
     useLoaderData<LoaderData>();
@@ -363,14 +509,71 @@ export default function AdminPermissionsPage() {
     () => groupPermissions(permissions),
     [permissions],
   );
+  const staffById = useMemo(
+    () =>
+      new Map(
+        staffMembers.map((staffMember) => [
+          staffMember.shopify_staff_id,
+          staffMember,
+        ]),
+      ),
+    [staffMembers],
+  );
   const [formState, setFormState] = useState<AccessFormState>(emptyAccessForm);
+  const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
+  const [hoveredButton, setHoveredButton] = useState<string | null>(null);
+  const [activeButton, setActiveButton] = useState<string | null>(null);
   const isSubmitting = navigation.state !== "idle";
   const activeIntent = navigation.formData?.get("intent");
   const isSaving = isSubmitting && activeIntent === "save";
   const isDeleting = isSubmitting && activeIntent === "delete";
   const isAdminRole = formState.role === "admin";
+  const visibleActionData = isActionFeedbackHidden ? undefined : actionData;
+  const fieldErrors = visibleActionData?.ok ? undefined : visibleActionData?.fieldErrors;
+  const hasStaffError = Boolean(fieldErrors?.staff || fieldErrors?.shopify_user_id);
+  const staffFieldBorder = hasStaffError ? "1px solid #d92d20" : "1px solid #c9cccf";
+  const roleFieldBorder = fieldErrors?.role ? "1px solid #d92d20" : "1px solid #c9cccf";
+  const locationsBorder = fieldErrors?.locations ? "1px solid #d92d20" : "1px solid transparent";
+
+  useEffect(() => {
+    setIsActionFeedbackHidden(false);
+  }, [actionData]);
+
+  function clearActionFeedback() {
+    setIsActionFeedbackHidden(true);
+  }
+
+  function getButtonProps({
+    id,
+    variant,
+    disabled = false,
+    compact = false,
+  }: {
+    id: string;
+    variant: ButtonVariant;
+    disabled?: boolean;
+    compact?: boolean;
+  }) {
+    return {
+      style: getButtonStyle({
+        variant,
+        disabled,
+        compact,
+        isHovered: hoveredButton === id,
+        isActive: activeButton === id,
+      }),
+      onMouseEnter: () => setHoveredButton(id),
+      onMouseLeave: () => {
+        setHoveredButton(null);
+        setActiveButton(null);
+      },
+      onMouseDown: () => setActiveButton(id),
+      onMouseUp: () => setActiveButton(null),
+    };
+  }
 
   function toggleLocation(locationId: string, checked: boolean) {
+    clearActionFeedback();
     setFormState((current) => ({
       ...current,
       locationIds: checked
@@ -380,6 +583,7 @@ export default function AdminPermissionsPage() {
   }
 
   function editGroup(group: PermissionGroup) {
+    clearActionFeedback();
     setFormState({
       user_email: group.user_email,
       shopify_user_id: group.shopify_user_id,
@@ -394,19 +598,40 @@ export default function AdminPermissionsPage() {
   }
 
   function clearForm() {
+    clearActionFeedback();
     setFormState(emptyAccessForm);
   }
 
   function selectStaffMember(staffId: string) {
+    clearActionFeedback();
+
+    if (!staffId) {
+      setFormState((current) => ({
+        ...current,
+        selectedStaffId: "",
+        shopify_user_id: "",
+        user_email: "",
+      }));
+      return;
+    }
+
     const staffMember = staffMembers.find(
       (member) => member.shopify_staff_id === staffId,
+    );
+    const existingAccess = permissionGroups.find(
+      (group) => group.shopify_user_id === staffId,
     );
 
     setFormState((current) => ({
       ...current,
       selectedStaffId: staffId,
       shopify_user_id: staffMember?.shopify_staff_id ?? current.shopify_user_id,
-      user_email: staffMember?.email ?? current.user_email,
+      user_email: existingAccess?.user_email || staffMember?.email || current.user_email,
+      role: existingAccess?.role ?? emptyAccessForm.role,
+      locationIds:
+        existingAccess?.role === "admin"
+          ? []
+          : existingAccess?.locationIds ?? emptyAccessForm.locationIds,
     }));
   }
 
@@ -414,44 +639,32 @@ export default function AdminPermissionsPage() {
     <main style={{ minHeight: "100vh", background: "#f6f6f7", padding: 28, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <header style={{ marginBottom: 28 }}>
-          <div style={{ color: "#616161", fontSize: 14, marginBottom: 6 }}>Admin</div>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Location permissions</h1>
-          <p style={{ color: "#616161" }}>Shop: <strong>{shop}</strong></p>
-          <p style={{ color: "#616161" }}>
-            Current user: <strong>{currentUser.displayName}</strong>
-            {currentUser.email ? ` · ${currentUser.email}` : ""}
-            {currentUser.shopifyUserId ? ` · Shopify user ${currentUser.shopifyUserId}` : ""}
+          <h1 style={{ margin: 0, fontSize: 32 }}>Permissions</h1>
+          <p style={{ color: "#616161", margin: "8px 0 0" }}>
+            Manage staff access by location.
           </p>
         </header>
 
-        {actionData ? (
-          <div
-            style={{
-              background: actionData.ok ? "#ecfdf3" : "#fef3f2",
-              border: `1px solid ${actionData.ok ? "#abefc6" : "#fecdca"}`,
-              color: actionData.ok ? "#067647" : "#b42318",
-              borderRadius: 12,
-              padding: 14,
-              marginBottom: 20,
-              fontWeight: 700,
-            }}
-          >
-            {actionData.message}
-          </div>
-        ) : null}
-
         <div style={{ display: "grid", gap: 20 }}>
-          <Card title="Add or replace user access">
+          <Card title="Grant access">
             <Form method="post" style={{ display: "grid", gap: 18 }}>
               <input type="hidden" name="intent" value="save" />
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
+                    Step 1
+                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>Staff member</div>
+                  <FieldHelp>Select a staff member synced from Shopify.</FieldHelp>
+                </div>
+
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
                   Staff member
                   <select
                     value={formState.selectedStaffId}
                     onChange={(event) => selectStaffMember(event.target.value)}
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
                   >
                     <option value="">Manual entry</option>
                     {staffMembers.map((staffMember) => (
@@ -465,76 +678,111 @@ export default function AdminPermissionsPage() {
                   </select>
                   <FieldHelp>
                     {staffMembers.length > 0
-                      ? "Choose synced Shopify staff or keep manual entry."
-                      : "No synced staff yet. Use manual entry or run Sync staff members."}
+                      ? "The selected staff member fills the email and Shopify user ID automatically."
+                      : "No staff members synced yet. Go to Sync Center and run Sync staff members."}
                   </FieldHelp>
+                  <FieldError>{fieldErrors?.staff}</FieldError>
                 </label>
 
-                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Email
-                  <input
-                    name="user_email"
-                    placeholder="manager@local.ca"
-                    value={formState.user_email}
-                    onChange={(event) =>
-                      setFormState((current) => ({
-                        ...current,
-                        user_email: event.target.value,
-                      }))
-                    }
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                  />
-                  <FieldHelp>Optional display label.</FieldHelp>
-                </label>
+                <details style={{ border: hasStaffError ? "1px solid #d92d20" : "1px solid #e3e3e3", borderRadius: 10, padding: 14, background: hasStaffError ? "#fff4f4" : "#fafafa" }}>
+                  <summary
+                    onClick={clearActionFeedback}
+                    style={{ cursor: "pointer", fontWeight: 800 }}
+                  >
+                    Advanced: manual Shopify user ID
+                  </summary>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginTop: 14 }}>
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                      Email
+                      <input
+                        name="user_email"
+                        placeholder="manager@local.ca"
+                        value={formState.user_email}
+                        onChange={(event) => {
+                          clearActionFeedback();
+                          setFormState((current) => ({
+                            ...current,
+                            user_email: event.target.value,
+                          }));
+                        }}
+                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                      />
+                      <FieldHelp>Optional display label.</FieldHelp>
+                    </label>
 
-                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Shopify user ID
-                  <input
-                    name="shopify_user_id"
-                    required
-                    placeholder="90052427974"
-                    value={formState.shopify_user_id}
-                    onChange={(event) =>
-                      setFormState((current) => ({
-                        ...current,
-                        shopify_user_id: event.target.value,
-                      }))
-                    }
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                  />
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                      Shopify user ID
+                      <input
+                        name="shopify_user_id"
+                        required
+                        placeholder="90052427974"
+                        value={formState.shopify_user_id}
+                        onChange={(event) => {
+                          clearActionFeedback();
+                          setFormState((current) => ({
+                            ...current,
+                            selectedStaffId: "",
+                            shopify_user_id: event.target.value,
+                          }));
+                        }}
+                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
+                      />
+                      <FieldHelp>
+                        Use this only if the staff member is not listed.
+                      </FieldHelp>
+                      <FieldError>{fieldErrors?.shopify_user_id}</FieldError>
+                    </label>
+                  </div>
+                </details>
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
+                    Step 2
+                  </div>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>Role</div>
                   <FieldHelp>
-                    Required. Staff dropdown fills this automatically when available.
+                    Admin — all locations and permission management. Manager — selected locations. Viewer — read-only access to selected locations.
                   </FieldHelp>
+                </div>
+
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Role
+                  <select
+                    name="role"
+                    required
+                    value={formState.role}
+                    onChange={(event) => {
+                      clearActionFeedback();
+                      setFormState((current) => ({
+                        ...current,
+                        role: event.target.value,
+                        locationIds:
+                          event.target.value === "admin"
+                          ? []
+                          : current.locationIds,
+                      }));
+                    }}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: roleFieldBorder }}
+                  >
+                    <option value="viewer">Viewer</option>
+                    <option value="manager">Manager</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <FieldHelp>{roleDescriptions[formState.role]}</FieldHelp>
+                  <FieldError>{fieldErrors?.role}</FieldError>
                 </label>
               </div>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                Role
-                <select
-                  name="role"
-                  required
-                  value={formState.role}
-                  onChange={(event) =>
-                    setFormState((current) => ({
-                      ...current,
-                      role: event.target.value,
-                      locationIds:
-                        event.target.value === "admin"
-                          ? []
-                          : current.locationIds,
-                    }))
-                  }
-                  style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
-                >
-                  <option value="viewer">Viewer</option>
-                  <option value="manager">Manager</option>
-                  <option value="admin">Admin</option>
-                </select>
-                <FieldHelp>{roleDescriptions[formState.role]}</FieldHelp>
-              </label>
-
-              <div>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>Locations</div>
+              <div style={{ border: locationsBorder, borderRadius: 10, padding: fieldErrors?.locations ? 12 : 0, background: fieldErrors?.locations ? "#fff4f4" : "transparent" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
+                  Step 3
+                </div>
+                <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 4 }}>Locations</div>
+                <FieldHelp>
+                  Admin can access all locations. Manager/viewer must select one or more locations.
+                </FieldHelp>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
                   {locations.map((location) => (
                     <label key={location.shopify_location_id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -557,18 +805,50 @@ export default function AdminPermissionsPage() {
                     </label>
                   ))}
                 </div>
-                <p style={{ color: "#616161", fontSize: 13, lineHeight: 1.35 }}>
-                  For admin role, locations are ignored and access is global.
-                </p>
+                {locations.length === 0 ? (
+                  <p style={{ color: "#616161", fontSize: 13, lineHeight: 1.35 }}>
+                    No locations synced yet. Sync locations first.
+                  </p>
+                ) : null}
+                <FieldError>{fieldErrors?.locations}</FieldError>
               </div>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #202223", background: isSubmitting ? "#8a8f93" : "#202223", color: "white", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <button
+                  disabled={isSubmitting}
+                  type="submit"
+                  {...getButtonProps({
+                    id: "save",
+                    variant: "primary",
+                    disabled: isSubmitting,
+                  })}
+                >
                   {isSaving ? "Saving..." : "Save permissions"}
                 </button>
-                <button type="button" onClick={clearForm} disabled={isSubmitting} style={{ border: "1px solid #c9cccf", background: "white", color: "#202223", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+                <button
+                  type="button"
+                  onClick={clearForm}
+                  disabled={isSubmitting}
+                  {...getButtonProps({
+                    id: "new-access",
+                    variant: "secondary",
+                    disabled: isSubmitting,
+                  })}
+                >
                   New access
                 </button>
+                {visibleActionData?.ok ? (
+                  <span style={{ color: "#067647", fontSize: 14, fontWeight: 700 }}>
+                    {visibleActionData.message}
+                  </span>
+                ) : null}
+                {visibleActionData && !visibleActionData.ok ? (
+                  <span style={{ color: "#b42318", fontSize: 14, fontWeight: 700 }}>
+                    {visibleActionData.fieldErrors
+                      ? "Please fix the highlighted fields."
+                      : visibleActionData.message}
+                  </span>
+                ) : null}
               </div>
             </Form>
           </Card>
@@ -578,39 +858,84 @@ export default function AdminPermissionsPage() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr>
-                    {["User", "Shopify user id", "Role", "Locations", "Manage", ""].map((header) => (
+                    {["User", "Role", "Locations", "Manage", ""].map((header) => (
                       <th key={header} style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #ddd" }}>{header}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {permissionGroups.map((group) => (
-                    <tr key={group.key}>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.user_email || "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.shopify_user_id || "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.role}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.locationNames.join(", ") || "-"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{group.can_manage ? "Yes" : "No"}</td>
-                      <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button type="button" onClick={() => editGroup(group)} disabled={isSubmitting || !group.shopify_user_id} style={{ border: "1px solid #202223", background: "white", color: "#202223", borderRadius: 8, padding: "6px 10px" }}>
-                            Edit
-                          </button>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="delete" />
-                            <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
-                            <button disabled={isSubmitting || !group.shopify_user_id} type="submit" style={{ border: "1px solid #d72c0d", background: "white", color: isSubmitting ? "#8a8f93" : "#d72c0d", borderRadius: 8, padding: "6px 10px" }}>
-                              {isDeleting ? "Deleting..." : "Delete access"}
+                  {permissionGroups.map((group) => {
+                    const staffMember = staffById.get(group.shopify_user_id);
+                    const displayName = getStaffDisplayName(staffMember);
+                    const primaryLabel =
+                      displayName || group.user_email || "Manual user";
+
+                    return (
+                      <tr key={group.key}>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee", minWidth: 220 }}>
+                          <div style={{ fontWeight: 800 }}>
+                            {primaryLabel}
+                          </div>
+                          {group.user_email && group.user_email !== primaryLabel ? (
+                            <div style={{ color: "#616161", fontSize: 13 }}>
+                              {group.user_email}
+                            </div>
+                          ) : null}
+                          {group.shopify_user_id ? (
+                            <div style={{ color: "#8a8f93", fontSize: 12 }}>
+                              Shopify user {group.shopify_user_id}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee", textTransform: "capitalize" }}>
+                          {group.role}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+                          {group.locationNames.join(", ") || "-"}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+                          {group.can_manage ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              onClick={() => editGroup(group)}
+                              disabled={isSubmitting || !group.shopify_user_id}
+                              {...getButtonProps({
+                                id: `edit-${group.key}`,
+                                variant: "secondary",
+                                disabled: isSubmitting || !group.shopify_user_id,
+                                compact: true,
+                              })}
+                            >
+                              Edit
                             </button>
-                          </Form>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                            <Form method="post">
+                              <input type="hidden" name="intent" value="delete" />
+                              <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
+                              <button
+                                disabled={isSubmitting || !group.shopify_user_id}
+                                type="submit"
+                                {...getButtonProps({
+                                  id: `delete-${group.key}`,
+                                  variant: "danger",
+                                  disabled: isSubmitting || !group.shopify_user_id,
+                                  compact: true,
+                                })}
+                              >
+                                {isDeleting ? "Deleting..." : "Delete access"}
+                              </button>
+                            </Form>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {permissionGroups.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ padding: 14, color: "#616161" }}>
-                        No permissions configured.
+                      <td colSpan={5} style={{ padding: 14, color: "#616161" }}>
+                        No access rules created yet.
                       </td>
                     </tr>
                   ) : null}
@@ -618,6 +943,12 @@ export default function AdminPermissionsPage() {
               </table>
             </div>
           </Card>
+
+          <div style={{ color: "#8a8f93", fontSize: 12, lineHeight: 1.5 }}>
+            Environment details: {shop}. Current admin: {currentUser.displayName}
+            {currentUser.email ? ` (${currentUser.email})` : ""}
+            {currentUser.shopifyUserId ? ` · Shopify user ${currentUser.shopifyUserId}` : ""}
+          </div>
         </div>
       </div>
     </main>

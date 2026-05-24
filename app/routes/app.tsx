@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import type { DetailedHTMLProps, HTMLAttributes } from "react";
-import { Link, Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
+import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -41,9 +41,11 @@ export default function App() {
         <a href={`/app/db-dashboard${search}`} rel="home">
           Dashboard
         </a>
-        {canAdmin ? <a href={`/app/admin/sync${search}`}>Data sync</a> : null}
-        {canAdmin ? <a href={`/app/admin/permissions${search}`}>Permissions</a> : null}
+        <a href={`/app/locations${search}`}>Locations</a>
+        <a href={`/app/data-quality${search}`}>Data Quality</a>
         {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expenses</a> : null}
+        {canAdmin ? <a href={`/app/admin/permissions${search}`}>Permissions</a> : null}
+        {canAdmin ? <a href={`/app/admin/sync${search}`}>Data Sync</a> : null}
       </ui-nav-menu>
 
       <Outlet />

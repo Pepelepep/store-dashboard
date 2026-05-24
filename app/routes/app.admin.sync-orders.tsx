@@ -1,10 +1,20 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import {
+  data,
+  Form,
+  useActionData,
+  useLoaderData,
+  useLocation,
+  useNavigation,
+} from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { syncOrders } from "../lib/sync/shopify-sync.server";
+import { AppButton, AppButtonLink } from "../components/ui/AppButton";
+import { HelperText } from "../components/ui/HelperText";
+import { InlineResult } from "../components/ui/InlineResult";
 
 type LoaderData = {
   shop: string;
@@ -57,7 +67,21 @@ export async function action({ request }: ActionFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
-  await assertAdminAccess({ request, session, supabase });
+  try {
+    await assertAdminAccess({ request, session, supabase });
+  } catch (error) {
+    if (error instanceof Response && error.status === 403) {
+      return data(
+        {
+          ok: false,
+          error: "Forbidden: admin access required",
+        } satisfies ActionData,
+        { status: 403 },
+      );
+    }
+
+    throw error;
+  }
 
   const formData = await request.formData();
   const { startDate, endDate } = getOrderDateRangeFromForm(formData);
@@ -89,10 +113,26 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function SyncOrdersPage() {
   const loaderData = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
+  const location = useLocation();
+  const navigation = useNavigation();
+  const isSyncing = navigation.state !== "idle";
 
   return (
     <main style={{ padding: 28, fontFamily: "system-ui" }}>
-      <h1>Sync orders & order lines</h1>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 14 }}>
+        <AppButtonLink
+          to={`/app/admin/sync${location.search}`}
+          variant="secondary"
+        >
+          ← Back to Data Sync
+        </AppButtonLink>
+        </div>
+        <h1 style={{ marginBottom: 8 }}>Sync orders & order lines</h1>
+        <HelperText>
+          Refresh Shopify orders and order lines for the selected date range.
+        </HelperText>
+      </div>
 
       <section
         style={{
@@ -189,20 +229,12 @@ export default function SyncOrdersPage() {
             />
           </div>
 
-          <button
+          <AppButton
             type="submit"
-            style={{
-              border: "1px solid #202223",
-              background: "#202223",
-              color: "white",
-              borderRadius: 10,
-              padding: "10px 14px",
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
+            disabled={isSyncing}
           >
-            Refresh orders
-          </button>
+            {isSyncing ? "Refreshing orders..." : "Refresh orders"}
+          </AppButton>
         </div>
       </Form>
 
@@ -218,6 +250,7 @@ export default function SyncOrdersPage() {
         >
           {actionData.ok ? (
             <div>
+              <InlineResult variant="success">Orders sync completed.</InlineResult>
               <p>
                 Processed <strong>{actionData.pagesProcessed}</strong> order
                 pages.
@@ -231,7 +264,9 @@ export default function SyncOrdersPage() {
               </p>
             </div>
           ) : (
-            <pre style={{ whiteSpace: "pre-wrap" }}>{actionData.error}</pre>
+            <InlineResult variant="error">
+              {actionData.error ?? "Orders sync failed."}
+            </InlineResult>
           )}
         </section>
       ) : null}
