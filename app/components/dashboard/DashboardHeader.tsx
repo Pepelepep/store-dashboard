@@ -1,11 +1,18 @@
 import { formatStoreDateTime } from "../../lib/dashboard/dashboard-metrics";
-import type { LocationRow } from "../../lib/dashboard/dashboard-types";
+import type {
+  DashboardFilterOption,
+  LocationRow,
+} from "../../lib/dashboard/dashboard-types";
 import { DashboardFilters } from "./DashboardFilters";
 
 export function DashboardHeader({
   locations,
   selectedLocationId,
   selectedLocationName,
+  selectedStaff,
+  selectedVendor,
+  staffOptions,
+  vendorOptions,
   startDate,
   endDate,
   preservedSearchParams,
@@ -15,6 +22,10 @@ export function DashboardHeader({
   locations: LocationRow[];
   selectedLocationId: string | null;
   selectedLocationName: string | null;
+  selectedStaff: string;
+  selectedVendor: string;
+  staffOptions: DashboardFilterOption[];
+  vendorOptions: DashboardFilterOption[];
   startDate: string;
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;
@@ -35,6 +46,10 @@ export function DashboardHeader({
       <DashboardFilters
         locations={locations}
         selectedLocationId={selectedLocationId}
+        selectedStaff={selectedStaff}
+        selectedVendor={selectedVendor}
+        staffOptions={staffOptions}
+        vendorOptions={vendorOptions}
         startDate={startDate}
         endDate={endDate}
         preservedSearchParams={preservedSearchParams}

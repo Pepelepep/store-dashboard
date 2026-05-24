@@ -109,11 +109,20 @@ export type RecentOrderRow = {
   costSource: string;
 };
 
+export type DashboardFilterOption = {
+  value: string;
+  label: string;
+};
+
 export type DashboardLoaderData = {
   shop: string;
   locations: LocationRow[];
   selectedLocationId: string | null;
   selectedLocationName: string | null;
+  selectedStaff: string;
+  selectedVendor: string;
+  staffOptions: DashboardFilterOption[];
+  vendorOptions: DashboardFilterOption[];
   startDate: string;
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;

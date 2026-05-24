@@ -1,19 +1,30 @@
 import { Form } from "react-router";
 import { useEffect, useState } from "react";
 
-import type { LocationRow } from "../../lib/dashboard/dashboard-types";
+import type {
+  DashboardFilterOption,
+  LocationRow,
+} from "../../lib/dashboard/dashboard-types";
 import { AppButton } from "../ui/AppButton";
 import { InlineResult } from "../ui/InlineResult";
 
 export function DashboardFilters({
   locations,
   selectedLocationId,
+  selectedStaff,
+  selectedVendor,
+  staffOptions,
+  vendorOptions,
   startDate,
   endDate,
   preservedSearchParams,
 }: {
   locations: LocationRow[];
   selectedLocationId: string | null;
+  selectedStaff: string;
+  selectedVendor: string;
+  staffOptions: DashboardFilterOption[];
+  vendorOptions: DashboardFilterOption[];
   startDate: string;
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;
@@ -27,7 +38,7 @@ export function DashboardFilters({
     setStartDateValue(startDate);
     setEndDateValue(endDate);
     setHasUnsavedFilters(false);
-  }, [startDate, endDate, selectedLocationId]);
+  }, [startDate, endDate, selectedLocationId, selectedStaff, selectedVendor]);
 
   function getTodayDateValue() {
     const today = new Date();
@@ -144,7 +155,7 @@ export function DashboardFilters({
         style={{
           marginTop: 22,
           display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(160px, 220px))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 220px))",
           gap: 14,
           alignItems: "end",
         }}
@@ -215,6 +226,80 @@ export function DashboardFilters({
               boxSizing: "border-box",
             }}
           />
+        </div>
+
+        <div style={{ minWidth: 0 }}>
+          <label
+            htmlFor="staff"
+            style={{
+              display: "block",
+              fontSize: 14,
+              fontWeight: 800,
+              marginBottom: 6,
+            }}
+          >
+            Staff
+          </label>
+          <select
+            id="staff"
+            name="staff"
+            defaultValue={selectedStaff}
+            onChange={() => setHasUnsavedFilters(true)}
+            style={{
+              width: "100%",
+              padding: "9px 10px",
+              borderRadius: 12,
+              border: "1px solid #c9c9c9",
+              background: "white",
+              fontSize: 14,
+              minHeight: 44,
+              boxSizing: "border-box",
+            }}
+          >
+            <option value="">All staff</option>
+            {staffOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ minWidth: 0 }}>
+          <label
+            htmlFor="vendor"
+            style={{
+              display: "block",
+              fontSize: 14,
+              fontWeight: 800,
+              marginBottom: 6,
+            }}
+          >
+            Vendor
+          </label>
+          <select
+            id="vendor"
+            name="vendor"
+            defaultValue={selectedVendor}
+            onChange={() => setHasUnsavedFilters(true)}
+            style={{
+              width: "100%",
+              padding: "9px 10px",
+              borderRadius: 12,
+              border: "1px solid #c9c9c9",
+              background: "white",
+              fontSize: 14,
+              minHeight: 44,
+              boxSizing: "border-box",
+            }}
+          >
+            <option value="">All vendors</option>
+            {vendorOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
