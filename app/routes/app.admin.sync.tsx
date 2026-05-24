@@ -1,7 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
-  Link,
   useActionData,
   useLoaderData,
   useLocation,
@@ -15,7 +14,7 @@ import {
   runFullSync,
   syncStaffMembers,
 } from "../lib/sync/shopify-sync.server";
-import { AppButton } from "../components/ui/AppButton";
+import { AppButton, AppButtonLink } from "../components/ui/AppButton";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { StatusBadge } from "../components/ui/StatusBadge";
@@ -244,39 +243,61 @@ function formatSyncRunDetails(run: SyncRun) {
   }
 }
 
-const detailLabels: Record<string, string> = {
-  syncedCount: "Synced",
-  productsSynced: "Products",
-  variantsSynced: "Variants",
-  variantsWithUnitCostSynced: "Variants with cost",
-  variantsWithMissingUnitCost: "Variants missing cost",
-  orderLinesCogsRecomputed: "COGS recomputed",
-  inventoryItemsProcessed: "Inventory items",
-  inventoryLevelsSynced: "Inventory levels",
-  ordersSynced: "Orders",
-  orderLinesSynced: "Order lines",
-  pagesProcessed: "Pages",
-  staffAttributionAvailable: "Staff attribution",
-  staffAttributionError: "Staff attribution error",
-};
+function formatDetailSummary(run?: SyncRun | null) {
+  if (!run?.details) return "No count details recorded yet.";
 
-function formatDetailValue(value: unknown) {
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (value === null || value === undefined || value === "") return null;
-  return String(value);
-}
+  const details = run.details;
 
-function getDetailItems(details?: Record<string, unknown> | null) {
-  if (!details) return [];
-
-  return Object.entries(detailLabels)
-    .map(([key, label]) => {
-      const value = formatDetailValue(details[key]);
-      return value ? { key, label, value } : null;
-    })
-    .filter((item): item is { key: string; label: string; value: string } =>
-      Boolean(item),
-    );
+  switch (run.sync_type) {
+    case "locations":
+      return details.syncedCount === undefined
+        ? "No count details recorded yet."
+        : `${details.syncedCount} locations`;
+    case "products":
+      return [
+        details.productsSynced === undefined
+          ? null
+          : `${details.productsSynced} products`,
+        details.variantsSynced === undefined
+          ? null
+          : `${details.variantsSynced} variants`,
+        details.orderLinesCogsRecomputed === undefined
+          ? null
+          : `${details.orderLinesCogsRecomputed} COGS recalculated`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "No count details recorded yet.";
+    case "inventory":
+      return [
+        details.inventoryItemsProcessed === undefined
+          ? null
+          : `${details.inventoryItemsProcessed} inventory items`,
+        details.inventoryLevelsSynced === undefined
+          ? null
+          : `${details.inventoryLevelsSynced} levels`,
+        details.orderLinesCogsRecomputed === undefined
+          ? null
+          : `${details.orderLinesCogsRecomputed} COGS recalculated`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "No count details recorded yet.";
+    case "staff_members":
+      return details.syncedCount === undefined
+        ? "No count details recorded yet."
+        : `${details.syncedCount} staff members`;
+    case "orders":
+      return [
+        details.ordersSynced === undefined ? null : `${details.ordersSynced} orders`,
+        details.orderLinesSynced === undefined
+          ? null
+          : `${details.orderLinesSynced} lines`,
+        details.pagesProcessed === undefined ? null : `${details.pagesProcessed} pages`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "No count details recorded yet.";
+    default:
+      return "No count details recorded yet.";
+  }
 }
 
 function getSyncTypeSummary(runs: SyncRun[], syncType: string) {
@@ -426,7 +447,7 @@ function SyncTypeStatusCard({
 }) {
   const summary = getSyncTypeSummary(runs, config.syncType);
   const latestRun = summary.latestRun;
-  const detailItems = getDetailItems(latestRun?.details);
+  const duration = formatDuration(latestRun?.started_at, latestRun?.finished_at);
 
   return (
     <section
@@ -461,21 +482,22 @@ function SyncTypeStatusCard({
       </div>
 
       <div style={{ display: "grid", gap: 6, color: "#616161", fontSize: 13 }}>
-        <div>
-          <strong>Last success:</strong>{" "}
-          {formatDateTime(summary.lastSuccess?.finished_at)}
-        </div>
-        <div>
-          <strong>Last failure:</strong>{" "}
-          {formatDateTime(summary.lastError?.finished_at)}
-        </div>
-        <div>
-          <strong>Source:</strong> {latestRun?.source ?? "-"}
-        </div>
-        <div>
-          <strong>Duration:</strong>{" "}
-          {formatDuration(latestRun?.started_at, latestRun?.finished_at)}
-        </div>
+        {summary.lastSuccess?.finished_at ? (
+          <div>
+            <strong>Last success:</strong>{" "}
+            {formatDateTime(summary.lastSuccess.finished_at)}
+          </div>
+        ) : null}
+        {latestRun?.source ? (
+          <div>
+            <strong>Source:</strong> {latestRun.source}
+          </div>
+        ) : null}
+        {duration !== "-" ? (
+          <div>
+            <strong>Duration:</strong> {duration}
+          </div>
+        ) : null}
       </div>
 
       {summary.lastError?.error_message ? (
@@ -493,39 +515,29 @@ function SyncTypeStatusCard({
         </div>
       ) : null}
 
-      {detailItems.length > 0 ? (
-        <div
-          style={{
-            display: "grid",
-            gap: 6,
-            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-          }}
-        >
-          {detailItems.map((item) => (
-            <div
-              key={item.key}
-              style={{
-                background: "#f6f6f7",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                padding: 10,
-              }}
-            >
-              <div style={{ color: "#616161", fontSize: 11, fontWeight: 800 }}>
-                {item.label}
-              </div>
-              <div style={{ color: "#202223", fontSize: 14, fontWeight: 800 }}>
-                {item.value}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <HelperText>No count details recorded yet.</HelperText>
-      )}
+      <div
+        style={{
+          background: "#f6f6f7",
+          border: "1px solid #e3e3e3",
+          borderRadius: 10,
+          color: "#202223",
+          fontSize: 13,
+          fontWeight: 700,
+          padding: 10,
+        }}
+      >
+        {formatDetailSummary(latestRun)}
+      </div>
 
       {config.href ? (
-        <ButtonLink to={`${config.href}${search}`}>{config.actionLabel}</ButtonLink>
+        <AppButtonLink
+          to={`${config.href}${search}`}
+          variant="secondary"
+          compact
+          fullWidth
+        >
+          {config.actionLabel}
+        </AppButtonLink>
       ) : (
         <Form method="post">
           <input type="hidden" name="intent" value={config.formIntent} />
@@ -533,6 +545,7 @@ function SyncTypeStatusCard({
             type="submit"
             disabled={isSyncingStaff}
             variant="secondary"
+            compact
             fullWidth
           >
             {isSyncingStaff ? "Syncing staff..." : config.actionLabel}
@@ -540,33 +553,6 @@ function SyncTypeStatusCard({
         </Form>
       )}
     </section>
-  );
-}
-
-function ButtonLink({
-  to,
-  children,
-}: {
-  to: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Link
-      to={to}
-      style={{
-        display: "inline-block",
-        border: "1px solid #202223",
-        background: "#202223",
-        color: "white",
-        borderRadius: 10,
-        padding: "10px 14px",
-        fontWeight: 700,
-        textDecoration: "none",
-        textAlign: "center",
-      }}
-    >
-      {children}
-    </Link>
   );
 }
 
@@ -615,14 +601,32 @@ export default function AdminSyncPage() {
             borderRadius: 12,
             padding: 14,
             marginBottom: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
           }}
         >
-          <div style={{ fontWeight: 800 }}>Last successful sync</div>
-          <HelperText>
-            {lastSuccessfulSync?.finished_at
-              ? formatDateTime(lastSuccessfulSync.finished_at)
-              : "No successful sync run recorded yet."}
-          </HelperText>
+          <div>
+            <div style={{ fontWeight: 800 }}>Last successful sync</div>
+            <HelperText>
+              {lastSuccessfulSync?.finished_at
+                ? formatDateTime(lastSuccessfulSync.finished_at)
+                : "No successful sync run recorded yet."}
+            </HelperText>
+          </div>
+          <StatusBadge
+            variant={
+              getFreshness(lastSuccessfulSync) === "Fresh"
+                ? "success"
+                : getFreshness(lastSuccessfulSync) === "Stale"
+                  ? "warning"
+                  : "neutral"
+            }
+          >
+            {getFreshness(lastSuccessfulSync)}
+          </StatusBadge>
         </section>
 
         <section style={{ marginBottom: 24 }}>
@@ -651,34 +655,7 @@ export default function AdminSyncPage() {
           </div>
         </section>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: 16,
-            marginBottom: 24,
-          }}
-        >
-          {counts.map((row) => (
-            <Card key={row.table} title={row.table}>
-              <div style={{ fontSize: 28, fontWeight: 800 }}>{row.count}</div>
-              {row.error ? (
-                <div style={{ color: "#b42318", marginTop: 8 }}>
-                  {row.error}
-                </div>
-              ) : null}
-            </Card>
-          ))}
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-            gap: 20,
-            marginBottom: 24,
-          }}
-        >
+        <div style={{ marginBottom: 24 }}>
           <Card title="Refresh data">
             <div style={{ display: "grid", gap: 12 }}>
               <Form method="post">
@@ -698,71 +675,47 @@ export default function AdminSyncPage() {
                 </InlineResult>
               ) : null}
 
-              <div
-                style={{
-                  height: 1,
-                  background: "#e3e3e3",
-                  margin: "4px 0",
-                }}
-              />
-
-              <ButtonLink to={`/app/admin/sync-locations${search}`}>
-                Refresh locations
-              </ButtonLink>
-
-              <ButtonLink to={`/app/admin/sync-products${search}`}>
-                Refresh products & variants
-              </ButtonLink>
-
-              <ButtonLink to={`/app/admin/sync-inventory${search}`}>
-                Refresh inventory
-              </ButtonLink>
-
-              <ButtonLink to={`/app/admin/sync-orders${search}`}>
-                Refresh orders by date range
-              </ButtonLink>
-
-              <Form method="post">
-                <input type="hidden" name="intent" value="sync_staff_members" />
-                <AppButton
-                  type="submit"
-                  disabled={isSyncingStaff}
-                  variant="secondary"
-                  fullWidth
-                >
-                  {isSyncingStaff ? "Syncing staff..." : "Sync staff members"}
-                </AppButton>
-              </Form>
-            </div>
-          </Card>
-
-          <Card title="Recommended sync order">
-            <ol style={{ marginTop: 0, lineHeight: 1.8 }}>
-              <li>Refresh locations</li>
-              <li>Refresh products & variants</li>
-              <li>Refresh inventory</li>
-              <li>Sync staff members</li>
-              <li>Refresh orders</li>
-            </ol>
-
-            <div
-              style={{
-                background: "#fff8e5",
-                border: "1px solid #f1c96b",
-                borderRadius: 12,
-                padding: 14,
-                color: "#5f4200",
-                marginTop: 16,
-              }}
-            >
-              The full refresh uses the same flow as the scheduled daily cron.
-              Use it when the admin needs to force an immediate update.
+              <HelperText>
+                Recommended order: Locations → Products → Inventory → Staff → Orders.
+              </HelperText>
             </div>
           </Card>
         </div>
 
+        <Card title="Database records">
+          <HelperText>Current stored records for support and troubleshooting.</HelperText>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              marginTop: 12,
+            }}
+          >
+            {counts.map((row) => (
+              <div
+                key={row.table}
+                title={row.error}
+                style={{
+                  background: row.error ? "#fff4f4" : "#f6f6f7",
+                  border: `1px solid ${row.error ? "#f2b8b5" : "#e3e3e3"}`,
+                  borderRadius: 999,
+                  color: row.error ? "#b42318" : "#202223",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  padding: "6px 10px",
+                }}
+              >
+                {row.table}: {row.error ? "Error" : row.count}
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <div style={{ height: 24 }} />
+
         <Card title="Last sync runs">
-          <HelperText>Showing the 10 most recent runs.</HelperText>
+          <HelperText>Recent sync history for troubleshooting. Showing the 10 most recent runs.</HelperText>
           <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
             <table
               style={{
