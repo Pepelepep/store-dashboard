@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Form, useLoaderData } from "react-router";
 
 import { AppButton } from "../components/ui/AppButton";
@@ -930,7 +930,7 @@ function TrendChart({
           style={{
             display: "grid",
             gap: 10,
-            gridTemplateColumns: "82px minmax(0, 1fr)",
+            gridTemplateColumns: "72px minmax(0, 1fr)",
             width: "100%",
           }}
         >
@@ -940,7 +940,7 @@ function TrendChart({
               display: "grid",
               fontSize: 12,
               fontWeight: 800,
-              gridTemplateRows: "22px 150px 28px 84px 18px",
+              gridTemplateRows: "22px 150px 24px 84px 18px",
               textAlign: "right",
             }}
           >
@@ -997,7 +997,7 @@ function TrendChart({
                   ].join("\n")}
                   style={{
                     display: "grid",
-                    gridTemplateRows: "22px 150px 28px 84px 18px",
+                    gridTemplateRows: "22px 150px 24px 84px 18px",
                     justifyItems: "center",
                     minWidth: 0,
                   }}
@@ -1029,18 +1029,19 @@ function TrendChart({
                         background: row.revenue > 0 ? "#2563eb" : "#e5e7eb",
                         borderRadius: "6px 6px 2px 2px",
                         height: revenueHeight,
-                        maxWidth: 28,
-                        width: "70%",
+                        maxWidth: 26,
+                        minWidth: rows.length > 60 ? 2 : 4,
+                        width: "68%",
                       }}
                     />
                   </div>
                   <div
                     style={{
-                      borderTop: "1px solid #d1d5db",
                       color: "#616161",
                       fontSize: 10,
                       fontWeight: 800,
-                      lineHeight: "27px",
+                      lineHeight: "24px",
+                      position: "relative",
                       overflow: "hidden",
                       textAlign: "center",
                       textOverflow: "clip",
@@ -1048,6 +1049,16 @@ function TrendChart({
                       width: "100%",
                     }}
                   >
+                    <span
+                      style={{
+                        background: "#d1d5db",
+                        height: 1,
+                        left: 0,
+                        position: "absolute",
+                        right: 0,
+                        top: 0,
+                      }}
+                    />
                     {showLabel ? row.label : ""}
                   </div>
                   <div
@@ -1065,8 +1076,9 @@ function TrendChart({
                           row.ordersCount > 0 ? "#14b8a6" : "#e5e7eb",
                         borderRadius: "2px 2px 6px 6px",
                         height: ordersHeight,
-                        maxWidth: 28,
-                        width: "70%",
+                        maxWidth: 26,
+                        minWidth: rows.length > 60 ? 2 : 4,
+                        width: "68%",
                       }}
                     />
                   </div>
@@ -1417,6 +1429,7 @@ function RevenueByVendorCard({ rows }: { rows: RevenueBreakdownRow[] }) {
 
 function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
+  const axisTicks = [0, 0.5, 1];
 
   return (
     <section
@@ -1433,54 +1446,105 @@ function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
       </p>
 
       {rows.length > 0 && maxRevenue > 0 ? (
-        <div style={{ display: "grid", gap: 12 }}>
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            gridTemplateColumns: "minmax(96px, 132px) minmax(0, 1fr)",
+          }}
+        >
+          <div />
+          <div
+            style={{
+              color: "#8a8f93",
+              display: "grid",
+              fontSize: 11,
+              fontWeight: 700,
+              gridColumn: "2",
+              gridTemplateColumns: "repeat(3, 1fr)",
+              marginBottom: 2,
+            }}
+          >
+            {axisTicks.map((tick) => (
+              <span
+                key={tick}
+                style={{
+                  textAlign:
+                    tick === 0 ? "left" : tick === 0.5 ? "center" : "right",
+                }}
+              >
+                {tick === 0 ? "$0" : formatCompactCurrency(maxRevenue * tick)}
+              </span>
+            ))}
+          </div>
           {rows.map((row) => {
             const width = Math.max((row.revenue / maxRevenue) * 100, 2);
 
             return (
-              <div
-                key={row.label}
-                title={[
-                  `Staff: ${row.label}`,
-                  `Revenue: ${formatCurrency(row.revenue)}`,
-                  `Orders: ${formatNumber(row.ordersCount)}`,
-                  `Units: ${formatNumber(row.unitsSold)}`,
-                ].join("\n")}
-                style={{ display: "grid", gap: 5 }}
-              >
+              <Fragment key={row.label}>
                 <div
+                  title={row.label}
                   style={{
-                    alignItems: "baseline",
-                    display: "flex",
-                    gap: 10,
-                    justifyContent: "space-between",
+                    alignSelf: "center",
+                    color: "#202223",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  <span style={{ color: "#202223", fontSize: 13, fontWeight: 700 }}>
-                    {row.label}
-                  </span>
-                  <span style={{ color: "#616161", fontSize: 12, fontWeight: 800 }}>
-                    {formatCurrency(row.revenue)}
-                  </span>
+                  {row.label}
                 </div>
                 <div
+                  title={[
+                    `Staff: ${row.label}`,
+                    `Revenue: ${formatCurrency(row.revenue)}`,
+                    `Orders: ${formatNumber(row.ordersCount)}`,
+                    `Units: ${formatNumber(row.unitsSold)}`,
+                  ].join("\n")}
                   style={{
-                    background: "#eef2f7",
-                    borderRadius: 999,
-                    height: 10,
-                    overflow: "hidden",
+                    alignItems: "center",
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr) auto",
+                    gap: 8,
+                    minWidth: 0,
                   }}
                 >
                   <div
                     style={{
-                      background: "#2563eb",
-                      borderRadius: 999,
-                      height: "100%",
-                      width: `${width}%`,
+                      background:
+                        "linear-gradient(to right, transparent calc(50% - 1px), #e5e7eb calc(50% - 1px), #e5e7eb calc(50% + 1px), transparent calc(50% + 1px))",
+                      borderBottom: "1px solid #eef2f7",
+                      borderTop: "1px solid #eef2f7",
+                      height: 22,
+                      position: "relative",
                     }}
-                  />
+                  >
+                    <div
+                      style={{
+                        background: "#2563eb",
+                        borderRadius: "0 999px 999px 0",
+                        height: 12,
+                        left: 0,
+                        position: "absolute",
+                        top: 4,
+                        width: `${width}%`,
+                      }}
+                    />
+                  </div>
+                  <span
+                    style={{
+                      color: "#616161",
+                      fontSize: 12,
+                      fontWeight: 800,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {formatCurrency(row.revenue)}
+                  </span>
                 </div>
-              </div>
+              </Fragment>
             );
           })}
         </div>
