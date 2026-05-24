@@ -1,13 +1,15 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { Form, useLoaderData } from "react-router";
-import type { ReactNode } from "react";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
-import { SectionCard } from "../components/dashboard/SectionCard";
+import { BestSellersCard } from "../components/dashboard/BestSellersCard";
+import { KpiCards } from "../components/dashboard/KpiCards";
+import { RecentOrderLinesCard } from "../components/dashboard/RecentOrderLinesCard";
 import { SalesByStaffCard } from "../components/dashboard/SalesByStaffCard";
 import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
+import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
 import {
   buildShopifyOrderUrl,
   computeBestSellers,
@@ -16,9 +18,6 @@ import {
   computeSalesByVendor,
   computeStockAlerts,
   daysBetween,
-  formatCurrency,
-  formatNumber,
-  formatPercent,
   formatStoreDateTime,
   getTodayStoreDate,
   isActiveInventoryProduct,
@@ -33,235 +32,8 @@ import type {
   OrderLineDbRow,
   ProductDbRow,
   RecentOrderRow,
-  StockAlertRow,
   VariantDbRow,
 } from "../lib/dashboard/dashboard-types";
-
-function escapeCsvValue(value: unknown) {
-  const stringValue = String(value ?? "");
-  const escaped = stringValue.replace(/"/g, '""');
-
-  return `"${escaped}"`;
-}
-
-function downloadCsv(
-  filename: string,
-  headers: string[],
-  rows: Array<Array<unknown>>,
-) {
-  const csvContent = [
-    headers.map(escapeCsvValue).join(","),
-    ...rows.map((row) => row.map(escapeCsvValue).join(",")),
-  ].join("\n");
-
-  const blob = new Blob([csvContent], {
-    type: "text/csv;charset=utf-8;",
-  });
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-
-  link.href = url;
-  link.download = filename;
-  link.click();
-
-  URL.revokeObjectURL(url);
-}
-
-function ExportButton({
-  label = "CSV",
-  onClick,
-}: {
-  label?: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        border: "1px solid #d1d5db",
-        background: "#ffffff",
-        borderRadius: 10,
-        padding: "7px 10px",
-        fontSize: 12,
-        fontWeight: 700,
-        cursor: "pointer",
-        color: "#202223",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function KpiCard({
-  title,
-  value,
-  subtitle,
-  exportValue,
-  selectedLocationName,
-  startDate,
-  endDate,
-}: {
-  title: string;
-  value: string;
-  subtitle: string;
-  exportValue: string | number;
-  selectedLocationName: string | null;
-  startDate: string;
-  endDate: string;
-}) {
-  return (
-    <section
-      style={{
-        background: "white",
-        border: "1px solid #e5e7eb",
-        borderRadius: 18,
-        padding: 20,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
-        minHeight: 132,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "flex-start",
-          marginBottom: 10,
-        }}
-      >
-        <div style={{ color: "#5f6368", fontSize: 14, fontWeight: 700 }}>
-          {title}
-        </div>
-        <ExportButton
-          onClick={() =>
-            downloadCsv(
-              `${title.toLowerCase().replaceAll(" ", "-")}.csv`,
-              ["Metric", "Value", "Location", "Start date", "End date"],
-              [
-                [
-                  title,
-                  exportValue,
-                  selectedLocationName ?? "-",
-                  startDate,
-                  endDate,
-                ],
-              ],
-            )
-          }
-        />
-      </div>
-      <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
-        {value}
-      </div>
-      <div style={{ color: "#707070", fontSize: 13, lineHeight: 1.35 }}>
-        {subtitle}
-      </div>
-    </section>
-  );
-}
-
-function StatusBadge({ status }: { status: StockAlertRow["status"] }) {
-  const isCritical = status === "Critical";
-  const isWarning = status === "Warning";
-
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        borderRadius: 999,
-        padding: "4px 10px",
-        fontSize: 12,
-        fontWeight: 700,
-        background: isCritical ? "#fde8e8" : isWarning ? "#fff4d6" : "#e8f5e9",
-        color: isCritical ? "#8a1f11" : isWarning ? "#7a4b00" : "#1f6f3d",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {status}
-    </span>
-  );
-}
-
-function Table({
-  headers,
-  rows,
-}: {
-  headers: string[];
-  rows: Array<Array<string | number | ReactNode>>;
-}) {
-  return (
-    <div
-      style={{
-        overflowX: "auto",
-        overflowY: "auto",
-        maxHeight: 320,
-        border: "1px solid #f0f0f0",
-        borderRadius: 12,
-      }}
-    >
-      <table
-        style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}
-      >
-        <thead>
-          <tr>
-            {headers.map((header) => (
-              <th
-                key={header}
-                style={{
-                  textAlign: "left",
-                  padding: "12px 10px",
-                  borderBottom: "1px solid #dcdcdc",
-                  color: "#616161",
-                  fontWeight: 800,
-                  whiteSpace: "nowrap",
-                  position: "sticky",
-                  top: 0,
-                  background: "white",
-                  zIndex: 1,
-                }}
-              >
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length > 0 ? (
-            rows.map((row, index) => (
-              <tr key={index}>
-                {row.map((cell, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    style={{
-                      padding: "12px 10px",
-                      borderBottom: "1px solid #f0f0f0",
-                      verticalAlign: "top",
-                    }}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td
-                colSpan={headers.length}
-                style={{ padding: 16, color: "#707070" }}
-              >
-                No data for this selection.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
@@ -839,91 +611,12 @@ export default function DbDashboardPage() {
           MISSING_COST.
         </div>
 
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: 16,
-            marginBottom: 22,
-          }}
-        >
-          <KpiCard
-            title="Revenue"
-            value={formatCurrency(kpis.revenue)}
-            subtitle="Synced retail sales"
-            exportValue={kpis.revenue}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-          <KpiCard
-            title="Orders"
-            value={formatNumber(kpis.ordersCount)}
-            subtitle="Unique orders for this location"
-            exportValue={kpis.ordersCount}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-          <KpiCard
-            title="Units sold"
-            value={formatNumber(kpis.unitsSold)}
-            subtitle="Quantity sold from order lines"
-            exportValue={kpis.unitsSold}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-          <KpiCard
-            title="COGS"
-            value={formatCurrency(kpis.cogs)}
-            subtitle="Product costs"
-            exportValue={kpis.cogs}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-          <KpiCard
-            title="Gross profit"
-            value={formatCurrency(kpis.grossProfit)}
-            subtitle="Revenue minus COGS"
-            exportValue={kpis.grossProfit}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-          <KpiCard
-            title="Gross margin"
-            value={formatPercent(kpis.grossMarginPct)}
-            subtitle="Gross profit / revenue"
-            exportValue={kpis.grossMarginPct ?? ""}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-          <KpiCard
-            title="Expenses"
-            value={
-              kpis.expenses === null ? "Not configured" : formatCurrency(kpis.expenses)
-            }
-            subtitle="Fixed expenses from DB"
-            exportValue={kpis.expenses ?? "Not configured"}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-          <KpiCard
-            title="Net profit"
-            value={
-              kpis.netProfit === null ? "Not available" : formatCurrency(kpis.netProfit)
-            }
-            subtitle="Gross profit minus expenses"
-            exportValue={kpis.netProfit ?? "Not available"}
-            selectedLocationName={selectedLocationName}
-            startDate={startDate}
-            endDate={endDate}
-          />
-        </section>
+        <KpiCards
+          kpis={kpis}
+          selectedLocationName={selectedLocationName}
+          startDate={startDate}
+          endDate={endDate}
+        />
 
         <div
           style={{
@@ -933,60 +626,9 @@ export default function DbDashboardPage() {
             marginBottom: 20,
           }}
         >
-          <SectionCard
-            title="Best sellers"
-            exportConfig={{
-              filename: "best-sellers.csv",
-              headers: ["Product", "SKU", "Vendor", "Units", "Revenue"],
-              rows: bestSellers.map((row) => [
-                row.product,
-                row.sku,
-                row.vendor,
-                row.units,
-                row.revenue,
-              ]),
-            }}
-          >
-            <Table
-              headers={["Product", "SKU", "Vendor", "Units", "Revenue"]}
-              rows={bestSellers.map((row) => [
-                row.product,
-                row.sku,
-                row.vendor,
-                row.units,
-                formatCurrency(row.revenue),
-              ])}
-            />
-          </SectionCard>
+          <BestSellersCard bestSellers={bestSellers} />
 
-          <SectionCard
-            title="Soon out of stock"
-            subtitle="Days left = available stock / average daily units sold on selected range."
-            exportConfig={{
-              filename: "soon-out-of-stock.csv",
-              headers: ["Product", "SKU", "Available", "Sold", "Days left", "Status"],
-              rows: stockAlerts.map((row) => [
-                row.product,
-                row.sku,
-                row.available,
-                row.unitsSold,
-                row.daysLeft === null ? "-" : row.daysLeft.toFixed(1),
-                row.status,
-              ]),
-            }}
-          >
-            <Table
-              headers={["Product", "SKU", "Available", "Sold", "Days left", "Status"]}
-              rows={stockAlerts.map((row) => [
-                row.product,
-                row.sku,
-                row.available,
-                row.unitsSold,
-                row.daysLeft === null ? "-" : row.daysLeft.toFixed(1),
-                <StatusBadge key={`${row.sku}-${row.status}`} status={row.status} />,
-              ])}
-            />
-          </SectionCard>
+          <StockAlertsCard stockAlerts={stockAlerts} />
         </div>
 
         <div
@@ -1002,57 +644,7 @@ export default function DbDashboardPage() {
           <SalesByVendorCard salesByVendor={salesByVendor} />
         </div>
 
-        <SectionCard
-          title="Recent order lines"
-          exportConfig={{
-            filename: "recent-order-lines.csv",
-            headers: [
-              "Order",
-              "Date",
-              "Product",
-              "SKU",
-              "Qty",
-              "Revenue",
-              "COGS",
-              "Gross profit",
-            ],
-            rows: recentOrders.map((row) => [
-              row.orderName,
-              formatStoreDateTime(row.date),
-              row.product,
-              row.sku,
-              row.quantity,
-              row.revenue,
-              row.cogs ?? "-",
-              row.grossProfit ?? "-",
-            ]),
-          }}
-        >
-          <Table
-            headers={[
-              "Order",
-              "Date",
-              "Product",
-              "SKU",
-              "Qty",
-              "Revenue",
-              "COGS",
-              "Gross profit",
-            ]}
-            rows={recentOrders.map((row) => [
-              <a href={row.orderUrl} target="_blank" rel="noreferrer">
-                {row.orderName}
-              </a>,
-              formatStoreDateTime(row.date),
-              row.product,
-              row.sku,
-              row.quantity,
-              formatCurrency(row.revenue),
-              row.cogs === null ? "-" : formatCurrency(row.cogs),
-              row.grossProfit === null ? "-" : formatCurrency(row.grossProfit),
-            ])}
-          />
-        </SectionCard>
+        <RecentOrderLinesCard recentOrders={recentOrders} />
       </div>
     </main>
   );
