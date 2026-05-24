@@ -85,6 +85,14 @@ export type StaffSalesRow = {
   revenue: number;
 };
 
+export type SalesByHourRow = {
+  hour: number;
+  revenue: number;
+  unitsSold: number;
+  ordersCount: number;
+  averageOrderValue: number;
+};
+
 export type StockAlertRow = {
   product: string;
   variant: string;
@@ -144,6 +152,7 @@ export type DashboardLoaderData = {
   bestSellers: BestSellerRow[];
   salesByVendor: VendorRow[];
   salesByStaff: StaffSalesRow[];
+  salesByHour: SalesByHourRow[];
   stockAlerts: StockAlertRow[];
   recentOrders: RecentOrderRow[];
   errors: string[];
