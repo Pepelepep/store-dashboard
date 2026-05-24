@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -75,6 +75,8 @@ type PermissionGroup = {
   can_manage: boolean;
 };
 
+type ButtonVariant = "primary" | "secondary" | "danger";
+
 const emptyAccessForm: AccessFormState = {
   user_email: "",
   shopify_user_id: "",
@@ -88,6 +90,106 @@ const roleDescriptions: Record<string, string> = {
   manager: "Manager — selected locations.",
   viewer: "Viewer — read-only access to selected locations.",
 };
+
+const buttonBaseStyle = {
+  borderRadius: 10,
+  padding: "10px 14px",
+  fontWeight: 700,
+  transition:
+    "background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 80ms ease",
+};
+
+const buttonVariants: Record<
+  ButtonVariant,
+  {
+    border: string;
+    background: string;
+    color: string;
+    hoverBackground: string;
+    hoverBorder: string;
+    activeBackground: string;
+    disabledBackground: string;
+    disabledBorder: string;
+    disabledColor: string;
+  }
+> = {
+  primary: {
+    border: "#202223",
+    background: "#202223",
+    color: "white",
+    hoverBackground: "#303336",
+    hoverBorder: "#303336",
+    activeBackground: "#111213",
+    disabledBackground: "#8a8f93",
+    disabledBorder: "#8a8f93",
+    disabledColor: "white",
+  },
+  secondary: {
+    border: "#c9cccf",
+    background: "white",
+    color: "#202223",
+    hoverBackground: "#f6f6f7",
+    hoverBorder: "#8a8f93",
+    activeBackground: "#eceff1",
+    disabledBackground: "white",
+    disabledBorder: "#dde0e4",
+    disabledColor: "#8a8f93",
+  },
+  danger: {
+    border: "#c9cccf",
+    background: "white",
+    color: "#b42318",
+    hoverBackground: "#fff4f4",
+    hoverBorder: "#d92d20",
+    activeBackground: "#fee4e2",
+    disabledBackground: "white",
+    disabledBorder: "#dde0e4",
+    disabledColor: "#8a8f93",
+  },
+};
+
+function getButtonStyle({
+  variant,
+  disabled,
+  isHovered,
+  isActive,
+  compact = false,
+  fullWidth = false,
+}: {
+  variant: ButtonVariant;
+  disabled: boolean;
+  isHovered: boolean;
+  isActive: boolean;
+  compact?: boolean;
+  fullWidth?: boolean;
+}) {
+  const colors = buttonVariants[variant];
+  const background = disabled
+    ? colors.disabledBackground
+    : isActive
+      ? colors.activeBackground
+      : isHovered
+        ? colors.hoverBackground
+        : colors.background;
+  const borderColor = disabled
+    ? colors.disabledBorder
+    : isHovered || isActive
+      ? colors.hoverBorder
+      : colors.border;
+
+  return {
+    ...buttonBaseStyle,
+    width: fullWidth ? "100%" : undefined,
+    border: `1px solid ${borderColor}`,
+    background,
+    color: disabled ? colors.disabledColor : colors.color,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.72 : 1,
+    padding: compact ? "6px 10px" : buttonBaseStyle.padding,
+    borderRadius: compact ? 8 : buttonBaseStyle.borderRadius,
+    transform: isActive && !disabled ? "translateY(1px)" : "translateY(0)",
+  };
+}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
@@ -147,10 +249,6 @@ export async function action({ request }: ActionFunctionArgs) {
       return {
         ok: false,
         message: "Missing Shopify user ID.",
-        fieldErrors: {
-          staff: "Select a staff member or enter a Shopify user ID manually.",
-          shopify_user_id: "Select a staff member or enter a Shopify user ID manually.",
-        },
       } satisfies ActionData;
     }
 
@@ -422,18 +520,60 @@ export default function AdminPermissionsPage() {
     [staffMembers],
   );
   const [formState, setFormState] = useState<AccessFormState>(emptyAccessForm);
+  const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
+  const [hoveredButton, setHoveredButton] = useState<string | null>(null);
+  const [activeButton, setActiveButton] = useState<string | null>(null);
   const isSubmitting = navigation.state !== "idle";
   const activeIntent = navigation.formData?.get("intent");
   const isSaving = isSubmitting && activeIntent === "save";
   const isDeleting = isSubmitting && activeIntent === "delete";
   const isAdminRole = formState.role === "admin";
-  const fieldErrors = actionData?.ok ? undefined : actionData?.fieldErrors;
+  const visibleActionData = isActionFeedbackHidden ? undefined : actionData;
+  const fieldErrors = visibleActionData?.ok ? undefined : visibleActionData?.fieldErrors;
   const hasStaffError = Boolean(fieldErrors?.staff || fieldErrors?.shopify_user_id);
   const staffFieldBorder = hasStaffError ? "1px solid #d92d20" : "1px solid #c9cccf";
   const roleFieldBorder = fieldErrors?.role ? "1px solid #d92d20" : "1px solid #c9cccf";
   const locationsBorder = fieldErrors?.locations ? "1px solid #d92d20" : "1px solid transparent";
 
+  useEffect(() => {
+    setIsActionFeedbackHidden(false);
+  }, [actionData]);
+
+  function clearActionFeedback() {
+    setIsActionFeedbackHidden(true);
+  }
+
+  function getButtonProps({
+    id,
+    variant,
+    disabled = false,
+    compact = false,
+  }: {
+    id: string;
+    variant: ButtonVariant;
+    disabled?: boolean;
+    compact?: boolean;
+  }) {
+    return {
+      style: getButtonStyle({
+        variant,
+        disabled,
+        compact,
+        isHovered: hoveredButton === id,
+        isActive: activeButton === id,
+      }),
+      onMouseEnter: () => setHoveredButton(id),
+      onMouseLeave: () => {
+        setHoveredButton(null);
+        setActiveButton(null);
+      },
+      onMouseDown: () => setActiveButton(id),
+      onMouseUp: () => setActiveButton(null),
+    };
+  }
+
   function toggleLocation(locationId: string, checked: boolean) {
+    clearActionFeedback();
     setFormState((current) => ({
       ...current,
       locationIds: checked
@@ -443,6 +583,7 @@ export default function AdminPermissionsPage() {
   }
 
   function editGroup(group: PermissionGroup) {
+    clearActionFeedback();
     setFormState({
       user_email: group.user_email,
       shopify_user_id: group.shopify_user_id,
@@ -457,19 +598,40 @@ export default function AdminPermissionsPage() {
   }
 
   function clearForm() {
+    clearActionFeedback();
     setFormState(emptyAccessForm);
   }
 
   function selectStaffMember(staffId: string) {
+    clearActionFeedback();
+
+    if (!staffId) {
+      setFormState((current) => ({
+        ...current,
+        selectedStaffId: "",
+        shopify_user_id: "",
+        user_email: "",
+      }));
+      return;
+    }
+
     const staffMember = staffMembers.find(
       (member) => member.shopify_staff_id === staffId,
+    );
+    const existingAccess = permissionGroups.find(
+      (group) => group.shopify_user_id === staffId,
     );
 
     setFormState((current) => ({
       ...current,
       selectedStaffId: staffId,
       shopify_user_id: staffMember?.shopify_staff_id ?? current.shopify_user_id,
-      user_email: staffMember?.email ?? current.user_email,
+      user_email: existingAccess?.user_email || staffMember?.email || current.user_email,
+      role: existingAccess?.role ?? emptyAccessForm.role,
+      locationIds:
+        existingAccess?.role === "admin"
+          ? []
+          : existingAccess?.locationIds ?? emptyAccessForm.locationIds,
     }));
   }
 
@@ -523,7 +685,10 @@ export default function AdminPermissionsPage() {
                 </label>
 
                 <details style={{ border: hasStaffError ? "1px solid #d92d20" : "1px solid #e3e3e3", borderRadius: 10, padding: 14, background: hasStaffError ? "#fff4f4" : "#fafafa" }}>
-                  <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+                  <summary
+                    onClick={clearActionFeedback}
+                    style={{ cursor: "pointer", fontWeight: 800 }}
+                  >
                     Advanced: manual Shopify user ID
                   </summary>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginTop: 14 }}>
@@ -533,12 +698,13 @@ export default function AdminPermissionsPage() {
                         name="user_email"
                         placeholder="manager@local.ca"
                         value={formState.user_email}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          clearActionFeedback();
                           setFormState((current) => ({
                             ...current,
                             user_email: event.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
                       />
                       <FieldHelp>Optional display label.</FieldHelp>
@@ -551,12 +717,14 @@ export default function AdminPermissionsPage() {
                         required
                         placeholder="90052427974"
                         value={formState.shopify_user_id}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          clearActionFeedback();
                           setFormState((current) => ({
                             ...current,
+                            selectedStaffId: "",
                             shopify_user_id: event.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
                       />
                       <FieldHelp>
@@ -585,16 +753,17 @@ export default function AdminPermissionsPage() {
                     name="role"
                     required
                     value={formState.role}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      clearActionFeedback();
                       setFormState((current) => ({
                         ...current,
                         role: event.target.value,
                         locationIds:
                           event.target.value === "admin"
-                            ? []
-                            : current.locationIds,
-                      }))
-                    }
+                          ? []
+                          : current.locationIds,
+                      }));
+                    }}
                     style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: roleFieldBorder }}
                   >
                     <option value="viewer">Viewer</option>
@@ -645,22 +814,39 @@ export default function AdminPermissionsPage() {
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <button disabled={isSubmitting} type="submit" style={{ border: "1px solid #202223", background: isSubmitting ? "#8a8f93" : "#202223", color: "white", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+                <button
+                  disabled={isSubmitting}
+                  type="submit"
+                  {...getButtonProps({
+                    id: "save",
+                    variant: "primary",
+                    disabled: isSubmitting,
+                  })}
+                >
                   {isSaving ? "Saving..." : "Save permissions"}
                 </button>
-                <button type="button" onClick={clearForm} disabled={isSubmitting} style={{ border: "1px solid #c9cccf", background: "white", color: "#202223", borderRadius: 10, padding: "10px 14px", fontWeight: 700 }}>
+                <button
+                  type="button"
+                  onClick={clearForm}
+                  disabled={isSubmitting}
+                  {...getButtonProps({
+                    id: "new-access",
+                    variant: "secondary",
+                    disabled: isSubmitting,
+                  })}
+                >
                   New access
                 </button>
-                {actionData?.ok ? (
+                {visibleActionData?.ok ? (
                   <span style={{ color: "#067647", fontSize: 14, fontWeight: 700 }}>
-                    {actionData.message}
+                    {visibleActionData.message}
                   </span>
                 ) : null}
-                {actionData && !actionData.ok ? (
+                {visibleActionData && !visibleActionData.ok ? (
                   <span style={{ color: "#b42318", fontSize: 14, fontWeight: 700 }}>
-                    {actionData.fieldErrors
+                    {visibleActionData.fieldErrors
                       ? "Please fix the highlighted fields."
-                      : actionData.message}
+                      : visibleActionData.message}
                   </span>
                 ) : null}
               </div>
@@ -712,13 +898,32 @@ export default function AdminPermissionsPage() {
                         </td>
                         <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                            <button type="button" onClick={() => editGroup(group)} disabled={isSubmitting || !group.shopify_user_id} style={{ border: "1px solid #202223", background: "white", color: "#202223", borderRadius: 8, padding: "6px 10px" }}>
+                            <button
+                              type="button"
+                              onClick={() => editGroup(group)}
+                              disabled={isSubmitting || !group.shopify_user_id}
+                              {...getButtonProps({
+                                id: `edit-${group.key}`,
+                                variant: "secondary",
+                                disabled: isSubmitting || !group.shopify_user_id,
+                                compact: true,
+                              })}
+                            >
                               Edit
                             </button>
                             <Form method="post">
                               <input type="hidden" name="intent" value="delete" />
                               <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
-                              <button disabled={isSubmitting || !group.shopify_user_id} type="submit" style={{ border: "1px solid #c9cccf", background: "white", color: isSubmitting ? "#8a8f93" : "#b42318", borderRadius: 8, padding: "6px 10px" }}>
+                              <button
+                                disabled={isSubmitting || !group.shopify_user_id}
+                                type="submit"
+                                {...getButtonProps({
+                                  id: `delete-${group.key}`,
+                                  variant: "danger",
+                                  disabled: isSubmitting || !group.shopify_user_id,
+                                  compact: true,
+                                })}
+                              >
                                 {isDeleting ? "Deleting..." : "Delete access"}
                               </button>
                             </Form>
