@@ -1,5 +1,5 @@
 import { Form } from "react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { LocationRow } from "../../lib/dashboard/dashboard-types";
 import { AppButton } from "../ui/AppButton";
@@ -20,9 +20,38 @@ export function DashboardFilters({
 }) {
   const canSwitchLocation = locations.length > 1;
   const [hasUnsavedFilters, setHasUnsavedFilters] = useState(false);
+  const [startDateValue, setStartDateValue] = useState(startDate);
+  const [endDateValue, setEndDateValue] = useState(endDate);
+
+  useEffect(() => {
+    setStartDateValue(startDate);
+    setEndDateValue(endDate);
+    setHasUnsavedFilters(false);
+  }, [startDate, endDate, selectedLocationId]);
+
+  function getTodayDateValue() {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+  }
+
+  function handleSubmit() {
+    setHasUnsavedFilters(false);
+  }
+
+  function handleTodayClick() {
+    const today = getTodayDateValue();
+
+    setStartDateValue(today);
+    setEndDateValue(today);
+    setHasUnsavedFilters(false);
+  }
 
   return (
-    <Form method="get">
+    <Form method="get" onSubmit={handleSubmit}>
       {preservedSearchParams.map(({ name, value }, index) => (
         <input
           key={`${name}-${index}`}
@@ -42,23 +71,12 @@ export function DashboardFilters({
         }}
       >
         <div style={{ minWidth: 260, flex: "1 1 420px" }}>
-          <div
-            style={{
-              color: "#5f6368",
-              fontSize: 14,
-              marginBottom: 6,
-              fontWeight: 700,
-            }}
-          >
-            Synced Shopify data
-          </div>
-
           <h1 style={{ margin: 0, fontSize: 34, fontWeight: 850 }}>
             Store dashboard
           </h1>
 
           <p style={{ marginTop: 8, color: "#6b7280", fontSize: 16 }}>
-            Sales, margin and operational risks by location.
+            Monitor sales, margin and operational risks by location.
           </p>
         </div>
 
@@ -147,8 +165,11 @@ export function DashboardFilters({
             id="startDate"
             name="startDate"
             type="date"
-            defaultValue={startDate}
-            onChange={() => setHasUnsavedFilters(true)}
+            value={startDateValue}
+            onChange={(event) => {
+              setStartDateValue(event.target.value);
+              setHasUnsavedFilters(true);
+            }}
             style={{
               width: "100%",
               padding: "9px 10px",
@@ -178,8 +199,11 @@ export function DashboardFilters({
             id="endDate"
             name="endDate"
             type="date"
-            defaultValue={endDate}
-            onChange={() => setHasUnsavedFilters(true)}
+            value={endDateValue}
+            onChange={(event) => {
+              setEndDateValue(event.target.value);
+              setHasUnsavedFilters(true);
+            }}
             style={{
               width: "100%",
               padding: "9px 10px",
@@ -207,6 +231,7 @@ export function DashboardFilters({
           name="preset"
           value="today"
           variant="secondary"
+          onClick={handleTodayClick}
           style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
         >
           Today
@@ -215,13 +240,21 @@ export function DashboardFilters({
         <AppButton
           type="submit"
           variant="primary"
+          onClick={() => setHasUnsavedFilters(false)}
           style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
         >
           Apply
         </AppButton>
 
         {hasUnsavedFilters ? (
-          <InlineResult variant="info">
+          <InlineResult
+            variant="info"
+            style={{
+              padding: "4px 8px",
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
             Filters changed. Click Apply to update.
           </InlineResult>
         ) : null}
