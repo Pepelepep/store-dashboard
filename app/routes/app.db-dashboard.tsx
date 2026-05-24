@@ -8,6 +8,7 @@ import { BestSellersCard } from "../components/dashboard/BestSellersCard";
 import { DashboardHeader } from "../components/dashboard/DashboardHeader";
 import { KpiCards } from "../components/dashboard/KpiCards";
 import { RecentOrderLinesCard } from "../components/dashboard/RecentOrderLinesCard";
+import { SalesByHourCard } from "../components/dashboard/SalesByHourCard";
 import { SalesByStaffCard } from "../components/dashboard/SalesByStaffCard";
 import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
@@ -15,6 +16,7 @@ import {
   buildShopifyOrderUrl,
   computeBestSellers,
   computeExpensesForRange,
+  computeSalesByHour,
   computeSalesByStaff,
   computeSalesByVendor,
   computeStockAlerts,
@@ -339,6 +341,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     bestSellers: computeBestSellers(filteredOrderLines),
     salesByVendor: computeSalesByVendor(filteredOrderLines),
     salesByStaff: computeSalesByStaff(filteredOrderLines),
+    salesByHour: computeSalesByHour(filteredOrderLines),
     stockAlerts,
     recentOrders,
     errors,
@@ -363,6 +366,7 @@ export default function DbDashboardPage() {
     bestSellers,
     salesByVendor,
     salesByStaff,
+    salesByHour,
     stockAlerts,
     recentOrders,
     errors,
@@ -417,6 +421,10 @@ export default function DbDashboardPage() {
           startDate={startDate}
           endDate={endDate}
         />
+
+        <div style={{ marginBottom: 20 }}>
+          <SalesByHourCard salesByHour={salesByHour} />
+        </div>
 
         <div
           style={{

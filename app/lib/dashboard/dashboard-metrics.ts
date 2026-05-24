@@ -4,6 +4,7 @@ import type {
   InventoryLevelDbRow,
   OrderLineDbRow,
   ProductDbRow,
+  SalesByHourRow,
   StaffSalesRow,
   StockAlertRow,
   VariantDbRow,
@@ -234,6 +235,51 @@ export function computeSalesByStaff(orderLines: OrderLineDbRow[]) {
   return Array.from(grouped.values())
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 10);
+}
+
+export function computeSalesByHour(orderLines: OrderLineDbRow[]) {
+  const orderIdsByHour = new Map<number, Set<string>>();
+  const rows: SalesByHourRow[] = Array.from({ length: 24 }, (_, hour) => {
+    orderIdsByHour.set(hour, new Set<string>());
+
+    return {
+      hour,
+      revenue: 0,
+      unitsSold: 0,
+      ordersCount: 0,
+      averageOrderValue: 0,
+    };
+  });
+
+  for (const row of orderLines) {
+    if (!row.created_at_shopify) {
+      continue;
+    }
+
+    const orderDate = new Date(row.created_at_shopify);
+
+    if (Number.isNaN(orderDate.getTime())) {
+      continue;
+    }
+
+    const hour = orderDate.getHours();
+    const hourRow = rows[hour];
+
+    hourRow.revenue += Number(row.revenue ?? 0);
+    hourRow.unitsSold += Number(row.quantity ?? 0);
+
+    if (row.shopify_order_id) {
+      orderIdsByHour.get(hour)?.add(row.shopify_order_id);
+    }
+  }
+
+  for (const row of rows) {
+    row.ordersCount = orderIdsByHour.get(row.hour)?.size ?? 0;
+    row.averageOrderValue =
+      row.ordersCount > 0 ? row.revenue / row.ordersCount : 0;
+  }
+
+  return rows;
 }
 
 export function computeStockAlerts({
