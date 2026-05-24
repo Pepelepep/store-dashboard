@@ -49,6 +49,48 @@ type ActionData = {
   details?: unknown;
 };
 
+type SyncTypeConfig = {
+  syncType: string;
+  label: string;
+  actionLabel: string;
+  href?: string;
+  formIntent?: string;
+};
+
+const freshnessMs = 24 * 60 * 60 * 1000;
+const syncTypeConfigs: SyncTypeConfig[] = [
+  {
+    syncType: "locations",
+    label: "Locations",
+    actionLabel: "Refresh locations",
+    href: "/app/admin/sync-locations",
+  },
+  {
+    syncType: "products",
+    label: "Products",
+    actionLabel: "Refresh products",
+    href: "/app/admin/sync-products",
+  },
+  {
+    syncType: "inventory",
+    label: "Inventory",
+    actionLabel: "Refresh inventory",
+    href: "/app/admin/sync-inventory",
+  },
+  {
+    syncType: "orders",
+    label: "Orders",
+    actionLabel: "Refresh orders",
+    href: "/app/admin/sync-orders",
+  },
+  {
+    syncType: "staff_members",
+    label: "Staff",
+    actionLabel: "Sync staff members",
+    formIntent: "sync_staff_members",
+  },
+];
+
 async function getTableCount({
   table,
   shop,
@@ -84,6 +126,52 @@ function formatDateTime(value?: string | null) {
   }).format(new Date(value));
 }
 
+function formatDuration(startedAt?: string | null, finishedAt?: string | null) {
+  if (!startedAt || !finishedAt) {
+    return "-";
+  }
+
+  const started = new Date(startedAt).getTime();
+  const finished = new Date(finishedAt).getTime();
+
+  if (Number.isNaN(started) || Number.isNaN(finished) || finished < started) {
+    return "-";
+  }
+
+  const seconds = Math.round((finished - started) / 1000);
+
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+
+  return remainingSeconds > 0
+    ? `${minutes}m ${remainingSeconds}s`
+    : `${minutes}m`;
+}
+
+function getFreshness(run?: SyncRun | null) {
+  if (!run?.finished_at) {
+    return "Unknown";
+  }
+
+  const finished = new Date(run.finished_at).getTime();
+
+  if (Number.isNaN(finished)) {
+    return "Unknown";
+  }
+
+  return Date.now() - finished <= freshnessMs ? "Fresh" : "Stale";
+}
+
+function getFreshnessVariant(status: string) {
+  if (status === "Fresh") return "success";
+  if (status === "Stale") return "warning";
+  return "neutral";
+}
+
 function getSyncStatusVariant(status: string) {
   const normalized = status.toLowerCase();
 
@@ -93,6 +181,11 @@ function getSyncStatusVariant(status: string) {
   if (normalized === "partial") return "warning";
 
   return "neutral";
+}
+
+function isErrorStatus(status?: string | null) {
+  const normalized = (status ?? "").toLowerCase();
+  return normalized === "error" || normalized === "failed";
 }
 
 function formatSyncRunDetails(run: SyncRun) {
@@ -151,6 +244,56 @@ function formatSyncRunDetails(run: SyncRun) {
   }
 }
 
+const detailLabels: Record<string, string> = {
+  syncedCount: "Synced",
+  productsSynced: "Products",
+  variantsSynced: "Variants",
+  variantsWithUnitCostSynced: "Variants with cost",
+  variantsWithMissingUnitCost: "Variants missing cost",
+  orderLinesCogsRecomputed: "COGS recomputed",
+  inventoryItemsProcessed: "Inventory items",
+  inventoryLevelsSynced: "Inventory levels",
+  ordersSynced: "Orders",
+  orderLinesSynced: "Order lines",
+  pagesProcessed: "Pages",
+  staffAttributionAvailable: "Staff attribution",
+  staffAttributionError: "Staff attribution error",
+};
+
+function formatDetailValue(value: unknown) {
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+}
+
+function getDetailItems(details?: Record<string, unknown> | null) {
+  if (!details) return [];
+
+  return Object.entries(detailLabels)
+    .map(([key, label]) => {
+      const value = formatDetailValue(details[key]);
+      return value ? { key, label, value } : null;
+    })
+    .filter((item): item is { key: string; label: string; value: string } =>
+      Boolean(item),
+    );
+}
+
+function getSyncTypeSummary(runs: SyncRun[], syncType: string) {
+  const typeRuns = runs.filter((run) => run.sync_type === syncType);
+  const latestRun = typeRuns[0] ?? null;
+  const lastSuccess =
+    typeRuns.find((run) => run.status === "success" && run.finished_at) ?? null;
+  const lastError = typeRuns.find((run) => isErrorStatus(run.status)) ?? null;
+
+  return {
+    latestRun,
+    lastSuccess,
+    lastError,
+    freshness: getFreshness(lastSuccess),
+  };
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
@@ -176,7 +319,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     )
     .eq("shop_domain", session.shop)
     .order("started_at", { ascending: false })
-    .limit(10);
+    .limit(50);
 
   return {
     shop: session.shop,
@@ -270,6 +413,136 @@ function Card({
   );
 }
 
+function SyncTypeStatusCard({
+  config,
+  runs,
+  search,
+  isSyncingStaff,
+}: {
+  config: SyncTypeConfig;
+  runs: SyncRun[];
+  search: string;
+  isSyncingStaff: boolean;
+}) {
+  const summary = getSyncTypeSummary(runs, config.syncType);
+  const latestRun = summary.latestRun;
+  const detailItems = getDetailItems(latestRun?.details);
+
+  return (
+    <section
+      style={{
+        background: "white",
+        border: "1px solid #e3e3e3",
+        borderRadius: 14,
+        padding: 16,
+        display: "grid",
+        gap: 12,
+      }}
+    >
+      <div
+        style={{
+          alignItems: "start",
+          display: "flex",
+          gap: 12,
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: "0 0 6px", fontSize: 18 }}>{config.label}</h3>
+          <StatusBadge variant={getFreshnessVariant(summary.freshness)}>
+            {summary.freshness}
+          </StatusBadge>
+        </div>
+        {latestRun ? (
+          <StatusBadge variant={getSyncStatusVariant(latestRun.status)}>
+            {latestRun.status}
+          </StatusBadge>
+        ) : null}
+      </div>
+
+      <div style={{ display: "grid", gap: 6, color: "#616161", fontSize: 13 }}>
+        <div>
+          <strong>Last success:</strong>{" "}
+          {formatDateTime(summary.lastSuccess?.finished_at)}
+        </div>
+        <div>
+          <strong>Last failure:</strong>{" "}
+          {formatDateTime(summary.lastError?.finished_at)}
+        </div>
+        <div>
+          <strong>Source:</strong> {latestRun?.source ?? "-"}
+        </div>
+        <div>
+          <strong>Duration:</strong>{" "}
+          {formatDuration(latestRun?.started_at, latestRun?.finished_at)}
+        </div>
+      </div>
+
+      {summary.lastError?.error_message ? (
+        <div
+          style={{
+            background: "#fff4f4",
+            border: "1px solid #f2b8b5",
+            borderRadius: 10,
+            color: "#b42318",
+            fontSize: 13,
+            padding: 10,
+          }}
+        >
+          {summary.lastError.error_message}
+        </div>
+      ) : null}
+
+      {detailItems.length > 0 ? (
+        <div
+          style={{
+            display: "grid",
+            gap: 6,
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+          }}
+        >
+          {detailItems.map((item) => (
+            <div
+              key={item.key}
+              style={{
+                background: "#f6f6f7",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                padding: 10,
+              }}
+            >
+              <div style={{ color: "#616161", fontSize: 11, fontWeight: 800 }}>
+                {item.label}
+              </div>
+              <div style={{ color: "#202223", fontSize: 14, fontWeight: 800 }}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <HelperText>No count details recorded yet.</HelperText>
+      )}
+
+      {config.href ? (
+        <ButtonLink to={`${config.href}${search}`}>{config.actionLabel}</ButtonLink>
+      ) : (
+        <Form method="post">
+          <input type="hidden" name="intent" value={config.formIntent} />
+          <AppButton
+            type="submit"
+            disabled={isSyncingStaff}
+            variant="secondary"
+            fullWidth
+          >
+            {isSyncingStaff ? "Syncing staff..." : config.actionLabel}
+          </AppButton>
+        </Form>
+      )}
+    </section>
+  );
+}
+
 function ButtonLink({
   to,
   children,
@@ -350,6 +623,32 @@ export default function AdminSyncPage() {
               ? formatDateTime(lastSuccessfulSync.finished_at)
               : "No successful sync run recorded yet."}
           </HelperText>
+        </section>
+
+        <section style={{ marginBottom: 24 }}>
+          <div style={{ marginBottom: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 22 }}>Sync status</h2>
+            <HelperText>
+              Fresh means the last successful sync finished within 24 hours.
+            </HelperText>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              gap: 16,
+            }}
+          >
+            {syncTypeConfigs.map((config) => (
+              <SyncTypeStatusCard
+                key={config.syncType}
+                config={config}
+                runs={lastSyncRuns}
+                search={search}
+                isSyncingStaff={isSyncingStaff}
+              />
+            ))}
+          </div>
         </section>
 
         <div
@@ -463,6 +762,7 @@ export default function AdminSyncPage() {
         </div>
 
         <Card title="Last sync runs">
+          <HelperText>Showing the 10 most recent runs.</HelperText>
           <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
             <table
               style={{
@@ -496,7 +796,7 @@ export default function AdminSyncPage() {
                 </tr>
               </thead>
               <tbody>
-                {lastSyncRuns.map((run) => (
+                {lastSyncRuns.slice(0, 10).map((run) => (
                   <tr key={run.id}>
                     <td
                       style={{
