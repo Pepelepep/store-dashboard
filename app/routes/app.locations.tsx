@@ -50,6 +50,14 @@ type TrendRow = {
   unitsSold: number;
 };
 
+type RevenueBreakdownRow = {
+  label: string;
+  revenue: number;
+  ordersCount: number;
+  unitsSold: number;
+  percent: number;
+};
+
 type Period = "day" | "week" | "month" | "year";
 
 type SortKey =
@@ -79,6 +87,8 @@ type LoaderData = {
   kpis: Omit<LocationMetricRow, "locationId" | "locationName">;
   locationRows: LocationMetricRow[];
   trendRows: TrendRow[];
+  revenueByVendor: RevenueBreakdownRow[];
+  revenueByStaff: RevenueBreakdownRow[];
   hasGlobalExpenses: boolean;
   errors: string[];
 };
@@ -542,6 +552,93 @@ function computeTrendRows({
   };
 }
 
+function computeRevenueBreakdown({
+  orderLines,
+  getLabel,
+  limit = 8,
+}: {
+  orderLines: OrderLineDbRow[];
+  getLabel: (row: OrderLineDbRow) => string;
+  limit?: number;
+}) {
+  const grouped = new Map<
+    string,
+    {
+      label: string;
+      revenue: number;
+      orderIds: Set<string>;
+      unitsSold: number;
+    }
+  >();
+
+  for (const row of orderLines) {
+    const label = getLabel(row);
+    const existing = grouped.get(label);
+
+    if (existing) {
+      existing.revenue += Number(row.revenue ?? 0);
+      existing.unitsSold += Number(row.quantity ?? 0);
+      if (row.shopify_order_id) existing.orderIds.add(row.shopify_order_id);
+    } else {
+      grouped.set(label, {
+        label,
+        revenue: Number(row.revenue ?? 0),
+        orderIds: new Set(row.shopify_order_id ? [row.shopify_order_id] : []),
+        unitsSold: Number(row.quantity ?? 0),
+      });
+    }
+  }
+
+  const totalRevenue = Array.from(grouped.values()).reduce(
+    (sum, row) => sum + row.revenue,
+    0,
+  );
+
+  const sortedRows = Array.from(grouped.values())
+    .map((row) => ({
+      label: row.label,
+      revenue: row.revenue,
+      ordersCount: row.orderIds.size,
+      unitsSold: row.unitsSold,
+      percent: totalRevenue > 0 ? (row.revenue / totalRevenue) * 100 : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  if (sortedRows.length <= limit) {
+    return sortedRows;
+  }
+
+  const visibleRows = sortedRows.slice(0, limit - 1);
+  const otherRows = sortedRows.slice(limit - 1);
+  const others = otherRows.reduce(
+    (sum, row) => ({
+      label: "Others",
+      revenue: sum.revenue + row.revenue,
+      ordersCount: sum.ordersCount + row.ordersCount,
+      unitsSold: sum.unitsSold + row.unitsSold,
+      percent: sum.percent + row.percent,
+    }),
+    {
+      label: "Others",
+      revenue: 0,
+      ordersCount: 0,
+      unitsSold: 0,
+      percent: 0,
+    },
+  );
+
+  return [...visibleRows, others];
+}
+
+function formatCompactCurrency(value: number) {
+  return new Intl.NumberFormat("fr-CA", {
+    style: "currency",
+    currency: "CAD",
+    notation: "compact",
+    maximumFractionDigits: value >= 1000 ? 1 : 0,
+  }).format(value);
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
@@ -673,6 +770,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     endDate,
     period,
   });
+  const revenueByVendor = computeRevenueBreakdown({
+    orderLines: filteredOrderLines,
+    limit: 8,
+    getLabel: (row) => row.vendor?.trim() || "Unknown vendor",
+  });
+  const revenueByStaff = computeRevenueBreakdown({
+    orderLines: filteredOrderLines,
+    limit: 8,
+    getLabel: (row) =>
+      row.staff_member_name ||
+      row.staff_member_email ||
+      row.staff_member_id ||
+      "Unknown staff",
+  });
 
   return {
     locations: accessibleLocations,
@@ -689,6 +800,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     kpis: metrics.totals,
     locationRows: metrics.rows,
     trendRows: trend.rows,
+    revenueByVendor,
+    revenueByStaff,
     hasGlobalExpenses,
     errors,
   } satisfies LoaderData;
@@ -755,6 +868,7 @@ function TrendChart({
   const hasSales = rows.some((row) => row.revenue > 0 || row.ordersCount > 0);
   const revenueMaxHeight = 150;
   const ordersMaxHeight = 84;
+  const barGap = rows.length > 90 ? 0 : rows.length > 60 ? 1 : rows.length > 32 ? 2 : 4;
 
   return (
     <section
@@ -766,125 +880,212 @@ function TrendChart({
         padding: 18,
       }}
     >
-      <div style={{ marginBottom: 14 }}>
-        <h2 style={{ fontSize: 18, margin: 0 }}>Sales trend by period</h2>
-        <p style={{ color: "#616161", margin: "4px 0 0" }}>
-          Revenue and orders grouped by {period}.
-        </p>
+      <div
+        style={{
+          alignItems: "start",
+          display: "flex",
+          gap: 12,
+          justifyContent: "space-between",
+          marginBottom: 14,
+        }}
+      >
+        <div>
+          <h2 style={{ fontSize: 18, margin: 0 }}>Sales trend by period</h2>
+          <p style={{ color: "#616161", margin: "4px 0 0" }}>
+            Revenue and orders grouped by {period}.
+          </p>
+        </div>
+        <label
+          style={{
+            alignItems: "center",
+            color: "#616161",
+            display: "inline-flex",
+            fontSize: 13,
+            fontWeight: 800,
+            gap: 8,
+            whiteSpace: "nowrap",
+          }}
+        >
+          Group by
+          <select
+            form="locations-filter-form"
+            name="period"
+            defaultValue={period}
+            style={{
+              border: "1px solid #c9cccf",
+              borderRadius: 10,
+              padding: "7px 10px",
+            }}
+          >
+            <option value="day">Day</option>
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+            <option value="year">Year</option>
+          </select>
+        </label>
       </div>
 
       {hasSales ? (
         <div
           style={{
             display: "grid",
-            gap: 6,
-            gridTemplateColumns: `repeat(${rows.length}, minmax(38px, 1fr))`,
-            overflowX: "auto",
-            paddingTop: 8,
+            gap: 10,
+            gridTemplateColumns: "82px minmax(0, 1fr)",
+            width: "100%",
           }}
         >
-          {rows.map((row, index) => {
-            const labelStep =
-              rows.length > 36
-                ? 6
-                : rows.length > 24
-                  ? 4
-                  : rows.length > 14
-                    ? 2
-                    : 1;
-            const showLabel =
-              index === 0 ||
-              index === rows.length - 1 ||
-              index % labelStep === 0;
-            const revenueHeight =
-              maxRevenue > 0
-                ? Math.max((row.revenue / maxRevenue) * revenueMaxHeight, 4)
-                : 0;
-            const ordersHeight =
-              maxOrders > 0
-                ? Math.max((row.ordersCount / maxOrders) * ordersMaxHeight, 4)
-                : 0;
+          <div
+            style={{
+              color: "#616161",
+              display: "grid",
+              fontSize: 12,
+              fontWeight: 800,
+              gridTemplateRows: "22px 150px 28px 84px 18px",
+              textAlign: "right",
+            }}
+          >
+            <div>Revenue</div>
+            <div />
+            <div />
+            <div style={{ alignSelf: "end" }}>Order volume</div>
+            <div />
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gap: barGap,
+              gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))`,
+              width: "100%",
+            }}
+          >
+            {rows.map((row, index) => {
+              const labelStep =
+                rows.length > 48
+                  ? 8
+                  : rows.length > 32
+                    ? 6
+                    : rows.length > 20
+                      ? 4
+                      : rows.length > 12
+                        ? 2
+                        : 1;
+              const showLabel =
+                index === 0 ||
+                index === rows.length - 1 ||
+                index % labelStep === 0;
+              const valueLabelStep =
+                rows.length > 24 ? labelStep : rows.length > 14 ? 2 : 1;
+              const showValueLabel =
+                index % valueLabelStep === 0 || rows.length <= 14;
+              const revenueHeight =
+                maxRevenue > 0
+                  ? Math.max((row.revenue / maxRevenue) * revenueMaxHeight, 3)
+                  : 0;
+              const ordersHeight =
+                maxOrders > 0
+                  ? Math.max((row.ordersCount / maxOrders) * ordersMaxHeight, 3)
+                  : 0;
 
-            return (
-              <div
-                key={row.period}
-                title={[
-                  `Period: ${row.period}`,
-                  `Revenue: ${formatCurrency(row.revenue)}`,
-                  `Orders: ${formatNumber(row.ordersCount)}`,
-                  `Units: ${formatNumber(row.unitsSold)}`,
-                ].join("\n")}
-                style={{
-                  display: "grid",
-                  gridTemplateRows: "18px 150px 28px 84px",
-                  justifyItems: "center",
-                  minWidth: 38,
-                }}
-              >
+              return (
                 <div
+                  key={row.period}
+                  title={[
+                    `Period: ${row.period}`,
+                    `Revenue: ${formatCurrency(row.revenue)}`,
+                    `Orders: ${formatNumber(row.ordersCount)}`,
+                    `Units: ${formatNumber(row.unitsSold)}`,
+                  ].join("\n")}
                   style={{
-                    color: "#374151",
-                    fontSize: 10,
-                    fontWeight: 800,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {row.revenue > 0 ? formatCurrency(row.revenue) : ""}
-                </div>
-                <div
-                  style={{
-                    alignItems: "flex-end",
-                    display: "flex",
-                    height: revenueMaxHeight,
-                    justifyContent: "center",
-                    width: "100%",
+                    display: "grid",
+                    gridTemplateRows: "22px 150px 28px 84px 18px",
+                    justifyItems: "center",
+                    minWidth: 0,
                   }}
                 >
                   <div
                     style={{
-                      background: row.revenue > 0 ? "#2563eb" : "#e5e7eb",
-                      borderRadius: "6px 6px 2px 2px",
-                      height: revenueHeight,
-                      maxWidth: 34,
-                      width: "80%",
+                      color: "#374151",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      lineHeight: 1,
+                      whiteSpace: "nowrap",
                     }}
-                  />
-                </div>
-                <div
-                  style={{
-                    borderTop: "1px solid #d1d5db",
-                    color: "#616161",
-                    fontSize: 11,
-                    fontWeight: 800,
-                    lineHeight: "27px",
-                    textAlign: "center",
-                    width: "100%",
-                  }}
                   >
-                  {showLabel ? row.label : ""}
-                </div>
-                <div
-                  style={{
-                    alignItems: "flex-start",
-                    display: "flex",
-                    height: ordersMaxHeight,
-                    justifyContent: "center",
-                    width: "100%",
-                  }}
-                >
+                    {row.revenue > 0 && showValueLabel
+                      ? formatCompactCurrency(row.revenue)
+                      : ""}
+                  </div>
                   <div
                     style={{
-                      background: row.ordersCount > 0 ? "#14b8a6" : "#e5e7eb",
-                      borderRadius: "2px 2px 6px 6px",
-                      height: ordersHeight,
-                      maxWidth: 34,
-                      width: "80%",
+                      alignItems: "flex-end",
+                      display: "flex",
+                      height: revenueMaxHeight,
+                      justifyContent: "center",
+                      width: "100%",
                     }}
-                  />
+                  >
+                    <div
+                      style={{
+                        background: row.revenue > 0 ? "#2563eb" : "#e5e7eb",
+                        borderRadius: "6px 6px 2px 2px",
+                        height: revenueHeight,
+                        maxWidth: 28,
+                        width: "70%",
+                      }}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      borderTop: "1px solid #d1d5db",
+                      color: "#616161",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      lineHeight: "27px",
+                      overflow: "hidden",
+                      textAlign: "center",
+                      textOverflow: "clip",
+                      whiteSpace: "nowrap",
+                      width: "100%",
+                    }}
+                  >
+                    {showLabel ? row.label : ""}
+                  </div>
+                  <div
+                    style={{
+                      alignItems: "flex-start",
+                      display: "flex",
+                      height: ordersMaxHeight,
+                      justifyContent: "center",
+                      width: "100%",
+                    }}
+                  >
+                    <div
+                      style={{
+                        background:
+                          row.ordersCount > 0 ? "#14b8a6" : "#e5e7eb",
+                        borderRadius: "2px 2px 6px 6px",
+                        height: ordersHeight,
+                        maxWidth: 28,
+                        width: "70%",
+                      }}
+                    />
+                  </div>
+                  <div
+                    style={{
+                      color: "#374151",
+                      fontSize: 10,
+                      fontWeight: 800,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {row.ordersCount > 0 && showValueLabel
+                      ? formatNumber(row.ordersCount)
+                      : ""}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       ) : (
         <div
@@ -1081,6 +1282,246 @@ function LocationTable({ rows }: { rows: LocationMetricRow[] }) {
   );
 }
 
+const breakdownColors = [
+  "#2563eb",
+  "#14b8a6",
+  "#f59e0b",
+  "#7c3aed",
+  "#ef4444",
+  "#0891b2",
+  "#65a30d",
+  "#db2777",
+];
+
+function RevenueByVendorCard({ rows }: { rows: RevenueBreakdownRow[] }) {
+  const hasRevenue = rows.some((row) => row.revenue > 0);
+  let currentPercent = 0;
+  const gradientStops = rows
+    .map((row, index) => {
+      const start = currentPercent;
+      const end = currentPercent + row.percent;
+      currentPercent = end;
+      return `${breakdownColors[index % breakdownColors.length]} ${start}% ${end}%`;
+    })
+    .join(", ");
+
+  return (
+    <section
+      style={{
+        background: "white",
+        border: "1px solid #e3e3e3",
+        borderRadius: 14,
+        padding: 18,
+      }}
+    >
+      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Revenue by Vendor</h2>
+      <p style={{ color: "#616161", margin: "0 0 16px" }}>
+        Revenue share for the current filters.
+      </p>
+
+      {hasRevenue ? (
+        <div
+          style={{
+            alignItems: "center",
+            display: "grid",
+            gap: 18,
+            gridTemplateColumns: "160px minmax(0, 1fr)",
+          }}
+        >
+          <div
+            aria-label="Revenue by vendor donut chart"
+            style={{
+              aspectRatio: "1 / 1",
+              background: `conic-gradient(${gradientStops})`,
+              borderRadius: "50%",
+              position: "relative",
+              width: "100%",
+            }}
+          >
+            <div
+              style={{
+                background: "white",
+                borderRadius: "50%",
+                inset: 38,
+                position: "absolute",
+              }}
+            />
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {rows.map((row, index) => (
+              <div
+                key={row.label}
+                title={[
+                  `Vendor: ${row.label}`,
+                  `Revenue: ${formatCurrency(row.revenue)}`,
+                  `Percent: ${row.percent.toFixed(1)}%`,
+                  `Orders: ${formatNumber(row.ordersCount)}`,
+                ].join("\n")}
+                style={{
+                  alignItems: "center",
+                  display: "grid",
+                  gap: 8,
+                  gridTemplateColumns: "10px minmax(0, 1fr) auto",
+                }}
+              >
+                <span
+                  style={{
+                    background:
+                      breakdownColors[index % breakdownColors.length],
+                    borderRadius: 999,
+                    height: 10,
+                    width: 10,
+                  }}
+                />
+                <span
+                  style={{
+                    color: "#202223",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.label}
+                </span>
+                <span
+                  style={{
+                    color: "#616161",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {formatCurrency(row.revenue)} · {row.percent.toFixed(1)}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            border: "1px solid #f0f0f0",
+            borderRadius: 12,
+            color: "#707070",
+            padding: 16,
+          }}
+        >
+          No vendor revenue available for this period.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RevenueByStaffCard({ rows }: { rows: RevenueBreakdownRow[] }) {
+  const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
+
+  return (
+    <section
+      style={{
+        background: "white",
+        border: "1px solid #e3e3e3",
+        borderRadius: 14,
+        padding: 18,
+      }}
+    >
+      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Revenue by Staff</h2>
+      <p style={{ color: "#616161", margin: "0 0 16px" }}>
+        Top staff revenue for the current filters.
+      </p>
+
+      {rows.length > 0 && maxRevenue > 0 ? (
+        <div style={{ display: "grid", gap: 12 }}>
+          {rows.map((row) => {
+            const width = Math.max((row.revenue / maxRevenue) * 100, 2);
+
+            return (
+              <div
+                key={row.label}
+                title={[
+                  `Staff: ${row.label}`,
+                  `Revenue: ${formatCurrency(row.revenue)}`,
+                  `Orders: ${formatNumber(row.ordersCount)}`,
+                  `Units: ${formatNumber(row.unitsSold)}`,
+                ].join("\n")}
+                style={{ display: "grid", gap: 5 }}
+              >
+                <div
+                  style={{
+                    alignItems: "baseline",
+                    display: "flex",
+                    gap: 10,
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span style={{ color: "#202223", fontSize: 13, fontWeight: 700 }}>
+                    {row.label}
+                  </span>
+                  <span style={{ color: "#616161", fontSize: 12, fontWeight: 800 }}>
+                    {formatCurrency(row.revenue)}
+                  </span>
+                </div>
+                <div
+                  style={{
+                    background: "#eef2f7",
+                    borderRadius: 999,
+                    height: 10,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      background: "#2563eb",
+                      borderRadius: 999,
+                      height: "100%",
+                      width: `${width}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div
+          style={{
+            border: "1px solid #f0f0f0",
+            borderRadius: 12,
+            color: "#707070",
+            padding: 16,
+          }}
+        >
+          No staff revenue available for this period.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RevenueBreakdownSection({
+  revenueByVendor,
+  revenueByStaff,
+}: {
+  revenueByVendor: RevenueBreakdownRow[];
+  revenueByStaff: RevenueBreakdownRow[];
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 20,
+        gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+        marginBottom: 20,
+      }}
+    >
+      <RevenueByVendorCard rows={revenueByVendor} />
+      <RevenueByStaffCard rows={revenueByStaff} />
+    </div>
+  );
+}
+
 export default function LocationsPage() {
   const {
     locations,
@@ -1095,6 +1536,8 @@ export default function LocationsPage() {
     kpis,
     locationRows,
     trendRows,
+    revenueByVendor,
+    revenueByStaff,
     period,
     hasGlobalExpenses,
     errors,
@@ -1141,7 +1584,11 @@ export default function LocationsPage() {
             </p>
           </div>
 
-          <Form method="get" style={{ display: "grid", gap: 16 }}>
+          <Form
+            id="locations-filter-form"
+            method="get"
+            style={{ display: "grid", gap: 16 }}
+          >
             {preservedSearchParams.map(({ name, value }, index) => (
               <input key={`${name}-${index}`} type="hidden" name={name} value={value} />
             ))}
@@ -1206,52 +1653,6 @@ export default function LocationsPage() {
                   ))}
                 </select>
               </label>
-            </div>
-
-            <div>
-              <div
-                style={{
-                  color: "#616161",
-                  fontSize: 13,
-                  fontWeight: 800,
-                  marginBottom: 8,
-                }}
-              >
-                Group by
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {(["day", "week", "month", "year"] as Period[]).map((option) => {
-                  const isSelected = period === option;
-
-                  return (
-                    <label
-                      key={option}
-                      style={{
-                        alignItems: "center",
-                        background: isSelected ? "#eff6ff" : "white",
-                        border: `1px solid ${
-                          isSelected ? "#2563eb" : "#dcdcdc"
-                        }`,
-                        borderRadius: 999,
-                        color: "#202223",
-                        cursor: "pointer",
-                        display: "inline-flex",
-                        gap: 8,
-                        padding: "7px 10px",
-                        textTransform: "capitalize",
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name="period"
-                        value={option}
-                        defaultChecked={isSelected}
-                      />
-                      {option}
-                    </label>
-                  );
-                })}
-              </div>
             </div>
 
             <div>
@@ -1370,6 +1771,10 @@ export default function LocationsPage() {
 
         <KpiGrid kpis={kpis} />
         <TrendChart rows={trendRows} period={period} />
+        <RevenueBreakdownSection
+          revenueByVendor={revenueByVendor}
+          revenueByStaff={revenueByStaff}
+        />
         <LocationTable rows={locationRows} />
       </div>
     </main>
