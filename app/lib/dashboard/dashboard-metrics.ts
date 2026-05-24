@@ -1,6 +1,6 @@
 import type {
   BestSellerRow,
-  DashboardDrilldown,
+  ActiveDrilldowns,
   DashboardSalesOrderLineRow,
   FixedExpenseDbRow,
   InventoryLevelDbRow,
@@ -212,32 +212,54 @@ export function getStoreHourFromTimestamp(value: string) {
   return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null;
 }
 
-export function applyDashboardDrilldown(
-  orderLines: DashboardSalesOrderLineRow[],
-  activeDrilldown: DashboardDrilldown | null,
+export function hasActiveDashboardDrilldowns(
+  activeDrilldowns: ActiveDrilldowns,
 ) {
-  if (!activeDrilldown) {
+  return Boolean(
+    (activeDrilldowns.hour !== null &&
+      activeDrilldowns.hour !== undefined) ||
+      activeDrilldowns.product ||
+      activeDrilldowns.staff ||
+      activeDrilldowns.vendor,
+  );
+}
+
+export function applyDashboardDrilldowns(
+  orderLines: DashboardSalesOrderLineRow[],
+  activeDrilldowns: ActiveDrilldowns,
+) {
+  if (!hasActiveDashboardDrilldowns(activeDrilldowns)) {
     return orderLines;
   }
 
   return orderLines.filter((row) => {
-    if (activeDrilldown.type === "hour") {
-      return (
-        getStoreHourFromTimestamp(row.created_at_shopify) ===
-        Number(activeDrilldown.value)
-      );
+    if (
+      activeDrilldowns.hour !== null &&
+      activeDrilldowns.hour !== undefined &&
+      getStoreHourFromTimestamp(row.created_at_shopify) !== activeDrilldowns.hour
+    ) {
+      return false;
     }
 
-    if (activeDrilldown.type === "product") {
-      return getBestSellerDrilldownValue(row) === String(activeDrilldown.value);
+    if (
+      activeDrilldowns.product &&
+      getBestSellerDrilldownValue(row) !== activeDrilldowns.product.value
+    ) {
+      return false;
     }
 
-    if (activeDrilldown.type === "staff") {
-      return getStaffDrilldownValue(row) === String(activeDrilldown.value);
+    if (
+      activeDrilldowns.staff &&
+      getStaffDrilldownValue(row) !== activeDrilldowns.staff.value
+    ) {
+      return false;
     }
 
-    if (activeDrilldown.type === "vendor") {
-      return getVendorFilterValue(row) === String(activeDrilldown.value);
+    if (
+      activeDrilldowns.vendor &&
+      getVendorFilterValue(row) !== activeDrilldowns.vendor.value
+    ) {
+      return false;
     }
 
     return true;
