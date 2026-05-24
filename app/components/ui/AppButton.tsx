@@ -37,14 +37,14 @@ const buttonVariants: Record<
   }
 > = {
   primary: {
-    border: "#202223",
-    background: "#202223",
+    border: "#2563eb",
+    background: "#2563eb",
     color: "white",
-    hoverBackground: "#303336",
-    hoverBorder: "#303336",
-    activeBackground: "#111213",
-    disabledBackground: "#8a8f93",
-    disabledBorder: "#8a8f93",
+    hoverBackground: "#1d4ed8",
+    hoverBorder: "#1d4ed8",
+    activeBackground: "#1e40af",
+    disabledBackground: "#93c5fd",
+    disabledBorder: "#93c5fd",
     disabledColor: "white",
   },
   secondary: {

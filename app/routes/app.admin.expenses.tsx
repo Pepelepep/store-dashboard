@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { useEffect, useState } from "react";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -42,6 +43,26 @@ type ActionData = {
     monthly_amount?: string;
     start_month?: string;
   };
+};
+
+type ExpenseFormState = {
+  id: string;
+  expense_name: string;
+  expense_category: string;
+  monthly_amount: string;
+  start_month: string;
+  end_month: string;
+  shopify_location_id: string;
+};
+
+const emptyExpenseForm: ExpenseFormState = {
+  id: "",
+  expense_name: "",
+  expense_category: "",
+  monthly_amount: "",
+  start_month: "",
+  end_month: "",
+  shopify_location_id: "",
 };
 
 const expenseCategories = [
@@ -230,10 +251,48 @@ export default function AdminExpensesPage() {
   const { locations, expenses } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
+  const [formState, setFormState] = useState<ExpenseFormState>(emptyExpenseForm);
+  const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
   const isSubmitting = navigation.state !== "idle";
   const activeIntent = navigation.formData?.get("intent");
   const isSaving = isSubmitting && activeIntent === "save";
-  const fieldErrors = actionData?.ok ? undefined : actionData?.fieldErrors;
+  const visibleActionData = isActionFeedbackHidden ? undefined : actionData;
+  const fieldErrors = visibleActionData?.ok ? undefined : visibleActionData?.fieldErrors;
+  const isEditing = Boolean(formState.id);
+
+  useEffect(() => {
+    setIsActionFeedbackHidden(false);
+  }, [actionData]);
+
+  function clearActionFeedback() {
+    setIsActionFeedbackHidden(true);
+  }
+
+  function updateFormField(field: keyof ExpenseFormState, value: string) {
+    clearActionFeedback();
+    setFormState((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function resetForm() {
+    clearActionFeedback();
+    setFormState(emptyExpenseForm);
+  }
+
+  function editExpense(expense: ExpenseRow) {
+    clearActionFeedback();
+    setFormState({
+      id: expense.id,
+      expense_name: expense.expense_name,
+      expense_category: expense.expense_category ?? "",
+      monthly_amount: String(expense.monthly_amount ?? ""),
+      start_month: formatMonth(expense.start_month),
+      end_month: expense.end_month ? formatMonth(expense.end_month) : "",
+      shopify_location_id: expense.shopify_location_id ?? "",
+    });
+  }
 
   return (
     <main
@@ -262,140 +321,185 @@ export default function AdminExpensesPage() {
             marginBottom: 24,
           }}
         >
-          <h2 style={{ marginTop: 0 }}>Add expense</h2>
+          <h2 style={{ marginTop: 0 }}>
+            {isEditing ? "Edit expense" : "Add expense"}
+          </h2>
 
           <Form method="post">
             <input type="hidden" name="intent" value="save" />
+            {formState.id ? (
+              <input type="hidden" name="id" value={formState.id} />
+            ) : null}
 
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                gap: 14,
+                gap: 16,
               }}
             >
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Name
-                <input
-                  name="expense_name"
-                  required
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: 10,
-                    borderRadius: 8,
-                    border: fieldErrors?.expense_name
-                      ? "1px solid #d92d20"
-                      : "1px solid #c9cccf",
-                  }}
-                />
-                <HelperText>Use a clear recurring expense name.</HelperText>
-                <FieldError>{fieldErrors?.expense_name}</FieldError>
-              </label>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 14,
+                  alignItems: "start",
+                }}
+              >
+                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  Name
+                  <input
+                    name="expense_name"
+                    required
+                    value={formState.expense_name}
+                    onChange={(event) =>
+                      updateFormField("expense_name", event.target.value)
+                    }
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 10,
+                      borderRadius: 8,
+                      border: fieldErrors?.expense_name
+                        ? "1px solid #d92d20"
+                        : "1px solid #c9cccf",
+                    }}
+                  />
+                  <HelperText>Use a clear recurring expense name.</HelperText>
+                  <FieldError>{fieldErrors?.expense_name}</FieldError>
+                </label>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Category
-                <select
-                  name="expense_category"
-                  defaultValue=""
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: 10,
-                    borderRadius: 8,
-                    border: "1px solid #c9cccf",
-                    background: "white",
-                  }}
-                >
-                  <option value="">Select category</option>
-                  {expenseCategories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-                <HelperText>Choose the closest reporting category.</HelperText>
-              </label>
+                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  Category
+                  <select
+                    name="expense_category"
+                    value={formState.expense_category}
+                    onChange={(event) =>
+                      updateFormField("expense_category", event.target.value)
+                    }
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 10,
+                      borderRadius: 8,
+                      border: "1px solid #c9cccf",
+                      background: "white",
+                    }}
+                  >
+                    <option value="">Select category</option>
+                    {expenseCategories.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                  <HelperText>Choose the closest reporting category.</HelperText>
+                </label>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Monthly amount
-                <input
-                  name="monthly_amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  required
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: 10,
-                    borderRadius: 8,
-                    border: fieldErrors?.monthly_amount
-                      ? "1px solid #d92d20"
-                      : "1px solid #c9cccf",
-                  }}
-                />
-                <HelperText>Enter the fixed monthly amount before tax if applicable.</HelperText>
-                <FieldError>{fieldErrors?.monthly_amount}</FieldError>
-              </label>
+                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  Monthly amount
+                  <input
+                    name="monthly_amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    required
+                    value={formState.monthly_amount}
+                    onChange={(event) =>
+                      updateFormField("monthly_amount", event.target.value)
+                    }
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 10,
+                      borderRadius: 8,
+                      border: fieldErrors?.monthly_amount
+                        ? "1px solid #d92d20"
+                        : "1px solid #c9cccf",
+                    }}
+                  />
+                  <HelperText>Enter the fixed monthly amount before tax if applicable.</HelperText>
+                  <FieldError>{fieldErrors?.monthly_amount}</FieldError>
+                </label>
+              </div>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Start month
-                <input
-                  name="start_month"
-                  type="month"
-                  required
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: 10,
-                    borderRadius: 8,
-                    border: fieldErrors?.start_month
-                      ? "1px solid #d92d20"
-                      : "1px solid #c9cccf",
-                  }}
-                />
-                <FieldError>{fieldErrors?.start_month}</FieldError>
-              </label>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 14,
+                  alignItems: "start",
+                }}
+              >
+                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  Start month
+                  <input
+                    name="start_month"
+                    type="month"
+                    required
+                    value={formState.start_month}
+                    onChange={(event) =>
+                      updateFormField("start_month", event.target.value)
+                    }
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 10,
+                      borderRadius: 8,
+                      border: fieldErrors?.start_month
+                        ? "1px solid #d92d20"
+                        : "1px solid #c9cccf",
+                    }}
+                  />
+                  <FieldError>{fieldErrors?.start_month}</FieldError>
+                </label>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                End month
-                <input
-                  name="end_month"
-                  type="month"
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: 10,
-                    borderRadius: 8,
-                    border: "1px solid #c9cccf",
-                  }}
-                />
-                <HelperText>Leave blank for ongoing expenses.</HelperText>
-              </label>
+                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  End month
+                  <input
+                    name="end_month"
+                    type="month"
+                    value={formState.end_month}
+                    onChange={(event) =>
+                      updateFormField("end_month", event.target.value)
+                    }
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 10,
+                      borderRadius: 8,
+                      border: "1px solid #c9cccf",
+                    }}
+                  />
+                  <HelperText>Leave blank for ongoing expenses.</HelperText>
+                </label>
 
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Location
-                <select
-                  name="shopify_location_id"
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: 10,
-                    borderRadius: 8,
-                    border: "1px solid #c9cccf",
-                    background: "white",
-                  }}
-                >
-                  <option value="">Global / all locations</option>
-                  {locations.map((location) => (
-                    <option key={location.shopify_location_id} value={location.shopify_location_id}>
-                      {location.name}
-                    </option>
-                  ))}
-                </select>
-                <HelperText>Global expenses are shared across locations.</HelperText>
-              </label>
+                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  Location
+                  <select
+                    name="shopify_location_id"
+                    value={formState.shopify_location_id}
+                    onChange={(event) =>
+                      updateFormField("shopify_location_id", event.target.value)
+                    }
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 10,
+                      borderRadius: 8,
+                      border: "1px solid #c9cccf",
+                      background: "white",
+                    }}
+                  >
+                    <option value="">Global / all locations</option>
+                    {locations.map((location) => (
+                      <option key={location.shopify_location_id} value={location.shopify_location_id}>
+                        {location.name}
+                      </option>
+                    ))}
+                  </select>
+                  <HelperText>Global expenses are shared across locations.</HelperText>
+                </label>
+              </div>
             </div>
 
             <div
@@ -408,12 +512,38 @@ export default function AdminExpensesPage() {
               }}
             >
               <AppButton type="submit" disabled={isSubmitting} variant="primary">
-                {isSaving ? "Saving..." : "Save expense"}
+                {isSaving
+                  ? isEditing
+                    ? "Updating..."
+                    : "Saving..."
+                  : isEditing
+                    ? "Update expense"
+                    : "Save expense"}
               </AppButton>
 
-              {actionData?.message ? (
-                <InlineResult variant={actionData.ok ? "success" : "error"}>
-                  {actionData.message}
+              {isEditing ? (
+                <AppButton
+                  type="button"
+                  variant="secondary"
+                  disabled={isSubmitting}
+                  onClick={resetForm}
+                >
+                  Cancel edit
+                </AppButton>
+              ) : (
+                <AppButton
+                  type="button"
+                  variant="secondary"
+                  disabled={isSubmitting}
+                  onClick={resetForm}
+                >
+                  New expense
+                </AppButton>
+              )}
+
+              {visibleActionData?.message ? (
+                <InlineResult variant={visibleActionData.ok ? "success" : "error"}>
+                  {visibleActionData.message}
                 </InlineResult>
               ) : null}
             </div>
@@ -469,6 +599,16 @@ export default function AdminExpensesPage() {
                     </td>
                     <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
                       <div style={{ display: "flex", gap: 8 }}>
+                        <AppButton
+                          type="button"
+                          variant="secondary"
+                          compact
+                          disabled={isSubmitting}
+                          onClick={() => editExpense(expense)}
+                        >
+                          Edit
+                        </AppButton>
+
                         <Form method="post">
                           <input type="hidden" name="intent" value="toggle" />
                           <input type="hidden" name="id" value={expense.id} />
