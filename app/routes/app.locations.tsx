@@ -118,7 +118,7 @@ type LoaderData = {
   debugInfo?: Record<string, string | number | boolean | null | string[]>;
 };
 
-const ORDER_LINES_PAGE_SIZE = 2000;
+const ORDER_LINES_PAGE_SIZE = 1000;
 const LOCATION_ORDER_LINES_SELECT =
   "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, staff_member_id, staff_member_name, staff_member_email";
 
