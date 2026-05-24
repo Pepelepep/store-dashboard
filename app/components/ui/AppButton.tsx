@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
+import { Link } from "react-router";
 
 type AppButtonVariant = "primary" | "secondary" | "danger" | "ghost";
 
@@ -13,6 +14,15 @@ type AppButtonProps = {
   ButtonHTMLAttributes<HTMLButtonElement>,
   "type" | "disabled" | "onClick"
 >;
+
+type AppButtonLinkProps = {
+  to: string;
+  variant?: AppButtonVariant;
+  children: ReactNode;
+  compact?: boolean;
+  fullWidth?: boolean;
+  style?: CSSProperties;
+};
 
 const buttonBaseStyle: CSSProperties = {
   borderRadius: 10,
@@ -136,5 +146,56 @@ export function AppButton({
     >
       {children}
     </button>
+  );
+}
+
+export function AppButtonLink({
+  to,
+  variant = "secondary",
+  compact = false,
+  fullWidth = false,
+  children,
+  style,
+}: AppButtonLinkProps) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isActive, setIsActive] = useState(false);
+  const colors = buttonVariants[variant];
+  const background = isActive
+    ? colors.activeBackground
+    : isHovered
+      ? colors.hoverBackground
+      : colors.background;
+  const borderColor = isHovered || isActive ? colors.hoverBorder : colors.border;
+
+  return (
+    <Link
+      to={to}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => {
+        setIsHovered(false);
+        setIsActive(false);
+      }}
+      onMouseDown={() => setIsActive(true)}
+      onMouseUp={() => setIsActive(false)}
+      style={{
+        ...buttonBaseStyle,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: fullWidth ? "100%" : undefined,
+        border: `1px solid ${borderColor}`,
+        background,
+        color: colors.color,
+        cursor: "pointer",
+        padding: compact ? "6px 10px" : buttonBaseStyle.padding,
+        borderRadius: compact ? 8 : buttonBaseStyle.borderRadius,
+        transform: isActive ? "translateY(1px)" : "translateY(0)",
+        textDecoration: "none",
+        boxSizing: "border-box",
+        ...style,
+      }}
+    >
+      {children}
+    </Link>
   );
 }

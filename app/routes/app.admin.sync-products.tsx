@@ -1,7 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
-  Link,
   useActionData,
   useLoaderData,
   useLocation,
@@ -12,7 +11,7 @@ import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { syncProducts } from "../lib/sync/shopify-sync.server";
-import { AppButton } from "../components/ui/AppButton";
+import { AppButton, AppButtonLink } from "../components/ui/AppButton";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 
@@ -89,16 +88,18 @@ export default function SyncProductsPage() {
 
   return (
     <main style={{ padding: 28, fontFamily: "system-ui" }}>
-      <Link
-        to={`/app/admin/sync${location.search}`}
-        style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}
-      >
-        Back to Data Sync
-      </Link>
+      <div style={{ marginBottom: 14 }}>
+        <AppButtonLink
+          to={`/app/admin/sync${location.search}`}
+          variant="secondary"
+        >
+          ← Back to Data Sync
+        </AppButtonLink>
+      </div>
+      <h1>Sync products & variants</h1>
       <HelperText>
         Refresh Shopify products and variants used by sales and inventory reporting.
       </HelperText>
-      <h1>Sync products & variants</h1>
 
       <section
         style={{

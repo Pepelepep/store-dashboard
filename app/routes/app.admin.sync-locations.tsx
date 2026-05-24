@@ -1,7 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
-  Link,
   useActionData,
   useLoaderData,
   useLocation,
@@ -11,7 +10,7 @@ import {
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
-import { AppButton } from "../components/ui/AppButton";
+import { AppButton, AppButtonLink } from "../components/ui/AppButton";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { syncLocations } from "../lib/sync/shopify-sync.server";
@@ -81,14 +80,16 @@ export default function SyncLocationsPage() {
 
   return (
     <main style={{ padding: 28, fontFamily: "system-ui" }}>
-      <Link
-        to={`/app/admin/sync${location.search}`}
-        style={{ color: "#2563eb", fontWeight: 700, textDecoration: "none" }}
-      >
-        Back to Data Sync
-      </Link>
-      <HelperText>Refresh Shopify locations used by dashboard filters and permissions.</HelperText>
+      <div style={{ marginBottom: 14 }}>
+        <AppButtonLink
+          to={`/app/admin/sync${location.search}`}
+          variant="secondary"
+        >
+          ← Back to Data Sync
+        </AppButtonLink>
+      </div>
       <h1>Sync locations</h1>
+      <HelperText>Refresh Shopify locations used by dashboard filters and permissions.</HelperText>
 
       <section
         style={{
