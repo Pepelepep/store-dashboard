@@ -45,6 +45,11 @@ export type SyncJobRow = {
   counts: Record<string, unknown> | null;
   error_message: string | null;
   details: Record<string, unknown> | null;
+  locked_by: string | null;
+  locked_at: string | null;
+  attempts: number | null;
+  max_attempts: number | null;
+  last_heartbeat_at: string | null;
   started_at: string | null;
   updated_at: string;
   finished_at: string | null;
@@ -53,6 +58,7 @@ export type SyncJobRow = {
 
 const fullSyncSteps = ["locations", "products", "inventory", "orders"];
 const STALE_ACTIVE_JOB_MS = 30 * 60 * 1000;
+const STALE_WORKER_LOCK_MS = 5 * 60 * 1000;
 
 function getInitialStep(jobType: SyncJobType) {
   return jobType === "full" ? fullSyncSteps[0] : jobType;
@@ -142,6 +148,32 @@ async function cancelStaleActiveJobs({
     .in("job_type", jobTypes)
     .in("status", ["pending", "running"])
     .lt("updated_at", staleBefore);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+async function releaseStaleWorkerLocks({
+  supabase,
+}: {
+  supabase: SupabaseAdminClient;
+}) {
+  const staleBefore = new Date(Date.now() - STALE_WORKER_LOCK_MS).toISOString();
+  const { error } = await supabase
+    .from("sync_jobs")
+    .update({
+      locked_by: null,
+      locked_at: null,
+      updated_at: new Date().toISOString(),
+      details: {
+        staleWorkerLockReleased: true,
+        staleLockTimeoutMinutes: STALE_WORKER_LOCK_MS / 60000,
+      },
+    })
+    .in("status", ["pending", "running"])
+    .not("locked_at", "is", null)
+    .lt("locked_at", staleBefore);
 
   if (error) {
     throw new Error(error.message);
@@ -257,6 +289,66 @@ export async function createManualSyncJob({
   };
 }
 
+export async function claimNextSyncJobForWorker({
+  supabase,
+  workerId,
+}: {
+  supabase: SupabaseAdminClient;
+  workerId: string;
+}) {
+  await releaseStaleWorkerLocks({ supabase });
+
+  for (const status of ["running", "pending"] as const) {
+    const { data: candidates, error: candidatesError } = await supabase
+      .from("sync_jobs")
+      .select("*")
+      .eq("status", status)
+      .is("locked_by", null)
+      .order("created_at", { ascending: true })
+      .limit(10);
+
+    if (candidatesError) {
+      throw new Error(candidatesError.message);
+    }
+
+    for (const candidate of (candidates ?? []) as SyncJobRow[]) {
+      const startedAt = candidate.started_at ?? new Date().toISOString();
+      const { data: claimedJobs, error: claimError } = await supabase
+        .from("sync_jobs")
+        .update({
+          status: "running",
+          locked_by: workerId,
+          locked_at: new Date().toISOString(),
+          last_heartbeat_at: new Date().toISOString(),
+          started_at: startedAt,
+          attempts:
+            candidate.status === "pending"
+              ? Number(candidate.attempts ?? 0) + 1
+              : Number(candidate.attempts ?? 0),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", candidate.id)
+        .eq("updated_at", candidate.updated_at)
+        .is("locked_by", null)
+        .in("status", ["pending", "running"])
+        .select("*")
+        .limit(1);
+
+      if (claimError) {
+        throw new Error(claimError.message);
+      }
+
+      const claimedJob = ((claimedJobs ?? [])[0] ?? null) as SyncJobRow | null;
+
+      if (claimedJob) {
+        return claimedJob;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function markStepCompleted({
   supabase,
   shop,
@@ -357,31 +449,18 @@ async function runStepBatch({
   throw new Error(`Unknown sync job step: ${step}`);
 }
 
-export async function processManualSyncJobBatch({
+export async function processClaimedSyncJobBatch({
   admin,
   supabase,
-  shop,
-  jobId,
+  job,
+  workerId,
 }: {
   admin: ShopifyAdminClient;
   supabase: SupabaseAdminClient;
-  shop: string;
-  jobId: string;
+  job: SyncJobRow;
+  workerId: string;
 }) {
-  const { data: jobData, error: jobError } = await supabase
-    .from("sync_jobs")
-    .select("*")
-    .eq("shop_domain", shop)
-    .eq("id", jobId)
-    .single();
-
-  if (jobError) {
-    throw new Error(jobError.message);
-  }
-
-  const job = jobData as SyncJobRow;
-
-  if (["success", "error", "cancelled"].includes(job.status)) {
+  if (job.locked_by !== workerId) {
     return {
       job,
       processed: false,
@@ -393,6 +472,8 @@ export async function processManualSyncJobBatch({
       .from("sync_jobs")
       .update({
         status: "cancelled",
+        locked_by: null,
+        locked_at: null,
         error_message:
           "Sync job was cancelled because it was stale and no longer processing.",
         details: {
@@ -402,8 +483,8 @@ export async function processManualSyncJobBatch({
         updated_at: new Date().toISOString(),
         finished_at: new Date().toISOString(),
       })
-      .eq("shop_domain", shop)
       .eq("id", job.id)
+      .eq("locked_by", workerId)
       .select("*")
       .single();
 
@@ -417,76 +498,33 @@ export async function processManualSyncJobBatch({
     };
   }
 
+  const step = job.current_step ?? getInitialStep(job.job_type);
   const startedAt = job.started_at ?? new Date().toISOString();
-  const { data: claimedJobs, error: claimError } = await supabase
-    .from("sync_jobs")
-    .update({
-      status: "running",
-      started_at: startedAt,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("shop_domain", shop)
-    .eq("id", job.id)
-    .eq("updated_at", job.updated_at)
-    .in("status", ["pending", "running"])
-    .select("*")
-    .limit(1);
-
-  if (claimError) {
-    throw new Error(claimError.message);
-  }
-
-  const claimedJob = ((claimedJobs ?? [])[0] ?? null) as SyncJobRow | null;
-
-  if (!claimedJob) {
-    const { data: latestJob, error: latestJobError } = await supabase
-      .from("sync_jobs")
-      .select("*")
-      .eq("shop_domain", shop)
-      .eq("id", job.id)
-      .single();
-
-    if (latestJobError) {
-      throw new Error(latestJobError.message);
-    }
-
-    return {
-      job: latestJob as SyncJobRow,
-      processed: false,
-    };
-  }
-
-  const step = claimedJob.current_step ?? getInitialStep(claimedJob.job_type);
 
   try {
     const batchResult = await runStepBatch({
       admin,
-      shop,
+      shop: job.shop_domain,
       supabase,
       step,
-      progress: claimedJob.progress ?? {},
+      progress: job.progress ?? {},
     });
     const nextProgress = {
-      ...(claimedJob.progress ?? {}),
+      ...(job.progress ?? {}),
       [step]: batchResult.progress,
     };
-    const nextCounts = mergeCounts(
-      claimedJob.counts,
-      step,
-      batchResult.counts,
-    );
+    const nextCounts = mergeCounts(job.counts, step, batchResult.counts);
     const nextStep =
-      batchResult.done && claimedJob.job_type === "full"
+      batchResult.done && job.job_type === "full"
         ? getNextFullStep(step)
         : step;
-    const isDone =
-      batchResult.done && (!nextStep || claimedJob.job_type !== "full");
+    const isDone = batchResult.done && (!nextStep || job.job_type !== "full");
 
     if (batchResult.done) {
       await markStepCompleted({
         supabase,
-        shop,
-        job: claimedJob,
+        shop: job.shop_domain,
+        job,
         step,
         counts: (nextCounts[step] as Record<string, unknown>) ?? {},
       });
@@ -504,14 +542,18 @@ export async function processManualSyncJobBatch({
             step,
             done: batchResult.done,
             counts: batchResult.counts,
+            workerId,
           },
         },
+        locked_by: null,
+        locked_at: null,
+        last_heartbeat_at: new Date().toISOString(),
         started_at: startedAt,
         updated_at: new Date().toISOString(),
         finished_at: isDone ? new Date().toISOString() : null,
       })
-      .eq("shop_domain", shop)
-      .eq("id", claimedJob.id)
+      .eq("id", job.id)
+      .eq("locked_by", workerId)
       .select("*")
       .single();
 
@@ -529,16 +571,17 @@ export async function processManualSyncJobBatch({
 
     await insertSyncRun({
       supabase,
-      shop,
+      shop: job.shop_domain,
       syncType: step,
       status: "error",
       source: "manual_admin_sync",
       startedAt,
       errorMessage,
       details: {
-        jobId: claimedJob.id,
-        batchJobType: claimedJob.job_type,
+        jobId: job.id,
+        batchJobType: job.job_type,
         failedStep: step,
+        workerId,
         errorDetails,
       },
     });
@@ -548,17 +591,20 @@ export async function processManualSyncJobBatch({
       .update({
         status: "error",
         current_step: step,
+        locked_by: null,
+        locked_at: null,
         error_message: errorMessage,
         details: {
           failedStep: step,
+          workerId,
           errorDetails,
         },
         started_at: startedAt,
         updated_at: new Date().toISOString(),
         finished_at: new Date().toISOString(),
       })
-      .eq("shop_domain", shop)
-      .eq("id", claimedJob.id)
+      .eq("id", job.id)
+      .eq("locked_by", workerId)
       .select("*")
       .single();
 
