@@ -11,6 +11,27 @@ type ShopifyAdminClient = {
   ) => Promise<Response>;
 };
 
+type ShopifyGraphqlErrorDetails = {
+  queryName: string;
+  message: string;
+  errorName?: string | null;
+  httpStatus?: number | null;
+  statusText?: string | null;
+  responseBody?: unknown;
+  graphqlErrors?: unknown;
+  variables?: Record<string, unknown>;
+};
+
+class ShopifyGraphqlRequestError extends Error {
+  details: ShopifyGraphqlErrorDetails;
+
+  constructor(details: ShopifyGraphqlErrorDetails) {
+    super(details.message);
+    this.name = "ShopifyGraphqlRequestError";
+    this.details = details;
+  }
+}
+
 type LocationNode = {
   id: string;
   name: string;
@@ -44,6 +65,10 @@ type ProductNode = {
         } | null;
       };
     }[];
+    pageInfo?: {
+      hasNextPage: boolean;
+      endCursor?: string | null;
+    };
   };
 };
 
@@ -212,6 +237,8 @@ export type SyncSource =
   | "webhook";
 
 const INVENTORY_BATCH_SIZE = 25;
+const PRODUCT_SYNC_PAGE_SIZE = 20;
+const PRODUCT_VARIANT_SYNC_PAGE_SIZE = 50;
 const ORDERS_PAGE_SIZE = 50;
 const LINE_ITEMS_PAGE_SIZE = 100;
 const UPSERT_BATCH_SIZE = 500;
@@ -251,6 +278,135 @@ function getGraphqlErrorMessage(data: unknown) {
   }
 
   return null;
+}
+
+function getObjectValue(object: unknown, key: string) {
+  if (typeof object !== "object" || object === null || !(key in object)) {
+    return undefined;
+  }
+
+  return (object as Record<string, unknown>)[key];
+}
+
+function getGraphqlRequestErrorDetails(error: unknown) {
+  if (error instanceof ShopifyGraphqlRequestError) {
+    return error.details;
+  }
+
+  return null;
+}
+
+function getHttpStatusFromResponse(response: unknown) {
+  const status =
+    getObjectValue(response, "status") ?? getObjectValue(response, "code");
+  return typeof status === "number" ? status : null;
+}
+
+function getStatusTextFromResponse(response: unknown) {
+  const statusText =
+    getObjectValue(response, "statusText") ??
+    getObjectValue(response, "status");
+  return typeof statusText === "string" ? statusText : null;
+}
+
+function buildGraphqlErrorDetails({
+  error,
+  queryName,
+  variables,
+}: {
+  error: unknown;
+  queryName: string;
+  variables?: Record<string, unknown>;
+}): ShopifyGraphqlErrorDetails {
+  const errorBody = getObjectValue(error, "body");
+  const errorResponse = getObjectValue(error, "response");
+  const graphqlErrors =
+    getObjectValue(getObjectValue(errorBody, "errors"), "graphQLErrors") ??
+    getObjectValue(errorBody, "errors");
+
+  return {
+    queryName,
+    message: error instanceof Error ? error.message : String(error),
+    errorName: error instanceof Error ? error.name : null,
+    httpStatus: getHttpStatusFromResponse(errorResponse),
+    statusText: getStatusTextFromResponse(errorResponse),
+    responseBody: errorBody ?? null,
+    graphqlErrors: graphqlErrors ?? null,
+    variables,
+  };
+}
+
+async function readJsonResponse({
+  response,
+  queryName,
+  variables,
+}: {
+  response: Response;
+  queryName: string;
+  variables?: Record<string, unknown>;
+}) {
+  const responseText = await response.text();
+  let responseBody: unknown = null;
+
+  if (responseText) {
+    try {
+      responseBody = JSON.parse(responseText);
+    } catch {
+      responseBody = responseText;
+    }
+  }
+
+  const graphqlErrorMessage = getGraphqlErrorMessage(responseBody);
+
+  if (!response.ok || graphqlErrorMessage) {
+    throw new ShopifyGraphqlRequestError({
+      queryName,
+      message:
+        graphqlErrorMessage ??
+        `Shopify GraphQL HTTP ${response.status} ${response.statusText}`,
+      errorName: "ShopifyGraphqlHttpError",
+      httpStatus: response.status,
+      statusText: response.statusText,
+      responseBody,
+      graphqlErrors:
+        typeof responseBody === "object" && responseBody !== null
+          ? (getObjectValue(responseBody, "errors") ?? null)
+          : null,
+      variables,
+    });
+  }
+
+  return responseBody as Record<string, unknown>;
+}
+
+async function executeShopifyGraphql({
+  admin,
+  query,
+  queryName,
+  variables,
+}: {
+  admin: ShopifyAdminClient;
+  query: string;
+  queryName: string;
+  variables?: Record<string, unknown>;
+}) {
+  try {
+    const response = await admin.graphql(query, { variables });
+
+    return await readJsonResponse({
+      response,
+      queryName,
+      variables,
+    });
+  } catch (error) {
+    if (error instanceof ShopifyGraphqlRequestError) {
+      throw error;
+    }
+
+    throw new ShopifyGraphqlRequestError(
+      buildGraphqlErrorDetails({ error, queryName, variables }),
+    );
+  }
 }
 
 function normalizeStaffId(staffId?: string | null) {
@@ -673,6 +829,177 @@ async function updateVariantsFromInventoryItemSnapshots({
   };
 }
 
+async function getRemainingProductVariantsForSync({
+  admin,
+  productId,
+  cursor,
+}: {
+  admin: ShopifyAdminClient;
+  productId: string;
+  cursor?: string | null;
+}) {
+  const variants: ProductNode["variants"]["edges"] = [];
+  let nextCursor = cursor ?? null;
+  let hasNextPage = Boolean(nextCursor);
+
+  while (hasNextPage && nextCursor) {
+    const data = await executeShopifyGraphql({
+      admin,
+      query: `#graphql
+        query getProductVariantsForSync($productId: ID!, $first: Int!, $cursor: String) {
+          node(id: $productId) {
+            ... on Product {
+              variants(first: $first, after: $cursor) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    inventoryItem {
+                      id
+                      unitCost {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      queryName: "getProductVariantsForSync",
+      variables: {
+        productId,
+        first: PRODUCT_VARIANT_SYNC_PAGE_SIZE,
+        cursor: nextCursor,
+      },
+    });
+    const connection = (data.data as { node?: ProductNode | null } | undefined)
+      ?.node?.variants;
+
+    if (!connection) {
+      break;
+    }
+
+    variants.push(...connection.edges);
+    hasNextPage = Boolean(connection.pageInfo?.hasNextPage);
+    nextCursor = connection.pageInfo?.endCursor ?? null;
+  }
+
+  return variants;
+}
+
+async function getProductsForSync(admin: ShopifyAdminClient) {
+  const products: ProductNode[] = [];
+  let cursor: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const data = await executeShopifyGraphql({
+      admin,
+      query: `#graphql
+        query getProductsForSync($first: Int!, $cursor: String, $variantFirst: Int!) {
+          products(first: $first, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            edges {
+              node {
+                id
+                title
+                vendor
+                productType
+                status
+                variants(first: $variantFirst) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  edges {
+                    node {
+                      id
+                      title
+                      sku
+                      price
+                      inventoryItem {
+                        id
+                        unitCost {
+                          amount
+                          currencyCode
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `,
+      queryName: "getProductsForSync",
+      variables: {
+        first: PRODUCT_SYNC_PAGE_SIZE,
+        cursor,
+        variantFirst: PRODUCT_VARIANT_SYNC_PAGE_SIZE,
+      },
+    });
+    const connection = (
+      data.data as
+        | {
+            products?: {
+              pageInfo?: {
+                hasNextPage: boolean;
+                endCursor?: string | null;
+              };
+              edges?: Array<{ node: ProductNode }>;
+            };
+          }
+        | undefined
+    )?.products;
+    const pageProducts = connection?.edges?.map((edge) => edge.node) ?? [];
+
+    for (const product of pageProducts) {
+      const remainingVariants = await getRemainingProductVariantsForSync({
+        admin,
+        productId: product.id,
+        cursor: product.variants.pageInfo?.endCursor ?? null,
+      });
+
+      products.push({
+        ...product,
+        variants: {
+          ...product.variants,
+          edges: [...product.variants.edges, ...remainingVariants],
+          pageInfo: {
+            hasNextPage: false,
+            endCursor:
+              remainingVariants.at(-1)?.node.id ??
+              product.variants.pageInfo?.endCursor ??
+              null,
+          },
+        },
+      });
+    }
+
+    hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
+    cursor = connection?.pageInfo?.endCursor ?? null;
+
+    if (pageProducts.length === 0) {
+      break;
+    }
+  }
+
+  return products;
+}
+
 async function recomputeOrderLineCogsForVariants({
   supabase,
   shop,
@@ -1048,49 +1375,7 @@ export async function syncProducts({
   const startedAt = new Date().toISOString();
 
   try {
-    const response = await admin.graphql(`#graphql
-      query getProductsForSync {
-        products(first: 100) {
-          edges {
-            node {
-              id
-              title
-              vendor
-              productType
-              status
-              variants(first: 100) {
-                edges {
-                  node {
-                    id
-                    title
-                    sku
-                    price
-                    inventoryItem {
-                      id
-                      unitCost {
-                        amount
-                        currencyCode
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `);
-
-    const data = await response.json();
-
-    if ("errors" in data && data.errors) {
-      throw new Error(JSON.stringify(data.errors));
-    }
-
-    const products: ProductNode[] =
-      data.data?.products?.edges?.map(
-        (edge: { node: ProductNode }) => edge.node,
-      ) ?? [];
+    const products = await getProductsForSync(admin);
 
     const productRows = products.map((product) => ({
       shop_domain: shop,
@@ -1194,6 +1479,8 @@ export async function syncProducts({
 
     return result;
   } catch (error) {
+    const graphqlDetails = getGraphqlRequestErrorDetails(error);
+
     await insertSyncRun({
       supabase,
       shop,
@@ -1202,6 +1489,12 @@ export async function syncProducts({
       source,
       startedAt,
       errorMessage: error instanceof Error ? error.message : String(error),
+      details: graphqlDetails
+        ? {
+            failedStep: "shopify_graphql_products_sync",
+            ...graphqlDetails,
+          }
+        : undefined,
     });
 
     throw error;
