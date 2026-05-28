@@ -511,7 +511,7 @@ export async function processManualSyncJobBatch({
         finished_at: isDone ? new Date().toISOString() : null,
       })
       .eq("shop_domain", shop)
-      .eq("id", claimedJob.id)
+      .eq("id", job.id)
       .select("*")
       .single();
 
@@ -558,7 +558,7 @@ export async function processManualSyncJobBatch({
         finished_at: new Date().toISOString(),
       })
       .eq("shop_domain", shop)
-      .eq("id", claimedJob.id)
+      .eq("id", job.id)
       .select("*")
       .single();
 

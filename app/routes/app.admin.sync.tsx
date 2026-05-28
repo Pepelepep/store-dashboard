@@ -1,12 +1,9 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useEffect } from "react";
 import {
   Form,
   useActionData,
-  useFetcher,
   useLoaderData,
   useNavigation,
-  useRevalidator,
 } from "react-router";
 
 import { authenticate } from "../shopify.server";
@@ -77,19 +74,19 @@ const syncTypeConfigs: SyncTypeConfig[] = [
   {
     syncType: "products",
     label: "Products",
-    actionLabel: "Sync Products",
+    actionLabel: "Start Products Sync",
     intent: "sync_products",
   },
   {
     syncType: "inventory",
     label: "Inventory",
-    actionLabel: "Sync Inventory",
+    actionLabel: "Start Inventory Sync",
     intent: "sync_inventory",
   },
   {
     syncType: "orders",
     label: "Orders",
-    actionLabel: "Sync Orders",
+    actionLabel: "Start Orders Sync",
     intent: "sync_orders",
   },
 ];
@@ -398,8 +395,6 @@ function getRunningLabel(intent?: string | null) {
       return "Syncing inventory...";
     case "sync_orders":
       return "Syncing orders...";
-    case "refresh_all":
-      return "Refreshing all data...";
     default:
       return "Syncing...";
   }
@@ -415,11 +410,36 @@ function getJobTypeForIntent(intent: string): SyncJobType | null {
       return "inventory";
     case "sync_orders":
       return "orders";
-    case "refresh_all":
-      return "full";
     default:
       return null;
   }
+}
+
+function getJobActionResponse({
+  intent,
+  job,
+}: {
+  intent: string;
+  job: SyncJobRow;
+}): ActionData {
+  const status = job.status;
+  const label = job.job_type;
+
+  return {
+    ok: status !== "error" && status !== "cancelled",
+    intent,
+    message:
+      status === "success"
+        ? `${label} sync completed.`
+        : status === "error"
+          ? `${label} sync failed at ${job.current_step}: ${job.error_message}`
+          : status === "cancelled"
+            ? `${label} sync was cancelled.`
+            : `${label} sync batch completed. Continue to process the next batch.`,
+    failedStep: status === "error" ? job.current_step : null,
+    details: job.counts,
+    job,
+  };
 }
 
 function isActiveJob(job?: SyncJobRow | null): job is SyncJobRow {
@@ -567,7 +587,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(formData.get("intent") ?? "");
 
   try {
-    if (intent === "process_job") {
+    if (intent === "continue_job") {
       const jobId = String(formData.get("jobId") ?? "");
 
       if (!jobId) {
@@ -585,38 +605,31 @@ export async function action({ request }: ActionFunctionArgs) {
         jobId,
       });
 
-      return {
-        ok: result.job.status !== "error",
+      return getJobActionResponse({
         intent,
-        message:
-          result.job.status === "success"
-            ? `${result.job.job_type} sync job completed.`
-            : result.job.status === "error"
-              ? `${result.job.job_type} sync job failed at ${result.job.current_step}: ${result.job.error_message}`
-              : `${result.job.job_type} sync job running: ${result.job.current_step}.`,
-        failedStep:
-          result.job.status === "error" ? result.job.current_step : null,
-        details: result.job.details,
         job: result.job,
-      } satisfies ActionData;
+      });
     }
 
     const jobType = getJobTypeForIntent(intent);
 
     if (jobType) {
-      const result = await createManualSyncJob({
+      const { job } = await createManualSyncJob({
         supabase,
         shop: session.shop,
         jobType,
       });
-      return {
-        ok: true,
+      const result = await processManualSyncJobBatch({
+        admin,
+        supabase,
+        shop: session.shop,
+        jobId: job.id,
+      });
+
+      return getJobActionResponse({
         intent,
-        message: result.reused
-          ? `${result.job.job_type} sync job is already running.`
-          : `${result.job.job_type} sync job started.`,
         job: result.job,
-      } satisfies ActionData;
+      });
     }
 
     return {
@@ -664,13 +677,13 @@ function SyncTypeStatusCard({
   runs,
   activeIntent,
   activeJob,
-  isAnySyncRunning,
+  isAnyJobActive,
 }: {
   config: SyncTypeConfig;
   runs: SyncRun[];
   activeIntent?: string | null;
   activeJob?: SyncJobRow | null;
-  isAnySyncRunning: boolean;
+  isAnyJobActive: boolean;
 }) {
   const summary = getSyncTypeSummary(runs, config.syncType);
   const latestRun = summary.latestRun;
@@ -683,6 +696,9 @@ function SyncTypeStatusCard({
     (isActiveJob(activeJob) &&
       (activeJob?.job_type === config.syncType ||
         activeJob?.job_type === "full"));
+  const canContinue =
+    isActiveJob(activeJob) && activeJob.job_type === config.syncType;
+  const isDisabled = Boolean(activeIntent) || (isAnyJobActive && !canContinue);
   const statusLabel = isRunning
     ? "running"
     : latestRun
@@ -783,12 +799,16 @@ function SyncTypeStatusCard({
         <input type="hidden" name="intent" value={config.intent} />
         <AppButton
           type="submit"
-          disabled={isAnySyncRunning}
+          disabled={isDisabled}
           variant="secondary"
           compact
           fullWidth
         >
-          {isRunning ? getRunningLabel(config.intent) : config.actionLabel}
+          {canContinue
+            ? `Continue ${config.label} Sync`
+            : isRunning
+              ? getRunningLabel(config.intent)
+              : config.actionLabel}
         </AppButton>
       </Form>
     </section>
@@ -799,58 +819,20 @@ export default function AdminSyncPage() {
   const { shop, counts, lastSyncRuns, activeJob, recentJobs } =
     useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
-  const jobFetcher = useFetcher<ActionData>();
   const navigation = useNavigation();
-  const revalidator = useRevalidator();
   const liveJob = selectCurrentSyncJob([
     activeJob,
-    jobFetcher.data?.job,
     actionData?.job,
   ]);
   const activeIntent =
     navigation.state !== "idle"
       ? String(navigation.formData?.get("intent") ?? "")
       : null;
-  const isAnySyncRunning =
-    Boolean(activeIntent) ||
-    isActiveJob(liveJob) ||
-    jobFetcher.state !== "idle";
-  const isRefreshing = activeIntent === "refresh_all";
+  const isAnyJobActive = isActiveJob(liveJob);
   const lastSuccessfulSync = lastSyncRuns.find(
     (run) => run.status === "success" && run.finished_at,
   );
   const actionDetailSummary = getActionDetailSummary(actionData);
-
-  useEffect(() => {
-    if (!isActiveJob(liveJob) || jobFetcher.state !== "idle") {
-      return;
-    }
-
-    const jobId = liveJob.id;
-    const timeout = window.setTimeout(() => {
-      jobFetcher.submit(
-        {
-          intent: "process_job",
-          jobId,
-        },
-        {
-          method: "post",
-        },
-      );
-    }, 500);
-
-    return () => window.clearTimeout(timeout);
-  }, [jobFetcher, liveJob]);
-
-  useEffect(() => {
-    if (
-      jobFetcher.state === "idle" &&
-      jobFetcher.data?.job &&
-      !isActiveJob(jobFetcher.data.job)
-    ) {
-      revalidator.revalidate();
-    }
-  }, [jobFetcher.data, jobFetcher.state, revalidator]);
 
   return (
     <main
@@ -929,7 +911,7 @@ export default function AdminSyncPage() {
                 runs={lastSyncRuns}
                 activeIntent={activeIntent}
                 activeJob={liveJob}
-                isAnySyncRunning={isAnySyncRunning}
+                isAnyJobActive={isAnyJobActive}
               />
             ))}
           </div>
@@ -982,41 +964,33 @@ export default function AdminSyncPage() {
             {liveJob.error_message ? (
               <InlineResult variant="error">{liveJob.error_message}</InlineResult>
             ) : null}
+            {isActiveJob(liveJob) ? (
+              <Form method="post">
+                <input type="hidden" name="intent" value="continue_job" />
+                <input type="hidden" name="jobId" value={liveJob.id} />
+                <AppButton
+                  type="submit"
+                  disabled={Boolean(activeIntent)}
+                  variant="secondary"
+                  compact
+                >
+                  Continue Current Job
+                </AppButton>
+              </Form>
+            ) : null}
           </section>
         ) : null}
 
-        <div style={{ marginBottom: 24 }}>
-          <Card title="Refresh All Data">
-            <div style={{ display: "grid", gap: 12 }}>
-              <Form method="post">
-                <input type="hidden" name="intent" value="refresh_all" />
-                <AppButton type="submit" disabled={isAnySyncRunning} fullWidth>
-                  {isRefreshing || liveJob?.job_type === "full"
-                    ? "Refreshing all data..."
-                    : "Refresh All Data"}
-                </AppButton>
-              </Form>
-
-              {actionData || jobFetcher.data ? (
-                <div style={{ display: "grid", gap: 8 }}>
-                  <InlineResult
-                    variant={(jobFetcher.data ?? actionData)?.ok ? "success" : "error"}
-                  >
-                    {(jobFetcher.data ?? actionData)?.message}
-                  </InlineResult>
-                  {actionDetailSummary ? (
-                    <HelperText>{actionDetailSummary}</HelperText>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <HelperText>
-                Runs in order: locations, products, inventory, then orders. If a
-                step fails, the refresh stops and the failed step is shown.
-              </HelperText>
-            </div>
-          </Card>
-        </div>
+        {actionData ? (
+          <div style={{ marginBottom: 24 }}>
+            <InlineResult variant={actionData.ok ? "success" : "error"}>
+              {actionData.message}
+            </InlineResult>
+            {actionDetailSummary ? (
+              <HelperText>{actionDetailSummary}</HelperText>
+            ) : null}
+          </div>
+        ) : null}
 
         <Card title="Database records">
           <HelperText>
