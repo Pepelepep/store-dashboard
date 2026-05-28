@@ -426,6 +426,42 @@ function isActiveJob(job?: SyncJobRow | null): job is SyncJobRow {
   return job?.status === "pending" || job?.status === "running";
 }
 
+function getJobStatusPriority(status?: string | null) {
+  switch (status) {
+    case "running":
+      return 0;
+    case "pending":
+      return 1;
+    case "error":
+      return 2;
+    case "success":
+      return 3;
+    case "cancelled":
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function selectCurrentSyncJob(jobs: Array<SyncJobRow | null | undefined>) {
+  return (
+    [...jobs]
+      .filter((job): job is SyncJobRow => Boolean(job))
+      .sort((a, b) => {
+        const priorityDiff =
+          getJobStatusPriority(a.status) - getJobStatusPriority(b.status);
+
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        return (
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+        );
+      })[0] ?? null
+  );
+}
+
 function getJobProgressSummary(job?: SyncJobRow | null) {
   if (!job?.counts) {
     return "No batch counts recorded yet.";
@@ -504,27 +540,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .order("started_at", { ascending: false })
     .limit(50);
 
-  const { data: activeJobs } = await supabase
-    .from("sync_jobs")
-    .select("*")
-    .eq("shop_domain", session.shop)
-    .in("status", ["pending", "running"])
-    .order("updated_at", { ascending: false })
-    .limit(1);
-
   const { data: recentJobs } = await supabase
     .from("sync_jobs")
     .select("*")
     .eq("shop_domain", session.shop)
     .order("updated_at", { ascending: false })
-    .limit(10);
+    .limit(20);
+  const typedRecentJobs = (recentJobs ?? []) as SyncJobRow[];
 
   return {
     shop: session.shop,
     counts,
     lastSyncRuns: (syncRuns ?? []) as SyncRun[],
-    activeJob: ((activeJobs ?? [])[0] ?? null) as SyncJobRow | null,
-    recentJobs: (recentJobs ?? []) as SyncJobRow[],
+    activeJob: selectCurrentSyncJob(typedRecentJobs),
+    recentJobs: typedRecentJobs,
   };
 }
 
@@ -773,7 +802,11 @@ export default function AdminSyncPage() {
   const jobFetcher = useFetcher<ActionData>();
   const navigation = useNavigation();
   const revalidator = useRevalidator();
-  const liveJob = jobFetcher.data?.job ?? actionData?.job ?? activeJob;
+  const liveJob = selectCurrentSyncJob([
+    activeJob,
+    jobFetcher.data?.job,
+    actionData?.job,
+  ]);
   const activeIntent =
     navigation.state !== "idle"
       ? String(navigation.formData?.get("intent") ?? "")
