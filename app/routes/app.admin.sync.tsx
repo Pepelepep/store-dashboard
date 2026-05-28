@@ -3,7 +3,6 @@ import { useEffect } from "react";
 import {
   Form,
   useActionData,
-  useFetcher,
   useLoaderData,
   useNavigation,
   useRevalidator,
@@ -12,10 +11,7 @@ import {
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
-import {
-  createManualSyncJob,
-  processManualSyncJobBatch,
-} from "../lib/sync/sync-jobs.server";
+import { createManualSyncJob } from "../lib/sync/sync-jobs.server";
 import type {
   SyncJobRow,
   SyncJobType,
@@ -558,7 +554,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
 
   await assertAdminAccess({ request, session, supabase });
@@ -567,40 +563,6 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(formData.get("intent") ?? "");
 
   try {
-    if (intent === "process_job") {
-      const jobId = String(formData.get("jobId") ?? "");
-
-      if (!jobId) {
-        return {
-          ok: false,
-          intent,
-          message: "Missing sync job id.",
-        } satisfies ActionData;
-      }
-
-      const result = await processManualSyncJobBatch({
-        admin,
-        supabase,
-        shop: session.shop,
-        jobId,
-      });
-
-      return {
-        ok: result.job.status !== "error",
-        intent,
-        message:
-          result.job.status === "success"
-            ? `${result.job.job_type} sync job completed.`
-            : result.job.status === "error"
-              ? `${result.job.job_type} sync job failed at ${result.job.current_step}: ${result.job.error_message}`
-              : `${result.job.job_type} sync job running: ${result.job.current_step}.`,
-        failedStep:
-          result.job.status === "error" ? result.job.current_step : null,
-        details: result.job.details,
-        job: result.job,
-      } satisfies ActionData;
-    }
-
     const jobType = getJobTypeForIntent(intent);
 
     if (jobType) {
@@ -799,12 +761,10 @@ export default function AdminSyncPage() {
   const { shop, counts, lastSyncRuns, activeJob, recentJobs } =
     useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
-  const jobFetcher = useFetcher<ActionData>();
   const navigation = useNavigation();
   const revalidator = useRevalidator();
   const liveJob = selectCurrentSyncJob([
     activeJob,
-    jobFetcher.data?.job,
     actionData?.job,
   ]);
   const activeIntent =
@@ -812,9 +772,7 @@ export default function AdminSyncPage() {
       ? String(navigation.formData?.get("intent") ?? "")
       : null;
   const isAnySyncRunning =
-    Boolean(activeIntent) ||
-    isActiveJob(liveJob) ||
-    jobFetcher.state !== "idle";
+    Boolean(activeIntent) || isActiveJob(liveJob);
   const isRefreshing = activeIntent === "refresh_all";
   const lastSuccessfulSync = lastSyncRuns.find(
     (run) => run.status === "success" && run.finished_at,
@@ -822,35 +780,16 @@ export default function AdminSyncPage() {
   const actionDetailSummary = getActionDetailSummary(actionData);
 
   useEffect(() => {
-    if (!isActiveJob(liveJob) || jobFetcher.state !== "idle") {
+    if (!isActiveJob(liveJob)) {
       return;
     }
 
-    const jobId = liveJob.id;
-    const timeout = window.setTimeout(() => {
-      jobFetcher.submit(
-        {
-          intent: "process_job",
-          jobId,
-        },
-        {
-          method: "post",
-        },
-      );
-    }, 500);
-
-    return () => window.clearTimeout(timeout);
-  }, [jobFetcher, liveJob]);
-
-  useEffect(() => {
-    if (
-      jobFetcher.state === "idle" &&
-      jobFetcher.data?.job &&
-      !isActiveJob(jobFetcher.data.job)
-    ) {
+    const interval = window.setInterval(() => {
       revalidator.revalidate();
-    }
-  }, [jobFetcher.data, jobFetcher.state, revalidator]);
+    }, 2500);
+
+    return () => window.clearInterval(interval);
+  }, [liveJob?.id, liveJob?.status, revalidator]);
 
   return (
     <main
@@ -997,12 +936,10 @@ export default function AdminSyncPage() {
                 </AppButton>
               </Form>
 
-              {actionData || jobFetcher.data ? (
+              {actionData ? (
                 <div style={{ display: "grid", gap: 8 }}>
-                  <InlineResult
-                    variant={(jobFetcher.data ?? actionData)?.ok ? "success" : "error"}
-                  >
-                    {(jobFetcher.data ?? actionData)?.message}
+                  <InlineResult variant={actionData.ok ? "success" : "error"}>
+                    {actionData.message}
                   </InlineResult>
                   {actionDetailSummary ? (
                     <HelperText>{actionDetailSummary}</HelperText>
