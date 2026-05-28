@@ -78,6 +78,30 @@ type InventoryItemNode = {
   };
 };
 
+type InventoryItemCostWebhookUpdate = {
+  inventoryItemId: string;
+  sku?: string | null;
+  tracked?: boolean | null;
+  unitCost: number | null;
+  hasExplicitUnitCost: boolean;
+};
+
+type InventoryItemSnapshotInput = {
+  inventoryItemId: string;
+  sku?: string | null;
+  tracked?: boolean | null;
+  unitCost: number | null;
+  hasUnitCostValue: boolean;
+  costSource: string;
+};
+
+type InventoryItemSnapshotRow = {
+  inventory_item_id: string;
+  sku: string | null;
+  tracked: boolean | null;
+  unit_cost: number | null;
+};
+
 type VariantCostRow = {
   shopify_variant_id: string;
   inventory_item_id: string | null;
@@ -182,7 +206,10 @@ type OrderNode = {
   };
 };
 
-export type SyncSource = "manual_admin_sync" | "scheduled_daily_sync" | "webhook";
+export type SyncSource =
+  | "manual_admin_sync"
+  | "scheduled_daily_sync"
+  | "webhook";
 
 const INVENTORY_BATCH_SIZE = 25;
 const ORDERS_PAGE_SIZE = 50;
@@ -254,8 +281,9 @@ function getStaffAttribution(
 function getTransactionStaffAttribution(
   transactions?: OrderTransactionNode[] | null,
 ): StaffAttribution {
-  const transactionUser = transactions?.find((transaction) => transaction.user?.id)
-    ?.user;
+  const transactionUser = transactions?.find(
+    (transaction) => transaction.user?.id,
+  )?.user;
 
   return getStaffAttribution(transactionUser, "transaction_user");
 }
@@ -427,6 +455,224 @@ async function upsertInBatches({
   }
 }
 
+async function upsertInventoryItemSnapshots({
+  supabase,
+  shop,
+  snapshots,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  snapshots: InventoryItemSnapshotInput[];
+}) {
+  const normalizedSnapshots = snapshots
+    .map((snapshot) => ({
+      ...snapshot,
+      inventoryItemId: normalizeInventoryItemId(snapshot.inventoryItemId),
+    }))
+    .filter((snapshot) => snapshot.inventoryItemId);
+
+  if (normalizedSnapshots.length === 0) {
+    return new Map<string, InventoryItemSnapshotRow>();
+  }
+
+  const inventoryItemIds = Array.from(
+    new Set(normalizedSnapshots.map((snapshot) => snapshot.inventoryItemId)),
+  );
+  const { data: existingRows, error: existingError } = await supabase
+    .from("inventory_items")
+    .select("inventory_item_id, sku, tracked, unit_cost")
+    .eq("shop_domain", shop)
+    .in("inventory_item_id", inventoryItemIds);
+
+  if (existingError) {
+    throw new Error(existingError.message);
+  }
+
+  const existingById = new Map(
+    ((existingRows ?? []) as InventoryItemSnapshotRow[]).map((row) => [
+      row.inventory_item_id,
+      row,
+    ]),
+  );
+  const snapshotById = new Map<string, InventoryItemSnapshotInput>();
+
+  for (const snapshot of normalizedSnapshots) {
+    snapshotById.set(snapshot.inventoryItemId, snapshot);
+  }
+
+  const rows = Array.from(snapshotById.values()).map((snapshot) => {
+    const existing = existingById.get(snapshot.inventoryItemId);
+    const unitCost = snapshot.hasUnitCostValue
+      ? snapshot.unitCost
+      : (existing?.unit_cost ?? null);
+
+    return {
+      shop_domain: shop,
+      inventory_item_id: snapshot.inventoryItemId,
+      sku: snapshot.sku ?? existing?.sku ?? null,
+      tracked: snapshot.tracked ?? existing?.tracked ?? null,
+      unit_cost: unitCost,
+      cost_source: snapshot.hasUnitCostValue
+        ? snapshot.costSource
+        : existing
+          ? "PRESERVED_EXISTING_COST"
+          : "MISSING_COST",
+      synced_at: new Date().toISOString(),
+    };
+  });
+
+  await upsertInBatches({
+    supabase,
+    table: "inventory_items",
+    rows,
+    onConflict: "shop_domain,inventory_item_id",
+  });
+
+  return new Map(
+    rows.map((row) => [
+      row.inventory_item_id,
+      {
+        inventory_item_id: row.inventory_item_id,
+        sku: row.sku,
+        tracked: row.tracked,
+        unit_cost: row.unit_cost,
+      },
+    ]),
+  );
+}
+
+async function getExistingVariantCosts({
+  supabase,
+  shop,
+  variantIds,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  variantIds: string[];
+}) {
+  const uniqueVariantIds = Array.from(new Set(variantIds)).filter(Boolean);
+
+  if (uniqueVariantIds.length === 0) {
+    return new Map<string, number | null>();
+  }
+
+  const { data, error } = await supabase
+    .from("variants")
+    .select("shopify_variant_id, unit_cost")
+    .eq("shop_domain", shop)
+    .in("shopify_variant_id", uniqueVariantIds);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return new Map(
+    (
+      (data ?? []) as Array<{
+        shopify_variant_id: string;
+        unit_cost: number | null;
+      }>
+    ).map((row) => [row.shopify_variant_id, row.unit_cost]),
+  );
+}
+
+async function updateVariantsFromInventoryItemSnapshots({
+  supabase,
+  shop,
+  inventoryItemIds,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  inventoryItemIds: string[];
+}) {
+  const normalizedInventoryItemIds = Array.from(
+    new Set(inventoryItemIds.map(normalizeInventoryItemId)),
+  );
+
+  if (normalizedInventoryItemIds.length === 0) {
+    return {
+      variantsUpdated: 0,
+      affectedVariantRows: [] as Array<{
+        shopify_variant_id: string;
+        shopify_product_id?: string | null;
+        sku: string | null;
+        unit_cost: number | null;
+      }>,
+    };
+  }
+
+  const { data: snapshots, error: snapshotsError } = await supabase
+    .from("inventory_items")
+    .select("inventory_item_id, sku, unit_cost")
+    .eq("shop_domain", shop)
+    .in("inventory_item_id", normalizedInventoryItemIds);
+
+  if (snapshotsError) {
+    throw new Error(snapshotsError.message);
+  }
+
+  const snapshotByInventoryItemId = new Map(
+    ((snapshots ?? []) as InventoryItemSnapshotRow[]).map((snapshot) => [
+      snapshot.inventory_item_id,
+      snapshot,
+    ]),
+  );
+
+  const { data: variantsData, error: variantsError } = await supabase
+    .from("variants")
+    .select("shopify_variant_id, shopify_product_id, inventory_item_id, sku")
+    .eq("shop_domain", shop)
+    .in("inventory_item_id", normalizedInventoryItemIds);
+
+  if (variantsError) {
+    throw new Error(variantsError.message);
+  }
+
+  const variants = (variantsData ?? []) as VariantDbRow[];
+  const affectedVariantRows: Array<{
+    shopify_variant_id: string;
+    shopify_product_id?: string | null;
+    sku: string | null;
+    unit_cost: number | null;
+  }> = [];
+  let variantsUpdated = 0;
+
+  for (const variant of variants) {
+    const snapshot = snapshotByInventoryItemId.get(variant.inventory_item_id);
+
+    if (!snapshot) {
+      continue;
+    }
+
+    const { error: variantUpdateError } = await supabase
+      .from("variants")
+      .update({
+        unit_cost: snapshot.unit_cost,
+        sku: variant.sku ?? snapshot.sku ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("shop_domain", shop)
+      .eq("shopify_variant_id", variant.shopify_variant_id);
+
+    if (variantUpdateError) {
+      throw new Error(variantUpdateError.message);
+    }
+
+    variantsUpdated += 1;
+    affectedVariantRows.push({
+      shopify_variant_id: variant.shopify_variant_id,
+      shopify_product_id: variant.shopify_product_id,
+      sku: variant.sku ?? snapshot.sku ?? null,
+      unit_cost: snapshot.unit_cost,
+    });
+  }
+
+  return {
+    variantsUpdated,
+    affectedVariantRows,
+  };
+}
+
 async function recomputeOrderLineCogsForVariants({
   supabase,
   shop,
@@ -442,12 +688,10 @@ async function recomputeOrderLineCogsForVariants({
   }>;
 }) {
   const costByVariantId = new Map(
-    variantRows
-      .filter((variant) => variant.unit_cost !== null)
-      .map((variant) => [
-        variant.shopify_variant_id,
-        variant.unit_cost as number,
-      ]),
+    variantRows.map((variant) => [
+      variant.shopify_variant_id,
+      variant.unit_cost,
+    ]),
   );
   const variantIds = Array.from(costByVariantId.keys());
   const normalizeSku = (sku: string | null) => sku?.trim() ?? "";
@@ -458,10 +702,8 @@ async function recomputeOrderLineCogsForVariants({
   };
   const costBySku = new Map(
     variantRows
-      .filter(
-        (variant) => variant.unit_cost !== null && isUsableSku(variant.sku),
-      )
-      .map((variant) => [normalizeSku(variant.sku), variant.unit_cost as number]),
+      .filter((variant) => isUsableSku(variant.sku))
+      .map((variant) => [normalizeSku(variant.sku), variant.unit_cost]),
   );
   const skus = Array.from(costBySku.keys());
   const productVariantCosts = new Map<string, number[]>();
@@ -574,15 +816,18 @@ async function recomputeOrderLineCogsForVariants({
 
     const quantity = Number(orderLine.quantity ?? 0);
     const revenue = Number(orderLine.revenue ?? 0);
-    const cogs = unitCost * quantity;
+    const cogs = unitCost === null ? null : unitCost * quantity;
 
     const { error: updateError } = await supabase
       .from("order_lines")
       .update({
         unit_cost: unitCost,
         cogs,
-        gross_profit: revenue - cogs,
-        cost_source: "recomputed_from_current_variant_cost",
+        gross_profit: cogs === null ? null : revenue - cogs,
+        cost_source:
+          unitCost === null
+            ? "MISSING_COST"
+            : "recomputed_from_current_variant_cost",
       })
       .eq("shop_domain", shop)
       .eq("shopify_line_item_id", orderLine.shopify_line_item_id);
@@ -857,7 +1102,7 @@ export async function syncProducts({
       updated_at: new Date().toISOString(),
     }));
 
-    const variantRows = products.flatMap((product) =>
+    const rawVariantRows = products.flatMap((product) =>
       product.variants.edges.map(({ node: variant }) => ({
         shop_domain: shop,
         shopify_variant_id: variant.id,
@@ -872,6 +1117,18 @@ export async function syncProducts({
         updated_at: new Date().toISOString(),
       })),
     );
+    const existingVariantCosts = await getExistingVariantCosts({
+      supabase,
+      shop,
+      variantIds: rawVariantRows.map((variant) => variant.shopify_variant_id),
+    });
+    const variantRows = rawVariantRows.map((variant) => ({
+      ...variant,
+      unit_cost:
+        variant.unit_cost ??
+        existingVariantCosts.get(variant.shopify_variant_id) ??
+        null,
+    }));
 
     if (productRows.length > 0) {
       const { error } = await supabase.from("products").upsert(productRows, {
@@ -893,9 +1150,36 @@ export async function syncProducts({
       }
     }
 
+    await upsertInventoryItemSnapshots({
+      supabase,
+      shop,
+      snapshots: variantRows
+        .filter((variant) => variant.inventory_item_id)
+        .map((variant) => ({
+          inventoryItemId: variant.inventory_item_id as string,
+          sku: variant.sku,
+          unitCost: variant.unit_cost,
+          hasUnitCostValue: variant.unit_cost !== null,
+          costSource: "PRODUCT_SYNC_UNIT_COST",
+        })),
+    });
+
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
+      supabase,
+      shop,
+      variantRows,
+    });
+    const variantsWithUnitCostSynced = variantRows.filter(
+      (variant) => variant.unit_cost !== null,
+    ).length;
+
     const result = {
       productsSynced: productRows.length,
       variantsSynced: variantRows.length,
+      variantsWithUnitCostSynced,
+      variantsWithMissingUnitCost:
+        variantRows.length - variantsWithUnitCostSynced,
+      orderLinesCogsRecomputed,
     };
 
     await insertSyncRun({
@@ -1002,7 +1286,7 @@ export async function syncProductById({
       },
     ];
 
-    const variantRows = product.variants.edges.map(({ node: variant }) => ({
+    const rawVariantRows = product.variants.edges.map(({ node: variant }) => ({
       shop_domain: shop,
       shopify_variant_id: variant.id,
       shopify_product_id: product.id,
@@ -1014,6 +1298,18 @@ export async function syncProductById({
         variant.inventoryItem?.unitCost?.amount,
       ),
       updated_at: new Date().toISOString(),
+    }));
+    const existingVariantCosts = await getExistingVariantCosts({
+      supabase,
+      shop,
+      variantIds: rawVariantRows.map((variant) => variant.shopify_variant_id),
+    });
+    const variantRows = rawVariantRows.map((variant) => ({
+      ...variant,
+      unit_cost:
+        variant.unit_cost ??
+        existingVariantCosts.get(variant.shopify_variant_id) ??
+        null,
     }));
 
     const { error: productError } = await supabase
@@ -1037,6 +1333,20 @@ export async function syncProductById({
         throw new Error(variantsError.message);
       }
     }
+
+    await upsertInventoryItemSnapshots({
+      supabase,
+      shop,
+      snapshots: variantRows
+        .filter((variant) => variant.inventory_item_id)
+        .map((variant) => ({
+          inventoryItemId: variant.inventory_item_id as string,
+          sku: variant.sku,
+          unitCost: variant.unit_cost,
+          hasUnitCostValue: variant.unit_cost !== null,
+          costSource: "PRODUCT_SYNC_UNIT_COST",
+        })),
+    });
 
     const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
       supabase,
@@ -1157,7 +1467,7 @@ export async function syncInventory({
   try {
     const { data: variantRows, error: variantsError } = await supabase
       .from("variants")
-      .select("shopify_variant_id, inventory_item_id, sku")
+      .select("shopify_variant_id, shopify_product_id, inventory_item_id, sku")
       .eq("shop_domain", shop)
       .not("inventory_item_id", "is", null);
 
@@ -1187,6 +1497,8 @@ export async function syncInventory({
 
     let totalInventoryLevelsSynced = 0;
     let totalInventoryItemsProcessed = 0;
+    let totalVariantsUnitCostUpdated = 0;
+    let totalOrderLinesCogsRecomputed = 0;
 
     for (const chunk of chunks) {
       const response = await admin.graphql(
@@ -1197,6 +1509,10 @@ export async function syncInventory({
                 id
                 sku
                 tracked
+                unitCost {
+                  amount
+                  currencyCode
+                }
                 inventoryLevels(first: 20) {
                   edges {
                     node {
@@ -1231,6 +1547,41 @@ export async function syncInventory({
       const inventoryItems: InventoryItemNode[] = (
         data.data?.nodes ?? []
       ).filter(Boolean);
+
+      await upsertInventoryItemSnapshots({
+        supabase,
+        shop,
+        snapshots: inventoryItems.map((inventoryItem) => {
+          const unitCost = parseNullableNumericAmount(
+            inventoryItem.unitCost?.amount,
+          );
+
+          return {
+            inventoryItemId: inventoryItem.id,
+            sku: inventoryItem.sku ?? null,
+            tracked: inventoryItem.tracked,
+            unitCost,
+            hasUnitCostValue: unitCost !== null,
+            costSource: "INVENTORY_SYNC_UNIT_COST",
+          };
+        }),
+      });
+
+      const variantUpdateResult =
+        await updateVariantsFromInventoryItemSnapshots({
+          supabase,
+          shop,
+          inventoryItemIds: inventoryItems.map(
+            (inventoryItem) => inventoryItem.id,
+          ),
+        });
+
+      totalVariantsUnitCostUpdated += variantUpdateResult.variantsUpdated;
+      totalOrderLinesCogsRecomputed += await recomputeOrderLineCogsForVariants({
+        supabase,
+        shop,
+        variantRows: variantUpdateResult.affectedVariantRows,
+      });
 
       const rows = inventoryItems.flatMap((inventoryItem) => {
         const variant = variantByInventoryItemId.get(inventoryItem.id);
@@ -1268,6 +1619,8 @@ export async function syncInventory({
     const result = {
       inventoryItemsProcessed: totalInventoryItemsProcessed,
       inventoryLevelsSynced: totalInventoryLevelsSynced,
+      variantsUnitCostUpdated: totalVariantsUnitCostUpdated,
+      orderLinesCogsRecomputed: totalOrderLinesCogsRecomputed,
     };
 
     await insertSyncRun({
@@ -1302,23 +1655,41 @@ export async function syncInventoryItems({
   supabase,
   source,
   inventoryItemIds,
+  inventoryItemUpdates,
 }: {
   admin: ShopifyAdminClient;
   shop: string;
   supabase: SupabaseAdminClient;
   source: SyncSource;
   inventoryItemIds: string[];
+  inventoryItemUpdates?: InventoryItemCostWebhookUpdate[];
 }) {
   const startedAt = new Date().toISOString();
 
   try {
+    const normalizedInventoryItemUpdates = (inventoryItemUpdates ?? []).map(
+      (update) => ({
+        ...update,
+        inventoryItemId: normalizeInventoryItemId(update.inventoryItemId),
+      }),
+    );
     const normalizedInventoryItemIds = Array.from(
       new Set(
-        inventoryItemIds
-          .map((inventoryItemId) => inventoryItemId.trim())
-          .filter(Boolean)
-          .map(normalizeInventoryItemId),
+        [
+          ...inventoryItemIds
+            .map((inventoryItemId) => inventoryItemId.trim())
+            .filter(Boolean),
+          ...normalizedInventoryItemUpdates.map(
+            (update) => update.inventoryItemId,
+          ),
+        ].map(normalizeInventoryItemId),
       ),
+    );
+    const webhookUpdateByInventoryItemId = new Map(
+      normalizedInventoryItemUpdates.map((update) => [
+        update.inventoryItemId,
+        update,
+      ]),
     );
 
     const { data: variantRows, error: variantsError } = await supabase
@@ -1393,47 +1764,69 @@ export async function syncInventoryItems({
       const inventoryItems: InventoryItemNode[] = (
         data.data?.nodes ?? []
       ).filter(Boolean);
+      const fetchedInventoryItemIds = new Set(
+        inventoryItems.map((inventoryItem) => inventoryItem.id),
+      );
+      const snapshots: InventoryItemSnapshotInput[] = inventoryItems.map(
+        (inventoryItem) => {
+          const webhookUpdate = webhookUpdateByInventoryItemId.get(
+            inventoryItem.id,
+          );
+          const graphUnitCost = parseNullableNumericAmount(
+            inventoryItem.unitCost?.amount,
+          );
+          const hasGraphUnitCost = graphUnitCost !== null;
+          const hasUnitCostValue =
+            webhookUpdate?.hasExplicitUnitCost === true || hasGraphUnitCost;
 
-      const affectedVariantRows: Array<{
-        shopify_variant_id: string;
-        shopify_product_id?: string | null;
-        sku: string | null;
-        unit_cost: number | null;
-      }> = [];
+          return {
+            inventoryItemId: inventoryItem.id,
+            sku: webhookUpdate?.sku ?? inventoryItem.sku ?? null,
+            tracked: webhookUpdate?.tracked ?? inventoryItem.tracked,
+            unitCost:
+              webhookUpdate?.hasExplicitUnitCost === true
+                ? webhookUpdate.unitCost
+                : graphUnitCost,
+            hasUnitCostValue,
+            costSource:
+              webhookUpdate?.hasExplicitUnitCost === true
+                ? "WEBHOOK_PAYLOAD_COST"
+                : "INVENTORY_ITEM_SYNC_UNIT_COST",
+          };
+        },
+      );
 
-      for (const inventoryItem of inventoryItems) {
-        const variant = variantByInventoryItemId.get(inventoryItem.id);
-
-        if (!variant) {
+      for (const webhookUpdate of normalizedInventoryItemUpdates) {
+        if (fetchedInventoryItemIds.has(webhookUpdate.inventoryItemId)) {
           continue;
         }
 
-        const unitCost = parseNullableNumericAmount(
-          inventoryItem.unitCost?.amount,
-        );
-        const { data: updatedVariantRows, error: variantUpdateError } =
-          await supabase
-            .from("variants")
-            .update({
-              unit_cost: unitCost,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("shop_domain", shop)
-            .eq("inventory_item_id", inventoryItem.id)
-            .select("shopify_variant_id");
-
-        if (variantUpdateError) {
-          throw new Error(variantUpdateError.message);
-        }
-
-        totalVariantsUnitCostUpdated += updatedVariantRows?.length ?? 0;
-        affectedVariantRows.push({
-          shopify_variant_id: variant.shopify_variant_id,
-          shopify_product_id: variant.shopify_product_id,
-          sku: variant.sku ?? inventoryItem.sku ?? null,
-          unit_cost: unitCost,
+        snapshots.push({
+          inventoryItemId: webhookUpdate.inventoryItemId,
+          sku: webhookUpdate.sku ?? null,
+          tracked: webhookUpdate.tracked ?? null,
+          unitCost: webhookUpdate.unitCost,
+          hasUnitCostValue: webhookUpdate.hasExplicitUnitCost,
+          costSource: "WEBHOOK_PAYLOAD_COST",
         });
       }
+
+      await upsertInventoryItemSnapshots({
+        supabase,
+        shop,
+        snapshots,
+      });
+
+      const variantUpdateResult =
+        await updateVariantsFromInventoryItemSnapshots({
+          supabase,
+          shop,
+          inventoryItemIds: snapshots.map(
+            (snapshot) => snapshot.inventoryItemId,
+          ),
+        });
+
+      totalVariantsUnitCostUpdated += variantUpdateResult.variantsUpdated;
 
       const rows = inventoryItems.flatMap((inventoryItem) => {
         const variant = variantByInventoryItemId.get(inventoryItem.id);
@@ -1466,19 +1859,28 @@ export async function syncInventoryItems({
 
       totalInventoryItemsProcessed += inventoryItems.length;
       totalInventoryLevelsSynced += rows.length;
-      totalOrderLinesCogsRecomputed +=
-        await recomputeOrderLineCogsForVariants({
-          supabase,
-          shop,
-          variantRows: affectedVariantRows,
-        });
+      totalOrderLinesCogsRecomputed += await recomputeOrderLineCogsForVariants({
+        supabase,
+        shop,
+        variantRows: variantUpdateResult.affectedVariantRows,
+      });
     }
 
+    const matchedInventoryItemIds = new Set(
+      variants.map((variant) => variant.inventory_item_id),
+    );
     const result = {
       inventoryItemsProcessed: totalInventoryItemsProcessed,
       inventoryLevelsSynced: totalInventoryLevelsSynced,
       variantsUnitCostUpdated: totalVariantsUnitCostUpdated,
       orderLinesCogsRecomputed: totalOrderLinesCogsRecomputed,
+      requestedInventoryItemIds: normalizedInventoryItemIds,
+      webhookPayloadCostExplicit: normalizedInventoryItemUpdates.some(
+        (update) => update.hasExplicitUnitCost,
+      ),
+      inventoryItemsWithoutVariantMatch: normalizedInventoryItemIds.filter(
+        (inventoryItemId) => !matchedInventoryItemIds.has(inventoryItemId),
+      ).length,
     };
 
     await insertSyncRun({
@@ -1816,7 +2218,9 @@ export async function syncOrders({
             financial_status: order.displayFinancialStatus ?? null,
             retail_location_id: order.retailLocation?.id ?? null,
             retail_location_name: order.retailLocation?.name ?? null,
-            total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
+            total_price: getNumericAmount(
+              order.totalPriceSet?.shopMoney?.amount,
+            ),
             staff_member_id: orderStaff.staffMemberId,
             staff_member_name: orderStaff.staffMemberName,
             staff_member_email: orderStaff.staffMemberEmail,
@@ -1939,7 +2343,8 @@ export async function syncOrders({
       syncResult = await runOrdersSync(true);
     } catch (error) {
       staffAttributionAvailable = false;
-      staffAttributionError = error instanceof Error ? error.message : String(error);
+      staffAttributionError =
+        error instanceof Error ? error.message : String(error);
       syncResult = await runOrdersSync(false);
     }
 
@@ -2017,7 +2422,8 @@ export async function runFullSync({
       source,
     });
 
-    const { startDate, endDate } = getIncrementalOrderDateRange(orderLookbackDays);
+    const { startDate, endDate } =
+      getIncrementalOrderDateRange(orderLookbackDays);
 
     currentStep = "orders";
     const orders = await syncOrders({
