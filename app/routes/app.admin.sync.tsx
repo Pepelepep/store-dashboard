@@ -1,21 +1,25 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { useEffect } from "react";
 import {
   Form,
   useActionData,
+  useFetcher,
   useLoaderData,
   useNavigation,
+  useRevalidator,
 } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
-  runFullSync,
-  syncInventory,
-  syncLocations,
-  syncOrders,
-  syncProducts,
-} from "../lib/sync/shopify-sync.server";
+  createManualSyncJob,
+  processManualSyncJobBatch,
+} from "../lib/sync/sync-jobs.server";
+import type {
+  SyncJobRow,
+  SyncJobType,
+} from "../lib/sync/sync-jobs.server";
 import { AppButton } from "../components/ui/AppButton";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
@@ -42,6 +46,8 @@ type LoaderData = {
   shop: string;
   counts: TableCount[];
   lastSyncRuns: SyncRun[];
+  activeJob: SyncJobRow | null;
+  recentJobs: SyncJobRow[];
 };
 
 type ActionData = {
@@ -50,6 +56,7 @@ type ActionData = {
   intent?: string;
   failedStep?: string | null;
   details?: unknown;
+  job?: SyncJobRow;
 };
 
 type SyncTypeConfig = {
@@ -398,6 +405,110 @@ function getRunningLabel(intent?: string | null) {
   }
 }
 
+function getJobTypeForIntent(intent: string): SyncJobType | null {
+  switch (intent) {
+    case "sync_locations":
+      return "locations";
+    case "sync_products":
+      return "products";
+    case "sync_inventory":
+      return "inventory";
+    case "sync_orders":
+      return "orders";
+    case "refresh_all":
+      return "full";
+    default:
+      return null;
+  }
+}
+
+function isActiveJob(job?: SyncJobRow | null): job is SyncJobRow {
+  return job?.status === "pending" || job?.status === "running";
+}
+
+function getJobStatusPriority(status?: string | null) {
+  switch (status) {
+    case "running":
+      return 0;
+    case "pending":
+      return 1;
+    case "error":
+      return 2;
+    case "success":
+      return 3;
+    case "cancelled":
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function selectCurrentSyncJob(jobs: Array<SyncJobRow | null | undefined>) {
+  return (
+    [...jobs]
+      .filter((job): job is SyncJobRow => Boolean(job))
+      .sort((a, b) => {
+        const priorityDiff =
+          getJobStatusPriority(a.status) - getJobStatusPriority(b.status);
+
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        return (
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+        );
+      })[0] ?? null
+  );
+}
+
+function getJobProgressSummary(job?: SyncJobRow | null) {
+  if (!job?.counts) {
+    return "No batch counts recorded yet.";
+  }
+
+  return Object.entries(job.counts)
+    .map(([step, counts]) => {
+      if (!counts || typeof counts !== "object") {
+        return null;
+      }
+
+      const stepCounts = counts as Record<string, unknown>;
+      const values = [
+        typeof stepCounts.syncedCount === "number"
+          ? `${stepCounts.syncedCount} records`
+          : null,
+        typeof stepCounts.productsSynced === "number"
+          ? `${stepCounts.productsSynced} products`
+          : null,
+        typeof stepCounts.variantsSynced === "number"
+          ? `${stepCounts.variantsSynced} variants`
+          : null,
+        typeof stepCounts.inventoryItemsProcessed === "number"
+          ? `${stepCounts.inventoryItemsProcessed} inventory items`
+          : null,
+        typeof stepCounts.inventoryLevelsSynced === "number"
+          ? `${stepCounts.inventoryLevelsSynced} levels`
+          : null,
+        typeof stepCounts.ordersSynced === "number"
+          ? `${stepCounts.ordersSynced} orders`
+          : null,
+        typeof stepCounts.orderLinesSynced === "number"
+          ? `${stepCounts.orderLinesSynced} lines`
+          : null,
+        typeof stepCounts.orderLinesCogsRecomputed === "number"
+          ? `${stepCounts.orderLinesCogsRecomputed} COGS recalculated`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      return values ? `${step}: ${values}` : null;
+    })
+    .filter(Boolean)
+    .join(" · ") || "No batch counts recorded yet.";
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
@@ -429,10 +540,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .order("started_at", { ascending: false })
     .limit(50);
 
+  const { data: recentJobs } = await supabase
+    .from("sync_jobs")
+    .select("*")
+    .eq("shop_domain", session.shop)
+    .order("updated_at", { ascending: false })
+    .limit(20);
+  const typedRecentJobs = (recentJobs ?? []) as SyncJobRow[];
+
   return {
     shop: session.shop,
     counts,
     lastSyncRuns: (syncRuns ?? []) as SyncRun[],
+    activeJob: selectCurrentSyncJob(typedRecentJobs),
+    recentJobs: typedRecentJobs,
   };
 }
 
@@ -446,92 +567,55 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(formData.get("intent") ?? "");
 
   try {
-    if (intent === "sync_locations") {
-      const result = await syncLocations({
-        admin,
-        shop: session.shop,
-        supabase,
-        source: "manual_admin_sync",
-      });
+    if (intent === "process_job") {
+      const jobId = String(formData.get("jobId") ?? "");
 
-      return {
-        ok: true,
-        intent,
-        message: `Locations sync completed: ${result.syncedCount} locations.`,
-        details: result,
-      } satisfies ActionData;
-    }
-
-    if (intent === "sync_products") {
-      const result = await syncProducts({
-        admin,
-        shop: session.shop,
-        supabase,
-        source: "manual_admin_sync",
-      });
-
-      return {
-        ok: true,
-        intent,
-        message: `Products sync completed: ${result.productsSynced} products and ${result.variantsSynced} variants.`,
-        details: result,
-      } satisfies ActionData;
-    }
-
-    if (intent === "sync_inventory") {
-      const result = await syncInventory({
-        admin,
-        shop: session.shop,
-        supabase,
-        source: "manual_admin_sync",
-      });
-
-      return {
-        ok: true,
-        intent,
-        message: `Inventory sync completed: ${result.inventoryItemsProcessed} items and ${result.inventoryLevelsSynced} levels.`,
-        details: result,
-      } satisfies ActionData;
-    }
-
-    if (intent === "sync_orders") {
-      const result = await syncOrders({
-        admin,
-        shop: session.shop,
-        supabase,
-        source: "manual_admin_sync",
-      });
-
-      return {
-        ok: true,
-        intent,
-        message: `Orders sync completed: ${result.ordersSynced} orders and ${result.orderLinesSynced} lines.`,
-        details: result,
-      } satisfies ActionData;
-    }
-
-    if (intent === "refresh_all") {
-      const result = await runFullSync({
-        admin,
-        shop: session.shop,
-        source: "manual_admin_sync",
-      });
-
-      if (!result.ok) {
+      if (!jobId) {
         return {
           ok: false,
           intent,
-          failedStep: result.failedStep,
-          message: `Refresh All Data failed at ${result.failedStep}: ${result.error}`,
-          details: result,
+          message: "Missing sync job id.",
         } satisfies ActionData;
       }
 
+      const result = await processManualSyncJobBatch({
+        admin,
+        supabase,
+        shop: session.shop,
+        jobId,
+      });
+
+      return {
+        ok: result.job.status !== "error",
+        intent,
+        message:
+          result.job.status === "success"
+            ? `${result.job.job_type} sync job completed.`
+            : result.job.status === "error"
+              ? `${result.job.job_type} sync job failed at ${result.job.current_step}: ${result.job.error_message}`
+              : `${result.job.job_type} sync job running: ${result.job.current_step}.`,
+        failedStep:
+          result.job.status === "error" ? result.job.current_step : null,
+        details: result.job.details,
+        job: result.job,
+      } satisfies ActionData;
+    }
+
+    const jobType = getJobTypeForIntent(intent);
+
+    if (jobType) {
+      const result = await createManualSyncJob({
+        supabase,
+        shop: session.shop,
+        jobType,
+      });
       return {
         ok: true,
         intent,
-        message: "Refresh All Data completed successfully.",
-        details: result,
+        message: result.reused
+          ? `${result.job.job_type} sync job is already running.`
+          : `${result.job.job_type} sync job started.`,
+        job: result.job,
       } satisfies ActionData;
     }
 
@@ -579,11 +663,13 @@ function SyncTypeStatusCard({
   config,
   runs,
   activeIntent,
+  activeJob,
   isAnySyncRunning,
 }: {
   config: SyncTypeConfig;
   runs: SyncRun[];
   activeIntent?: string | null;
+  activeJob?: SyncJobRow | null;
   isAnySyncRunning: boolean;
 }) {
   const summary = getSyncTypeSummary(runs, config.syncType);
@@ -592,7 +678,11 @@ function SyncTypeStatusCard({
     latestRun?.started_at,
     latestRun?.finished_at,
   );
-  const isRunning = activeIntent === config.intent;
+  const isRunning =
+    activeIntent === config.intent ||
+    (isActiveJob(activeJob) &&
+      (activeJob?.job_type === config.syncType ||
+        activeJob?.job_type === "full"));
   const statusLabel = isRunning
     ? "running"
     : latestRun
@@ -706,19 +796,61 @@ function SyncTypeStatusCard({
 }
 
 export default function AdminSyncPage() {
-  const { shop, counts, lastSyncRuns } = useLoaderData<LoaderData>();
+  const { shop, counts, lastSyncRuns, activeJob, recentJobs } =
+    useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
+  const jobFetcher = useFetcher<ActionData>();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
+  const liveJob = selectCurrentSyncJob([
+    activeJob,
+    jobFetcher.data?.job,
+    actionData?.job,
+  ]);
   const activeIntent =
     navigation.state !== "idle"
       ? String(navigation.formData?.get("intent") ?? "")
       : null;
-  const isAnySyncRunning = Boolean(activeIntent);
+  const isAnySyncRunning =
+    Boolean(activeIntent) ||
+    isActiveJob(liveJob) ||
+    jobFetcher.state !== "idle";
   const isRefreshing = activeIntent === "refresh_all";
   const lastSuccessfulSync = lastSyncRuns.find(
     (run) => run.status === "success" && run.finished_at,
   );
   const actionDetailSummary = getActionDetailSummary(actionData);
+
+  useEffect(() => {
+    if (!isActiveJob(liveJob) || jobFetcher.state !== "idle") {
+      return;
+    }
+
+    const jobId = liveJob.id;
+    const timeout = window.setTimeout(() => {
+      jobFetcher.submit(
+        {
+          intent: "process_job",
+          jobId,
+        },
+        {
+          method: "post",
+        },
+      );
+    }, 500);
+
+    return () => window.clearTimeout(timeout);
+  }, [jobFetcher, liveJob]);
+
+  useEffect(() => {
+    if (
+      jobFetcher.state === "idle" &&
+      jobFetcher.data?.job &&
+      !isActiveJob(jobFetcher.data.job)
+    ) {
+      revalidator.revalidate();
+    }
+  }, [jobFetcher.data, jobFetcher.state, revalidator]);
 
   return (
     <main
@@ -796,11 +928,62 @@ export default function AdminSyncPage() {
                 config={config}
                 runs={lastSyncRuns}
                 activeIntent={activeIntent}
+                activeJob={liveJob}
                 isAnySyncRunning={isAnySyncRunning}
               />
             ))}
           </div>
         </section>
+
+        {liveJob ? (
+          <section
+            style={{
+              background: "white",
+              border: "1px solid #e3e3e3",
+              borderRadius: 12,
+              padding: 16,
+              marginBottom: 24,
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            <div
+              style={{
+                alignItems: "center",
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 800 }}>
+                  Current sync job: {liveJob.job_type}
+                </div>
+                <HelperText>
+                  Step: {liveJob.current_step ?? "-"} · Updated:{" "}
+                  {formatDateTime(liveJob.updated_at)}
+                </HelperText>
+              </div>
+              <StatusBadge variant={getSyncStatusVariant(liveJob.status)}>
+                {liveJob.status}
+              </StatusBadge>
+            </div>
+            <div
+              style={{
+                background: "#f6f6f7",
+                border: "1px solid #e3e3e3",
+                borderRadius: 10,
+                fontSize: 13,
+                padding: 10,
+              }}
+            >
+              {getJobProgressSummary(liveJob)}
+            </div>
+            {liveJob.error_message ? (
+              <InlineResult variant="error">{liveJob.error_message}</InlineResult>
+            ) : null}
+          </section>
+        ) : null}
 
         <div style={{ marginBottom: 24 }}>
           <Card title="Refresh All Data">
@@ -808,14 +991,18 @@ export default function AdminSyncPage() {
               <Form method="post">
                 <input type="hidden" name="intent" value="refresh_all" />
                 <AppButton type="submit" disabled={isAnySyncRunning} fullWidth>
-                  {isRefreshing ? "Refreshing all data..." : "Refresh All Data"}
+                  {isRefreshing || liveJob?.job_type === "full"
+                    ? "Refreshing all data..."
+                    : "Refresh All Data"}
                 </AppButton>
               </Form>
 
-              {actionData ? (
+              {actionData || jobFetcher.data ? (
                 <div style={{ display: "grid", gap: 8 }}>
-                  <InlineResult variant={actionData.ok ? "success" : "error"}>
-                    {actionData.message}
+                  <InlineResult
+                    variant={(jobFetcher.data ?? actionData)?.ok ? "success" : "error"}
+                  >
+                    {(jobFetcher.data ?? actionData)?.message}
                   </InlineResult>
                   {actionDetailSummary ? (
                     <HelperText>{actionDetailSummary}</HelperText>
@@ -860,6 +1047,83 @@ export default function AdminSyncPage() {
                 {row.table}: {row.error ? "Error" : row.count}
               </div>
             ))}
+          </div>
+        </Card>
+
+        <div style={{ height: 24 }} />
+
+        <Card title="Recent sync jobs">
+          <HelperText>
+            Live manual job status. Each job is processed in small server
+            batches from this page.
+          </HelperText>
+          <div style={{ overflowX: "auto", marginTop: 12 }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 14,
+              }}
+            >
+              <thead>
+                <tr>
+                  {["Type", "Status", "Step", "Updated", "Progress", "Error"].map(
+                    (header) => (
+                      <th
+                        key={header}
+                        style={{
+                          textAlign: "left",
+                          padding: "10px",
+                          borderBottom: "1px solid #ddd",
+                        }}
+                      >
+                        {header}
+                      </th>
+                    ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {recentJobs.map((job) => (
+                  <tr key={job.id}>
+                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                      {job.job_type}
+                    </td>
+                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                      <StatusBadge variant={getSyncStatusVariant(job.status)}>
+                        {job.status}
+                      </StatusBadge>
+                    </td>
+                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                      {job.current_step ?? "-"}
+                    </td>
+                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                      {formatDateTime(job.updated_at)}
+                    </td>
+                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                      {getJobProgressSummary(job)}
+                    </td>
+                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                      {job.error_message ?? "-"}
+                    </td>
+                  </tr>
+                ))}
+
+                {recentJobs.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      style={{
+                        padding: "14px 10px",
+                        color: "#616161",
+                      }}
+                    >
+                      No sync jobs yet.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
           </div>
         </Card>
 

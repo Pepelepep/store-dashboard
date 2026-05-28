@@ -243,6 +243,27 @@ const ORDERS_PAGE_SIZE = 50;
 const LINE_ITEMS_PAGE_SIZE = 100;
 const UPSERT_BATCH_SIZE = 500;
 
+export type ProductsSyncBatchProgress = {
+  cursor?: string | null;
+};
+
+export type InventorySyncBatchProgress = {
+  offset?: number;
+};
+
+export type OrdersSyncBatchProgress = {
+  cursor?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  staffAttributionAvailable?: boolean;
+};
+
+export type SyncBatchResult = {
+  done: boolean;
+  progress: Record<string, unknown>;
+  counts: Record<string, number | boolean | string | null>;
+};
+
 function chunkArray<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
 
@@ -998,6 +1019,211 @@ async function getProductsForSync(admin: ShopifyAdminClient) {
   }
 
   return products;
+}
+
+async function syncProductNodes({
+  supabase,
+  shop,
+  products,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  products: ProductNode[];
+}) {
+  const productRows = products.map((product) => ({
+    shop_domain: shop,
+    shopify_product_id: product.id,
+    title: product.title,
+    vendor: product.vendor ?? null,
+    product_type: product.productType ?? null,
+    status: product.status ?? null,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const rawVariantRows = products.flatMap((product) =>
+    product.variants.edges.map(({ node: variant }) => ({
+      shop_domain: shop,
+      shopify_variant_id: variant.id,
+      shopify_product_id: product.id,
+      inventory_item_id: variant.inventoryItem?.id ?? null,
+      title: variant.title,
+      sku: variant.sku ?? null,
+      price: variant.price ? Number(variant.price) : null,
+      unit_cost: parseNullableNumericAmount(
+        variant.inventoryItem?.unitCost?.amount,
+      ),
+      updated_at: new Date().toISOString(),
+    })),
+  );
+  const existingVariantCosts = await getExistingVariantCosts({
+    supabase,
+    shop,
+    variantIds: rawVariantRows.map((variant) => variant.shopify_variant_id),
+  });
+  const variantRows = rawVariantRows.map((variant) => ({
+    ...variant,
+    unit_cost:
+      variant.unit_cost ??
+      existingVariantCosts.get(variant.shopify_variant_id) ??
+      null,
+  }));
+
+  await upsertInBatches({
+    supabase,
+    table: "products",
+    rows: productRows,
+    onConflict: "shop_domain,shopify_product_id",
+  });
+
+  await upsertInBatches({
+    supabase,
+    table: "variants",
+    rows: variantRows,
+    onConflict: "shop_domain,shopify_variant_id",
+  });
+
+  await upsertInventoryItemSnapshots({
+    supabase,
+    shop,
+    snapshots: variantRows
+      .filter((variant) => variant.inventory_item_id)
+      .map((variant) => ({
+        inventoryItemId: variant.inventory_item_id as string,
+        sku: variant.sku,
+        unitCost: variant.unit_cost,
+        hasUnitCostValue: variant.unit_cost !== null,
+        costSource: "PRODUCT_SYNC_UNIT_COST",
+      })),
+  });
+
+  const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
+    supabase,
+    shop,
+    variantRows,
+  });
+  const variantsWithUnitCostSynced = variantRows.filter(
+    (variant) => variant.unit_cost !== null,
+  ).length;
+
+  return {
+    productsSynced: productRows.length,
+    variantsSynced: variantRows.length,
+    variantsWithUnitCostSynced,
+    variantsWithMissingUnitCost: variantRows.length - variantsWithUnitCostSynced,
+    orderLinesCogsRecomputed,
+  };
+}
+
+export async function syncProductsBatch({
+  admin,
+  shop,
+  supabase,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  progress?: ProductsSyncBatchProgress | null;
+}): Promise<SyncBatchResult> {
+  const cursor = progress?.cursor ?? null;
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getProductsForSyncBatch($first: Int!, $cursor: String, $variantFirst: Int!) {
+        products(first: $first, after: $cursor) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          edges {
+            node {
+              id
+              title
+              vendor
+              productType
+              status
+              variants(first: $variantFirst) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    inventoryItem {
+                      id
+                      unitCost {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getProductsForSyncBatch",
+    variables: {
+      first: PRODUCT_SYNC_PAGE_SIZE,
+      cursor,
+      variantFirst: PRODUCT_VARIANT_SYNC_PAGE_SIZE,
+    },
+  });
+  const connection = (
+    data.data as
+      | {
+          products?: {
+            pageInfo?: {
+              hasNextPage: boolean;
+              endCursor?: string | null;
+            };
+            edges?: Array<{ node: ProductNode }>;
+          };
+        }
+      | undefined
+  )?.products;
+  const pageProducts = connection?.edges?.map((edge) => edge.node) ?? [];
+  const products: ProductNode[] = [];
+
+  for (const product of pageProducts) {
+    const remainingVariants = await getRemainingProductVariantsForSync({
+      admin,
+      productId: product.id,
+      cursor: product.variants.pageInfo?.endCursor ?? null,
+    });
+
+    products.push({
+      ...product,
+      variants: {
+        ...product.variants,
+        edges: [...product.variants.edges, ...remainingVariants],
+        pageInfo: {
+          hasNextPage: false,
+          endCursor:
+            remainingVariants.at(-1)?.node.id ??
+            product.variants.pageInfo?.endCursor ??
+            null,
+        },
+      },
+    });
+  }
+
+  const counts = await syncProductNodes({ supabase, shop, products });
+  const hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
+
+  return {
+    done: !hasNextPage || pageProducts.length === 0,
+    progress: {
+      cursor: hasNextPage ? (connection?.pageInfo?.endCursor ?? null) : null,
+    },
+    counts,
+  };
 }
 
 async function recomputeOrderLineCogsForVariants({
@@ -1942,6 +2168,161 @@ export async function syncInventory({
   }
 }
 
+export async function syncInventoryBatch({
+  admin,
+  shop,
+  supabase,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  progress?: InventorySyncBatchProgress | null;
+}): Promise<SyncBatchResult> {
+  const offset = Math.max(0, Number(progress?.offset ?? 0));
+  const { data: variantRows, error: variantsError } = await supabase
+    .from("variants")
+    .select("shopify_variant_id, shopify_product_id, inventory_item_id, sku")
+    .eq("shop_domain", shop)
+    .not("inventory_item_id", "is", null)
+    .order("inventory_item_id", { ascending: true })
+    .range(offset, offset + INVENTORY_BATCH_SIZE - 1);
+
+  if (variantsError) {
+    throw new Error(variantsError.message);
+  }
+
+  const variants = (variantRows ?? []) as VariantDbRow[];
+
+  if (variants.length === 0) {
+    return {
+      done: true,
+      progress: { offset },
+      counts: {
+        inventoryItemsProcessed: 0,
+        inventoryLevelsSynced: 0,
+        variantsUnitCostUpdated: 0,
+        orderLinesCogsRecomputed: 0,
+      },
+    };
+  }
+
+  const variantByInventoryItemId = new Map<string, VariantDbRow>();
+
+  for (const variant of variants) {
+    variantByInventoryItemId.set(variant.inventory_item_id, variant);
+  }
+
+  const inventoryItemIds = Array.from(
+    new Set(variants.map((variant) => variant.inventory_item_id)),
+  );
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getInventoryItemsForSyncBatch($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on InventoryItem {
+            id
+            sku
+            tracked
+            unitCost {
+              amount
+              currencyCode
+            }
+            inventoryLevels(first: 20) {
+              edges {
+                node {
+                  location {
+                    id
+                    name
+                  }
+                  quantities(names: ["available"]) {
+                    name
+                    quantity
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getInventoryItemsForSyncBatch",
+    variables: {
+      ids: inventoryItemIds,
+    },
+  });
+  const inventoryItems: InventoryItemNode[] = (
+    (data.data as { nodes?: unknown[] } | undefined)?.nodes ?? []
+  ).filter(Boolean) as InventoryItemNode[];
+
+  await upsertInventoryItemSnapshots({
+    supabase,
+    shop,
+    snapshots: inventoryItems.map((inventoryItem) => {
+      const unitCost = parseNullableNumericAmount(inventoryItem.unitCost?.amount);
+
+      return {
+        inventoryItemId: inventoryItem.id,
+        sku: inventoryItem.sku ?? null,
+        tracked: inventoryItem.tracked,
+        unitCost,
+        hasUnitCostValue: unitCost !== null,
+        costSource: "INVENTORY_SYNC_UNIT_COST",
+      };
+    }),
+  });
+
+  const variantUpdateResult = await updateVariantsFromInventoryItemSnapshots({
+    supabase,
+    shop,
+    inventoryItemIds: inventoryItems.map((inventoryItem) => inventoryItem.id),
+  });
+  const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
+    supabase,
+    shop,
+    variantRows: variantUpdateResult.affectedVariantRows,
+  });
+  const rows = inventoryItems.flatMap((inventoryItem) => {
+    const variant = variantByInventoryItemId.get(inventoryItem.id);
+
+    if (!variant) {
+      return [];
+    }
+
+    return inventoryItem.inventoryLevels.edges.map(({ node: level }) => ({
+      shop_domain: shop,
+      shopify_location_id: level.location.id,
+      shopify_variant_id: variant.shopify_variant_id,
+      inventory_item_id: inventoryItem.id,
+      sku: variant.sku ?? inventoryItem.sku ?? null,
+      available: getAvailableQuantity(level),
+      tracked: inventoryItem.tracked,
+      synced_at: new Date().toISOString(),
+    }));
+  });
+
+  await upsertInBatches({
+    supabase,
+    table: "inventory_levels",
+    rows,
+    onConflict: "shop_domain,shopify_location_id,inventory_item_id",
+  });
+
+  return {
+    done: variants.length < INVENTORY_BATCH_SIZE,
+    progress: {
+      offset: offset + variants.length,
+    },
+    counts: {
+      inventoryItemsProcessed: inventoryItems.length,
+      inventoryLevelsSynced: rows.length,
+      variantsUnitCostUpdated: variantUpdateResult.variantsUpdated,
+      orderLinesCogsRecomputed,
+    },
+  };
+}
+
 export async function syncInventoryItems({
   admin,
   shop,
@@ -2328,6 +2709,352 @@ export async function syncStaffMembers({
 
     return result;
   }
+}
+
+async function getVariantCostMaps({
+  supabase,
+  shop,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+}) {
+  const { data: variantCostsData, error: variantCostsError } = await supabase
+    .from("variants")
+    .select("shopify_variant_id, inventory_item_id, sku, unit_cost")
+    .eq("shop_domain", shop);
+
+  if (variantCostsError) {
+    throw new Error(variantCostsError.message);
+  }
+
+  const variantCosts = (variantCostsData ?? []) as VariantCostRow[];
+  const costByVariantId = new Map<string, VariantCostRow>();
+  const costBySku = new Map<string, VariantCostRow>();
+
+  for (const row of variantCosts) {
+    costByVariantId.set(row.shopify_variant_id, row);
+
+    if (row.sku) {
+      costBySku.set(row.sku, row);
+    }
+  }
+
+  return {
+    costByVariantId,
+    costBySku,
+  };
+}
+
+async function syncOrdersPage({
+  admin,
+  shop,
+  supabase,
+  cursor,
+  orderQuery,
+  includeStaffAttribution,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  cursor?: string | null;
+  orderQuery: string;
+  includeStaffAttribution: boolean;
+}) {
+  const { costByVariantId, costBySku } = await getVariantCostMaps({
+    supabase,
+    shop,
+  });
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getOrdersForSyncBatch($cursor: String, $query: String) {
+        orders(
+          first: ${ORDERS_PAGE_SIZE},
+          after: $cursor,
+          sortKey: CREATED_AT,
+          reverse: true,
+          query: $query
+        ) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          edges {
+            node {
+              id
+              name
+              createdAt
+              displayFinancialStatus
+              ${
+                includeStaffAttribution
+                  ? `
+              staffMember {
+                id
+                name
+                email
+              }
+              transactions(first: 10) {
+                id
+                kind
+                status
+                user {
+                  id
+                  name
+                  email
+                }
+              }
+              `
+                  : ""
+              }
+              totalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              retailLocation {
+                id
+                name
+              }
+              lineItems(first: ${LINE_ITEMS_PAGE_SIZE}) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
+                    id
+                    title
+                    quantity
+                    sku
+                    ${
+                      includeStaffAttribution
+                        ? `
+                    staffMember {
+                      id
+                      name
+                      email
+                    }
+                    `
+                        : ""
+                    }
+                    variant {
+                      id
+                      title
+                      sku
+                      product {
+                        id
+                        title
+                        vendor
+                      }
+                    }
+                    discountedUnitPriceSet {
+                      shopMoney {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getOrdersForSyncBatch",
+    variables: {
+      cursor: cursor ?? null,
+      query: orderQuery || null,
+    },
+  });
+  const ordersConnection = (
+    data.data as
+      | {
+          orders?: {
+            pageInfo?: {
+              hasNextPage: boolean;
+              endCursor?: string | null;
+            };
+            edges?: Array<{ node: OrderNode }>;
+          };
+        }
+      | undefined
+  )?.orders;
+  const orders: OrderNode[] =
+    ordersConnection?.edges?.map((edge) => edge.node) ?? [];
+  const orderRows = orders.map((order) => {
+    const orderStaff = includeStaffAttribution
+      ? getOrderStaffAttribution(order)
+      : getStaffAttribution(null);
+
+    return {
+      shop_domain: shop,
+      shopify_order_id: order.id,
+      order_name: order.name,
+      created_at_shopify: order.createdAt,
+      financial_status: order.displayFinancialStatus ?? null,
+      retail_location_id: order.retailLocation?.id ?? null,
+      retail_location_name: order.retailLocation?.name ?? null,
+      total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
+      staff_member_id: orderStaff.staffMemberId,
+      staff_member_name: orderStaff.staffMemberName,
+      staff_member_email: orderStaff.staffMemberEmail,
+      staff_source: orderStaff.staffSource,
+      updated_at: new Date().toISOString(),
+    };
+  });
+  const orderLineRows: Record<string, unknown>[] = [];
+
+  for (const order of orders) {
+    const orderStaff = includeStaffAttribution
+      ? getOrderStaffAttribution(order)
+      : getStaffAttribution(null);
+    const allLineItems = await getAllLineItemsForOrder({
+      admin,
+      order,
+      includeStaffAttribution,
+    });
+
+    for (const lineItem of allLineItems) {
+      const variantId = lineItem.variant?.id ?? null;
+      const sku = lineItem.sku ?? lineItem.variant?.sku ?? null;
+      const unitPrice = getNumericAmount(
+        lineItem.discountedUnitPriceSet?.shopMoney?.amount,
+      );
+      const revenue = unitPrice * lineItem.quantity;
+      const variantCost =
+        (variantId ? costByVariantId.get(variantId) : undefined) ??
+        (sku ? costBySku.get(sku) : undefined);
+      const costInfo = getCostInfo({
+        lineItem,
+        variantCost,
+        revenue,
+        quantity: lineItem.quantity,
+      });
+      const lineStaff = includeStaffAttribution
+        ? getStaffAttribution(lineItem.staffMember, "line_item_staff")
+        : getStaffAttribution(null);
+      const staffAttribution = lineStaff.staffMemberId ? lineStaff : orderStaff;
+
+      orderLineRows.push({
+        shop_domain: shop,
+        shopify_order_id: order.id,
+        shopify_line_item_id: lineItem.id,
+        order_name: order.name,
+        created_at_shopify: order.createdAt,
+        retail_location_id: order.retailLocation?.id ?? null,
+        retail_location_name: order.retailLocation?.name ?? null,
+        shopify_variant_id: variantId,
+        inventory_item_id: variantCost?.inventory_item_id ?? null,
+        product_title: lineItem.variant?.product?.title ?? lineItem.title,
+        variant_title: lineItem.variant?.title ?? null,
+        sku,
+        vendor: lineItem.variant?.product?.vendor ?? null,
+        quantity: lineItem.quantity,
+        unit_price: unitPrice,
+        revenue,
+        unit_cost: costInfo.unitCost,
+        cogs: costInfo.cogs,
+        gross_profit: costInfo.grossProfit,
+        cost_source: costInfo.costSource,
+        staff_member_id: staffAttribution.staffMemberId,
+        staff_member_name: staffAttribution.staffMemberName,
+        staff_member_email: staffAttribution.staffMemberEmail,
+        staff_source: staffAttribution.staffSource,
+      });
+    }
+  }
+
+  await upsertInBatches({
+    supabase,
+    table: "orders",
+    rows: orderRows,
+    onConflict: "shop_domain,shopify_order_id",
+  });
+
+  await upsertInBatches({
+    supabase,
+    table: "order_lines",
+    rows: orderLineRows,
+    onConflict: "shop_domain,shopify_line_item_id",
+  });
+
+  return {
+    ordersSynced: orderRows.length,
+    orderLinesSynced: orderLineRows.length,
+    hasNextPage: Boolean(ordersConnection?.pageInfo?.hasNextPage),
+    cursor: ordersConnection?.pageInfo?.endCursor ?? null,
+  };
+}
+
+export async function syncOrdersBatch({
+  admin,
+  shop,
+  supabase,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  progress?: OrdersSyncBatchProgress | null;
+}): Promise<SyncBatchResult> {
+  const dateRange =
+    progress?.startDate || progress?.endDate
+      ? {
+          startDate: progress.startDate ?? null,
+          endDate: progress.endDate ?? null,
+        }
+      : getIncrementalOrderDateRange();
+  const orderQuery = buildOrderQuery(dateRange);
+  const cursor = progress?.cursor ?? null;
+  let staffAttributionAvailable =
+    progress?.staffAttributionAvailable !== false;
+  let staffAttributionError: string | null = null;
+  let pageResult: Awaited<ReturnType<typeof syncOrdersPage>>;
+
+  try {
+    pageResult = await syncOrdersPage({
+      admin,
+      shop,
+      supabase,
+      cursor,
+      orderQuery,
+      includeStaffAttribution: staffAttributionAvailable,
+    });
+  } catch (error) {
+    if (!staffAttributionAvailable) {
+      throw error;
+    }
+
+    staffAttributionAvailable = false;
+    staffAttributionError = error instanceof Error ? error.message : String(error);
+    pageResult = await syncOrdersPage({
+      admin,
+      shop,
+      supabase,
+      cursor,
+      orderQuery,
+      includeStaffAttribution: false,
+    });
+  }
+
+  return {
+    done: !pageResult.hasNextPage || pageResult.ordersSynced === 0,
+    progress: {
+      cursor: pageResult.hasNextPage ? pageResult.cursor : null,
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate,
+      staffAttributionAvailable,
+    },
+    counts: {
+      ordersSynced: pageResult.ordersSynced,
+      orderLinesSynced: pageResult.orderLinesSynced,
+      pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
+      staffAttributionAvailable,
+      staffAttributionError,
+    },
+  };
 }
 
 export async function syncOrders({
