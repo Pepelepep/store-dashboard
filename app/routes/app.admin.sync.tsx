@@ -3,7 +3,6 @@ import {
   Form,
   useActionData,
   useLoaderData,
-  useLocation,
   useNavigation,
 } from "react-router";
 
@@ -12,9 +11,12 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
   runFullSync,
-  syncStaffMembers,
+  syncInventory,
+  syncLocations,
+  syncOrders,
+  syncProducts,
 } from "../lib/sync/shopify-sync.server";
-import { AppButton, AppButtonLink } from "../components/ui/AppButton";
+import { AppButton } from "../components/ui/AppButton";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { StatusBadge } from "../components/ui/StatusBadge";
@@ -45,6 +47,8 @@ type LoaderData = {
 type ActionData = {
   ok: boolean;
   message: string;
+  intent?: string;
+  failedStep?: string | null;
   details?: unknown;
 };
 
@@ -52,8 +56,7 @@ type SyncTypeConfig = {
   syncType: string;
   label: string;
   actionLabel: string;
-  href?: string;
-  formIntent?: string;
+  intent: string;
 };
 
 const freshnessMs = 24 * 60 * 60 * 1000;
@@ -61,32 +64,26 @@ const syncTypeConfigs: SyncTypeConfig[] = [
   {
     syncType: "locations",
     label: "Locations",
-    actionLabel: "Refresh locations",
-    href: "/app/admin/sync-locations",
+    actionLabel: "Sync Locations",
+    intent: "sync_locations",
   },
   {
     syncType: "products",
     label: "Products",
-    actionLabel: "Refresh products",
-    href: "/app/admin/sync-products",
+    actionLabel: "Sync Products",
+    intent: "sync_products",
   },
   {
     syncType: "inventory",
     label: "Inventory",
-    actionLabel: "Refresh inventory",
-    href: "/app/admin/sync-inventory",
+    actionLabel: "Sync Inventory",
+    intent: "sync_inventory",
   },
   {
     syncType: "orders",
     label: "Orders",
-    actionLabel: "Refresh orders",
-    href: "/app/admin/sync-orders",
-  },
-  {
-    syncType: "staff_members",
-    label: "Staff",
-    actionLabel: "Sync staff members",
-    formIntent: "sync_staff_members",
+    actionLabel: "Sync Orders",
+    intent: "sync_orders",
   },
 ];
 
@@ -200,44 +197,60 @@ function formatSyncRunDetails(run: SyncRun) {
         ? "-"
         : `${details.syncedCount} locations`;
     case "products":
-      return [
-        details.productsSynced === undefined
-          ? null
-          : `${details.productsSynced} products`,
-        details.variantsSynced === undefined
-          ? null
-          : `${details.variantsSynced} variants`,
-      ]
-        .filter(Boolean)
-        .join(", ") || "-";
+      return (
+        [
+          details.productsSynced === undefined
+            ? null
+            : `${details.productsSynced} products`,
+          details.variantsSynced === undefined
+            ? null
+            : `${details.variantsSynced} variants`,
+          details.orderLinesCogsRecomputed === undefined
+            ? null
+            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
+        ]
+          .filter(Boolean)
+          .join(", ") || "-"
+      );
     case "inventory":
-      return [
-        details.inventoryItemsProcessed === undefined
-          ? null
-          : `${details.inventoryItemsProcessed} items`,
-        details.inventoryLevelsSynced === undefined
-          ? null
-          : `${details.inventoryLevelsSynced} levels`,
-      ]
-        .filter(Boolean)
-        .join(", ") || "-";
+      return (
+        [
+          details.inventoryItemsProcessed === undefined
+            ? null
+            : `${details.inventoryItemsProcessed} items`,
+          details.inventoryLevelsSynced === undefined
+            ? null
+            : `${details.inventoryLevelsSynced} levels`,
+          details.orderLinesCogsRecomputed === undefined
+            ? null
+            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
+        ]
+          .filter(Boolean)
+          .join(", ") || "-"
+      );
     case "staff_members":
       return details.syncedCount === undefined
         ? "-"
         : `${details.syncedCount} staff members`;
     case "orders":
-      return [
-        details.ordersSynced === undefined ? null : `${details.ordersSynced} orders`,
-        details.orderLinesSynced === undefined
-          ? null
-          : `${details.orderLinesSynced} lines`,
-        details.pagesProcessed === undefined ? null : `${details.pagesProcessed} pages`,
-        details.startDate && details.endDate
-          ? `${details.startDate} to ${details.endDate}`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(", ") || "-";
+      return (
+        [
+          details.ordersSynced === undefined
+            ? null
+            : `${details.ordersSynced} orders`,
+          details.orderLinesSynced === undefined
+            ? null
+            : `${details.orderLinesSynced} lines`,
+          details.pagesProcessed === undefined
+            ? null
+            : `${details.pagesProcessed} pages`,
+          details.startDate && details.endDate
+            ? `${details.startDate} to ${details.endDate}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(", ") || "-"
+      );
     default:
       return "-";
   }
@@ -254,50 +267,103 @@ function formatDetailSummary(run?: SyncRun | null) {
         ? "No count details recorded yet."
         : `${details.syncedCount} locations`;
     case "products":
-      return [
-        details.productsSynced === undefined
-          ? null
-          : `${details.productsSynced} products`,
-        details.variantsSynced === undefined
-          ? null
-          : `${details.variantsSynced} variants`,
-        details.orderLinesCogsRecomputed === undefined
-          ? null
-          : `${details.orderLinesCogsRecomputed} COGS recalculated`,
-      ]
-        .filter(Boolean)
-        .join(" · ") || "No count details recorded yet.";
+      return (
+        [
+          details.productsSynced === undefined
+            ? null
+            : `${details.productsSynced} products`,
+          details.variantsSynced === undefined
+            ? null
+            : `${details.variantsSynced} variants`,
+          details.orderLinesCogsRecomputed === undefined
+            ? null
+            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "No count details recorded yet."
+      );
     case "inventory":
-      return [
-        details.inventoryItemsProcessed === undefined
-          ? null
-          : `${details.inventoryItemsProcessed} inventory items`,
-        details.inventoryLevelsSynced === undefined
-          ? null
-          : `${details.inventoryLevelsSynced} levels`,
-        details.orderLinesCogsRecomputed === undefined
-          ? null
-          : `${details.orderLinesCogsRecomputed} COGS recalculated`,
-      ]
-        .filter(Boolean)
-        .join(" · ") || "No count details recorded yet.";
+      return (
+        [
+          details.inventoryItemsProcessed === undefined
+            ? null
+            : `${details.inventoryItemsProcessed} inventory items`,
+          details.inventoryLevelsSynced === undefined
+            ? null
+            : `${details.inventoryLevelsSynced} levels`,
+          details.orderLinesCogsRecomputed === undefined
+            ? null
+            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "No count details recorded yet."
+      );
     case "staff_members":
       return details.syncedCount === undefined
         ? "No count details recorded yet."
         : `${details.syncedCount} staff members`;
     case "orders":
-      return [
-        details.ordersSynced === undefined ? null : `${details.ordersSynced} orders`,
-        details.orderLinesSynced === undefined
-          ? null
-          : `${details.orderLinesSynced} lines`,
-        details.pagesProcessed === undefined ? null : `${details.pagesProcessed} pages`,
-      ]
-        .filter(Boolean)
-        .join(" · ") || "No count details recorded yet.";
+      return (
+        [
+          details.ordersSynced === undefined
+            ? null
+            : `${details.ordersSynced} orders`,
+          details.orderLinesSynced === undefined
+            ? null
+            : `${details.orderLinesSynced} lines`,
+          details.pagesProcessed === undefined
+            ? null
+            : `${details.pagesProcessed} pages`,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "No count details recorded yet."
+      );
     default:
       return "No count details recorded yet.";
   }
+}
+
+function getActionDetailSummary(actionData?: ActionData) {
+  const details = actionData?.details;
+
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+
+  if ("failedStep" in details && typeof details.failedStep === "string") {
+    return `Failed step: ${details.failedStep}`;
+  }
+
+  const syncResult = details as Record<string, unknown>;
+
+  return [
+    typeof syncResult.syncedCount === "number"
+      ? `${syncResult.syncedCount} records synced`
+      : null,
+    typeof syncResult.productsSynced === "number"
+      ? `${syncResult.productsSynced} products`
+      : null,
+    typeof syncResult.variantsSynced === "number"
+      ? `${syncResult.variantsSynced} variants`
+      : null,
+    typeof syncResult.inventoryItemsProcessed === "number"
+      ? `${syncResult.inventoryItemsProcessed} inventory items`
+      : null,
+    typeof syncResult.inventoryLevelsSynced === "number"
+      ? `${syncResult.inventoryLevelsSynced} inventory levels`
+      : null,
+    typeof syncResult.ordersSynced === "number"
+      ? `${syncResult.ordersSynced} orders`
+      : null,
+    typeof syncResult.orderLinesSynced === "number"
+      ? `${syncResult.orderLinesSynced} lines`
+      : null,
+    typeof syncResult.orderLinesCogsRecomputed === "number"
+      ? `${syncResult.orderLinesCogsRecomputed} COGS recalculated`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function getSyncTypeSummary(runs: SyncRun[], syncType: string) {
@@ -315,6 +381,23 @@ function getSyncTypeSummary(runs: SyncRun[], syncType: string) {
   };
 }
 
+function getRunningLabel(intent?: string | null) {
+  switch (intent) {
+    case "sync_locations":
+      return "Syncing locations...";
+    case "sync_products":
+      return "Syncing products...";
+    case "sync_inventory":
+      return "Syncing inventory...";
+    case "sync_orders":
+      return "Syncing orders...";
+    case "refresh_all":
+      return "Refreshing all data...";
+    default:
+      return "Syncing...";
+  }
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
@@ -329,7 +412,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     getTableCount({ table: "orders", shop: session.shop, supabase }),
     getTableCount({ table: "order_lines", shop: session.shop, supabase }),
     getTableCount({ table: "fixed_expenses", shop: session.shop, supabase }),
-    getTableCount({ table: "user_location_access", shop: session.shop, supabase }),
+    getTableCount({
+      table: "user_location_access",
+      shop: session.shop,
+      supabase,
+    }),
     getTableCount({ table: "staff_members", shop: session.shop, supabase }),
   ]);
 
@@ -358,54 +445,108 @@ export async function action({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
 
-  if (intent === "sync_staff_members") {
-    const result = await syncStaffMembers({
-      admin,
-      shop: session.shop,
-      supabase,
-      source: "manual_admin_sync",
-    });
-
-    return {
-      ok: result.ok,
-      message: result.ok
-        ? `Synced ${result.syncedCount} staff members.`
-        : `Staff sync failed: ${"error" in result ? result.error : "Unknown error"}`,
-      details: result,
-    } satisfies ActionData;
-  }
-
-  if (intent !== "refresh_all") {
-    return {
-      ok: false,
-      message: "Unknown action.",
-    } satisfies ActionData;
-  }
-
   try {
-    const result = await runFullSync({
-      admin,
-      shop: session.shop,
-      source: "manual_admin_sync",
-    });
+    if (intent === "sync_locations") {
+      const result = await syncLocations({
+        admin,
+        shop: session.shop,
+        supabase,
+        source: "manual_admin_sync",
+      });
 
-    if (!result.ok) {
       return {
-        ok: false,
-        message: "Full sync failed.",
+        ok: true,
+        intent,
+        message: `Locations sync completed: ${result.syncedCount} locations.`,
+        details: result,
+      } satisfies ActionData;
+    }
+
+    if (intent === "sync_products") {
+      const result = await syncProducts({
+        admin,
+        shop: session.shop,
+        supabase,
+        source: "manual_admin_sync",
+      });
+
+      return {
+        ok: true,
+        intent,
+        message: `Products sync completed: ${result.productsSynced} products and ${result.variantsSynced} variants.`,
+        details: result,
+      } satisfies ActionData;
+    }
+
+    if (intent === "sync_inventory") {
+      const result = await syncInventory({
+        admin,
+        shop: session.shop,
+        supabase,
+        source: "manual_admin_sync",
+      });
+
+      return {
+        ok: true,
+        intent,
+        message: `Inventory sync completed: ${result.inventoryItemsProcessed} items and ${result.inventoryLevelsSynced} levels.`,
+        details: result,
+      } satisfies ActionData;
+    }
+
+    if (intent === "sync_orders") {
+      const result = await syncOrders({
+        admin,
+        shop: session.shop,
+        supabase,
+        source: "manual_admin_sync",
+      });
+
+      return {
+        ok: true,
+        intent,
+        message: `Orders sync completed: ${result.ordersSynced} orders and ${result.orderLinesSynced} lines.`,
+        details: result,
+      } satisfies ActionData;
+    }
+
+    if (intent === "refresh_all") {
+      const result = await runFullSync({
+        admin,
+        shop: session.shop,
+        source: "manual_admin_sync",
+      });
+
+      if (!result.ok) {
+        return {
+          ok: false,
+          intent,
+          failedStep: result.failedStep,
+          message: `Refresh All Data failed at ${result.failedStep}: ${result.error}`,
+          details: result,
+        } satisfies ActionData;
+      }
+
+      return {
+        ok: true,
+        intent,
+        message: "Refresh All Data completed successfully.",
         details: result,
       } satisfies ActionData;
     }
 
     return {
-      ok: true,
-      message: "Full data refresh completed successfully.",
-      details: result,
+      ok: false,
+      intent,
+      message: "Unknown sync action.",
     } satisfies ActionData;
   } catch (error) {
     return {
       ok: false,
-      message: "Full sync failed.",
+      intent,
+      message: `${intent || "Sync"} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
       details: error instanceof Error ? error.message : String(error),
     } satisfies ActionData;
   }
@@ -437,17 +578,26 @@ function Card({
 function SyncTypeStatusCard({
   config,
   runs,
-  search,
-  isSyncingStaff,
+  activeIntent,
+  isAnySyncRunning,
 }: {
   config: SyncTypeConfig;
   runs: SyncRun[];
-  search: string;
-  isSyncingStaff: boolean;
+  activeIntent?: string | null;
+  isAnySyncRunning: boolean;
 }) {
   const summary = getSyncTypeSummary(runs, config.syncType);
   const latestRun = summary.latestRun;
-  const duration = formatDuration(latestRun?.started_at, latestRun?.finished_at);
+  const duration = formatDuration(
+    latestRun?.started_at,
+    latestRun?.finished_at,
+  );
+  const isRunning = activeIntent === config.intent;
+  const statusLabel = isRunning
+    ? "running"
+    : latestRun
+      ? latestRun.status
+      : "never synced";
 
   return (
     <section
@@ -474,11 +624,9 @@ function SyncTypeStatusCard({
             {summary.freshness}
           </StatusBadge>
         </div>
-        {latestRun ? (
-          <StatusBadge variant={getSyncStatusVariant(latestRun.status)}>
-            {latestRun.status}
-          </StatusBadge>
-        ) : null}
+        <StatusBadge variant={getSyncStatusVariant(statusLabel)}>
+          {statusLabel}
+        </StatusBadge>
       </div>
 
       <div style={{ display: "grid", gap: 6, color: "#616161", fontSize: 13 }}>
@@ -486,6 +634,18 @@ function SyncTypeStatusCard({
           <div>
             <strong>Last success:</strong>{" "}
             {formatDateTime(summary.lastSuccess.finished_at)}
+          </div>
+        ) : (
+          <div>
+            <strong>Last success:</strong> Never
+          </div>
+        )}
+        {summary.lastError ? (
+          <div>
+            <strong>Last failed:</strong>{" "}
+            {formatDateTime(
+              summary.lastError.finished_at ?? summary.lastError.started_at,
+            )}
           </div>
         ) : null}
         {latestRun?.source ? (
@@ -529,29 +689,18 @@ function SyncTypeStatusCard({
         {formatDetailSummary(latestRun)}
       </div>
 
-      {config.href ? (
-        <AppButtonLink
-          to={`${config.href}${search}`}
+      <Form method="post">
+        <input type="hidden" name="intent" value={config.intent} />
+        <AppButton
+          type="submit"
+          disabled={isAnySyncRunning}
           variant="secondary"
           compact
           fullWidth
         >
-          {config.actionLabel}
-        </AppButtonLink>
-      ) : (
-        <Form method="post">
-          <input type="hidden" name="intent" value={config.formIntent} />
-          <AppButton
-            type="submit"
-            disabled={isSyncingStaff}
-            variant="secondary"
-            compact
-            fullWidth
-          >
-            {isSyncingStaff ? "Syncing staff..." : config.actionLabel}
-          </AppButton>
-        </Form>
-      )}
+          {isRunning ? getRunningLabel(config.intent) : config.actionLabel}
+        </AppButton>
+      </Form>
     </section>
   );
 }
@@ -559,19 +708,17 @@ function SyncTypeStatusCard({
 export default function AdminSyncPage() {
   const { shop, counts, lastSyncRuns } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
-  const location = useLocation();
   const navigation = useNavigation();
-  const search = location.search;
-
-  const isRefreshing =
-    navigation.state !== "idle" &&
-    navigation.formData?.get("intent") === "refresh_all";
-  const isSyncingStaff =
-    navigation.state !== "idle" &&
-    navigation.formData?.get("intent") === "sync_staff_members";
+  const activeIntent =
+    navigation.state !== "idle"
+      ? String(navigation.formData?.get("intent") ?? "")
+      : null;
+  const isAnySyncRunning = Boolean(activeIntent);
+  const isRefreshing = activeIntent === "refresh_all";
   const lastSuccessfulSync = lastSyncRuns.find(
     (run) => run.status === "success" && run.finished_at,
   );
+  const actionDetailSummary = getActionDetailSummary(actionData);
 
   return (
     <main
@@ -648,42 +795,46 @@ export default function AdminSyncPage() {
                 key={config.syncType}
                 config={config}
                 runs={lastSyncRuns}
-                search={search}
-                isSyncingStaff={isSyncingStaff}
+                activeIntent={activeIntent}
+                isAnySyncRunning={isAnySyncRunning}
               />
             ))}
           </div>
         </section>
 
         <div style={{ marginBottom: 24 }}>
-          <Card title="Refresh data">
+          <Card title="Refresh All Data">
             <div style={{ display: "grid", gap: 12 }}>
               <Form method="post">
                 <input type="hidden" name="intent" value="refresh_all" />
-                <AppButton
-                  type="submit"
-                  disabled={isRefreshing}
-                  fullWidth
-                >
-                  {isRefreshing ? "Refreshing all data..." : "Refresh all data"}
+                <AppButton type="submit" disabled={isAnySyncRunning} fullWidth>
+                  {isRefreshing ? "Refreshing all data..." : "Refresh All Data"}
                 </AppButton>
               </Form>
 
               {actionData ? (
-                <InlineResult variant={actionData.ok ? "success" : "error"}>
-                  {actionData.message}
-                </InlineResult>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <InlineResult variant={actionData.ok ? "success" : "error"}>
+                    {actionData.message}
+                  </InlineResult>
+                  {actionDetailSummary ? (
+                    <HelperText>{actionDetailSummary}</HelperText>
+                  ) : null}
+                </div>
               ) : null}
 
               <HelperText>
-                Recommended order: Locations → Products → Inventory → Staff → Orders.
+                Runs in order: locations, products, inventory, then orders. If a
+                step fails, the refresh stops and the failed step is shown.
               </HelperText>
             </div>
           </Card>
         </div>
 
         <Card title="Database records">
-          <HelperText>Current stored records for support and troubleshooting.</HelperText>
+          <HelperText>
+            Current stored records for support and troubleshooting.
+          </HelperText>
           <div
             style={{
               display: "flex",
@@ -714,8 +865,11 @@ export default function AdminSyncPage() {
 
         <div style={{ height: 24 }} />
 
-        <Card title="Last sync runs">
-          <HelperText>Recent sync history for troubleshooting. Showing the 10 most recent runs.</HelperText>
+        <Card title="Recent sync history">
+          <HelperText>
+            Recent sync history for troubleshooting. Showing the 20 most recent
+            runs.
+          </HelperText>
           <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
             <table
               style={{
@@ -735,21 +889,21 @@ export default function AdminSyncPage() {
                     "Details",
                     "Error",
                   ].map((header) => (
-                      <th
-                        key={header}
-                        style={{
-                          textAlign: "left",
-                          padding: "10px",
-                          borderBottom: "1px solid #ddd",
-                        }}
-                      >
-                        {header}
-                      </th>
-                    ))}
+                    <th
+                      key={header}
+                      style={{
+                        textAlign: "left",
+                        padding: "10px",
+                        borderBottom: "1px solid #ddd",
+                      }}
+                    >
+                      {header}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {lastSyncRuns.slice(0, 10).map((run) => (
+                {lastSyncRuns.slice(0, 20).map((run) => (
                   <tr key={run.id}>
                     <td
                       style={{
