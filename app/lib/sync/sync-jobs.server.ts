@@ -52,6 +52,7 @@ export type SyncJobRow = {
 };
 
 const fullSyncSteps = ["locations", "products", "inventory", "orders"];
+const STALE_ACTIVE_JOB_MS = 30 * 60 * 1000;
 
 function getInitialStep(jobType: SyncJobType) {
   return jobType === "full" ? fullSyncSteps[0] : jobType;
@@ -102,6 +103,51 @@ function getErrorDetails(error: unknown) {
   return null;
 }
 
+function isStaleActiveJob(job: SyncJobRow) {
+  if (job.status !== "pending" && job.status !== "running") {
+    return false;
+  }
+
+  const activityTime = new Date(job.updated_at ?? job.created_at).getTime();
+
+  return Number.isFinite(activityTime)
+    ? Date.now() - activityTime > STALE_ACTIVE_JOB_MS
+    : false;
+}
+
+async function cancelStaleActiveJobs({
+  supabase,
+  shop,
+  jobTypes,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  jobTypes: string[];
+}) {
+  const staleBefore = new Date(Date.now() - STALE_ACTIVE_JOB_MS).toISOString();
+  const { error } = await supabase
+    .from("sync_jobs")
+    .update({
+      status: "cancelled",
+      error_message:
+        "Sync job was cancelled because it was stale and no longer processing.",
+      details: {
+        stale: true,
+        staleTimeoutMinutes: STALE_ACTIVE_JOB_MS / 60000,
+      },
+      updated_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+    })
+    .eq("shop_domain", shop)
+    .in("job_type", jobTypes)
+    .in("status", ["pending", "running"])
+    .lt("updated_at", staleBefore);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
 async function insertSyncRun({
   supabase,
   shop,
@@ -144,6 +190,13 @@ async function getActiveBlockingJob({
 }) {
   const blockingTypes =
     jobType === "full" ? [...fullSyncSteps, "full"] : [jobType, "full"];
+
+  await cancelStaleActiveJobs({
+    supabase,
+    shop,
+    jobTypes: blockingTypes,
+  });
+
   const { data, error } = await supabase
     .from("sync_jobs")
     .select("*")
@@ -331,6 +384,35 @@ export async function processManualSyncJobBatch({
   if (["success", "error", "cancelled"].includes(job.status)) {
     return {
       job,
+      processed: false,
+    };
+  }
+
+  if (isStaleActiveJob(job)) {
+    const { data: cancelledJob, error: cancelError } = await supabase
+      .from("sync_jobs")
+      .update({
+        status: "cancelled",
+        error_message:
+          "Sync job was cancelled because it was stale and no longer processing.",
+        details: {
+          stale: true,
+          staleTimeoutMinutes: STALE_ACTIVE_JOB_MS / 60000,
+        },
+        updated_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      })
+      .eq("shop_domain", shop)
+      .eq("id", job.id)
+      .select("*")
+      .single();
+
+    if (cancelError) {
+      throw new Error(cancelError.message);
+    }
+
+    return {
+      job: cancelledJob as SyncJobRow,
       processed: false,
     };
   }
