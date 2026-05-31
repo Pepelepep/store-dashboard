@@ -11,6 +11,35 @@ type ShopifyAdminClient = {
   ) => Promise<Response>;
 };
 
+type SyncLogger = (message: string) => void;
+
+type SyncTimingDetails = {
+  shopifyFetchMs?: number;
+  bulkPollMs?: number;
+  bulkDownloadMs?: number;
+  dbUpsertMs?: number;
+  cogsRecomputeMs?: number;
+  totalMs: number;
+};
+
+type ShopifyBulkOperation = {
+  id: string;
+  status: string;
+  errorCode?: string | null;
+  url?: string | null;
+  partialDataUrl?: string | null;
+  objectCount?: string | null;
+  fileSize?: string | null;
+};
+
+type ShopifyBulkOperationResult = {
+  id: string;
+  url: string;
+  objectCount: number;
+  fileSize: number | null;
+  pollDurationMs: number;
+};
+
 type ShopifyGraphqlErrorDetails = {
   queryName: string;
   message: string;
@@ -132,15 +161,6 @@ type VariantCostRow = {
   inventory_item_id: string | null;
   sku: string | null;
   unit_cost: number | null;
-};
-
-type OrderLineCostRecomputeRow = {
-  shopify_line_item_id: string;
-  shopify_variant_id: string | null;
-  shopify_product_id?: string | null;
-  sku: string | null;
-  quantity: number;
-  revenue: number;
 };
 
 type OrderLineItemNode = {
@@ -634,6 +654,195 @@ async function upsertInBatches({
   }
 }
 
+function getDurationMs(startedAt: number) {
+  return Date.now() - startedAt;
+}
+
+function logSync(log: SyncLogger | undefined, message: string) {
+  log?.(message);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function parseJsonResponse(response: Response) {
+  const data = await response.json();
+  const graphqlErrorMessage = getGraphqlErrorMessage(data);
+
+  if (graphqlErrorMessage) {
+    throw new Error(graphqlErrorMessage);
+  }
+
+  return data;
+}
+
+async function startBulkOperation({
+  admin,
+  query,
+}: {
+  admin: ShopifyAdminClient;
+  query: string;
+}) {
+  const response = await admin.graphql(
+    `#graphql
+      mutation runBulkOperation($query: String!) {
+        bulkOperationRunQuery(query: $query) {
+          bulkOperation {
+            id
+            status
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `,
+    {
+      variables: {
+        query,
+      },
+    },
+  );
+  const data = await parseJsonResponse(response);
+  const payload = data.data?.bulkOperationRunQuery;
+  const userErrors = payload?.userErrors ?? [];
+
+  if (userErrors.length > 0) {
+    throw new Error(JSON.stringify(userErrors));
+  }
+
+  const operation = payload?.bulkOperation as
+    | Pick<ShopifyBulkOperation, "id" | "status">
+    | null
+    | undefined;
+
+  if (!operation?.id) {
+    throw new Error("Shopify did not return a bulk operation id.");
+  }
+
+  return operation.id;
+}
+
+async function getCurrentBulkOperation(admin: ShopifyAdminClient) {
+  const response = await admin.graphql(`#graphql
+    query currentBulkOperation {
+      currentBulkOperation {
+        id
+        status
+        errorCode
+        url
+        partialDataUrl
+        objectCount
+        fileSize
+      }
+    }
+  `);
+  const data = await parseJsonResponse(response);
+
+  return data.data?.currentBulkOperation as ShopifyBulkOperation | null;
+}
+
+async function runBulkOperation({
+  admin,
+  query,
+  log,
+}: {
+  admin: ShopifyAdminClient;
+  query: string;
+  log?: SyncLogger;
+}): Promise<ShopifyBulkOperationResult> {
+  const startedAt = Date.now();
+  const operationId = await startBulkOperation({ admin, query });
+
+  logSync(log, `bulk operation started: ${operationId}`);
+
+  while (true) {
+    await sleep(3000);
+
+    const operation = await getCurrentBulkOperation(admin);
+
+    if (!operation || operation.id !== operationId) {
+      logSync(log, "waiting for Shopify current bulk operation to update");
+      continue;
+    }
+
+    logSync(
+      log,
+      `bulk operation status: ${operation.status}, objects: ${operation.objectCount ?? "0"}`,
+    );
+
+    if (operation.status === "COMPLETED") {
+      if (!operation.url) {
+        throw new Error(`Bulk operation ${operationId} completed without a URL.`);
+      }
+
+      return {
+        id: operationId,
+        url: operation.url,
+        objectCount: Number(operation.objectCount ?? 0),
+        fileSize: operation.fileSize ? Number(operation.fileSize) : null,
+        pollDurationMs: getDurationMs(startedAt),
+      };
+    }
+
+    if (
+      ["FAILED", "CANCELED", "EXPIRED"].includes(operation.status.toUpperCase())
+    ) {
+      throw new Error(
+        `Bulk operation ${operationId} ended with ${operation.status}: ${
+          operation.errorCode ?? "unknown_error"
+        }`,
+      );
+    }
+  }
+}
+
+async function streamJsonlFromUrl({
+  url,
+  onRow,
+}: {
+  url: string;
+  onRow: (row: Record<string, unknown>) => void;
+}) {
+  const response = await fetch(url);
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Failed to download bulk result: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      if (trimmed) {
+        onRow(JSON.parse(trimmed) as Record<string, unknown>);
+      }
+    }
+  }
+
+  buffer += decoder.decode();
+
+  if (buffer.trim()) {
+    onRow(JSON.parse(buffer.trim()) as Record<string, unknown>);
+  }
+}
+
 async function selectRowsInBatches<Row>({
   supabase,
   table,
@@ -780,99 +989,6 @@ async function getExistingVariantCosts({
   );
 }
 
-async function updateVariantsFromInventoryItemSnapshots({
-  supabase,
-  shop,
-  inventoryItemIds,
-}: {
-  supabase: SupabaseAdminClient;
-  shop: string;
-  inventoryItemIds: string[];
-}) {
-  const normalizedInventoryItemIds = Array.from(
-    new Set(inventoryItemIds.map(normalizeInventoryItemId)),
-  );
-
-  if (normalizedInventoryItemIds.length === 0) {
-    return {
-      variantsUpdated: 0,
-      affectedVariantRows: [] as Array<{
-        shopify_variant_id: string;
-        shopify_product_id?: string | null;
-        sku: string | null;
-        unit_cost: number | null;
-      }>,
-    };
-  }
-
-  const snapshots = await selectRowsInBatches<InventoryItemSnapshotRow>({
-    supabase,
-    table: "inventory_items",
-    select: "inventory_item_id, sku, unit_cost",
-    shop,
-    column: "inventory_item_id",
-    values: normalizedInventoryItemIds,
-  });
-
-  const snapshotByInventoryItemId = new Map(
-    snapshots.map((snapshot) => [
-      snapshot.inventory_item_id,
-      snapshot,
-    ]),
-  );
-
-  const variants = await selectRowsInBatches<VariantDbRow>({
-    supabase,
-    table: "variants",
-    select: "shopify_variant_id, shopify_product_id, inventory_item_id, sku",
-    shop,
-    column: "inventory_item_id",
-    values: normalizedInventoryItemIds,
-  });
-  const affectedVariantRows: Array<{
-    shopify_variant_id: string;
-    shopify_product_id?: string | null;
-    sku: string | null;
-    unit_cost: number | null;
-  }> = [];
-  let variantsUpdated = 0;
-
-  for (const variant of variants) {
-    const snapshot = snapshotByInventoryItemId.get(variant.inventory_item_id);
-
-    if (!snapshot) {
-      continue;
-    }
-
-    const { error: variantUpdateError } = await supabase
-      .from("variants")
-      .update({
-        unit_cost: snapshot.unit_cost,
-        sku: variant.sku ?? snapshot.sku ?? null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("shop_domain", shop)
-      .eq("shopify_variant_id", variant.shopify_variant_id);
-
-    if (variantUpdateError) {
-      throw new Error(variantUpdateError.message);
-    }
-
-    variantsUpdated += 1;
-    affectedVariantRows.push({
-      shopify_variant_id: variant.shopify_variant_id,
-      shopify_product_id: variant.shopify_product_id,
-      sku: variant.sku ?? snapshot.sku ?? null,
-      unit_cost: snapshot.unit_cost,
-    });
-  }
-
-  return {
-    variantsUpdated,
-    affectedVariantRows,
-  };
-}
-
 async function recomputeOrderLineCogsForShop({
   supabase,
   shop,
@@ -894,6 +1010,83 @@ async function recomputeOrderLineCogsForShop({
   return typeof data === "number" ? data : Number(data ?? 0);
 }
 
+async function recomputeOrderLineCogsForVariantsSql({
+  supabase,
+  shop,
+  variantIds,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  variantIds: string[];
+}) {
+  const uniqueVariantIds = Array.from(new Set(variantIds)).filter(Boolean);
+
+  if (uniqueVariantIds.length === 0) {
+    return 0;
+  }
+
+  let recomputedCount = 0;
+
+  for (const batch of chunkArray(uniqueVariantIds, SUPABASE_LOOKUP_BATCH_SIZE)) {
+    const { data, error } = await supabase.rpc(
+      "recompute_order_line_cogs_for_variants",
+      {
+        p_shop_domain: shop,
+        p_variant_ids: batch,
+      },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    recomputedCount += typeof data === "number" ? data : Number(data ?? 0);
+  }
+
+  return recomputedCount;
+}
+
+async function recomputeOrderLineCogsForInventoryItemsSql({
+  supabase,
+  shop,
+  inventoryItemIds,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  inventoryItemIds: string[];
+}) {
+  const uniqueInventoryItemIds = Array.from(
+    new Set(inventoryItemIds.map(normalizeInventoryItemId)),
+  ).filter(Boolean);
+
+  if (uniqueInventoryItemIds.length === 0) {
+    return 0;
+  }
+
+  let recomputedCount = 0;
+
+  for (const batch of chunkArray(
+    uniqueInventoryItemIds,
+    SUPABASE_LOOKUP_BATCH_SIZE,
+  )) {
+    const { data, error } = await supabase.rpc(
+      "recompute_order_line_cogs_for_inventory_items",
+      {
+        p_shop_domain: shop,
+        p_inventory_item_ids: batch,
+      },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    recomputedCount += typeof data === "number" ? data : Number(data ?? 0);
+  }
+
+  return recomputedCount;
+}
+
 async function updateVariantCostsFromInventoryItemsForShop({
   supabase,
   shop,
@@ -913,6 +1106,47 @@ async function updateVariantCostsFromInventoryItemsForShop({
   }
 
   return typeof data === "number" ? data : Number(data ?? 0);
+}
+
+async function updateVariantCostsFromInventoryItemsSql({
+  supabase,
+  shop,
+  inventoryItemIds,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  inventoryItemIds: string[];
+}) {
+  const uniqueInventoryItemIds = Array.from(
+    new Set(inventoryItemIds.map(normalizeInventoryItemId)),
+  ).filter(Boolean);
+
+  if (uniqueInventoryItemIds.length === 0) {
+    return 0;
+  }
+
+  let updatedCount = 0;
+
+  for (const batch of chunkArray(
+    uniqueInventoryItemIds,
+    SUPABASE_LOOKUP_BATCH_SIZE,
+  )) {
+    const { data, error } = await supabase.rpc(
+      "update_variant_costs_from_inventory_items",
+      {
+        p_shop_domain: shop,
+        p_inventory_item_ids: batch,
+      },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    updatedCount += typeof data === "number" ? data : Number(data ?? 0);
+  }
+
+  return updatedCount;
 }
 
 async function getRemainingProductVariantsForSync({
@@ -1292,171 +1526,6 @@ export async function syncProductsBatch({
   };
 }
 
-async function recomputeOrderLineCogsForVariants({
-  supabase,
-  shop,
-  variantRows,
-}: {
-  supabase: SupabaseAdminClient;
-  shop: string;
-  variantRows: Array<{
-    shopify_variant_id: string;
-    shopify_product_id?: string | null;
-    sku: string | null;
-    unit_cost: number | null;
-  }>;
-}) {
-  const costByVariantId = new Map(
-    variantRows.map((variant) => [
-      variant.shopify_variant_id,
-      variant.unit_cost,
-    ]),
-  );
-  const variantIds = Array.from(costByVariantId.keys());
-  const normalizeSku = (sku: string | null) => sku?.trim() ?? "";
-  const isUsableSku = (sku: string | null) => {
-    const normalizedSku = normalizeSku(sku);
-
-    return normalizedSku.length > 0 && normalizedSku !== "-";
-  };
-  const costBySku = new Map(
-    variantRows
-      .filter((variant) => isUsableSku(variant.sku))
-      .map((variant) => [normalizeSku(variant.sku), variant.unit_cost]),
-  );
-  const skus = Array.from(costBySku.keys());
-  const productVariantCosts = new Map<string, number[]>();
-
-  for (const variant of variantRows) {
-    if (variant.unit_cost === null) {
-      continue;
-    }
-
-    if (!variant.shopify_product_id) {
-      continue;
-    }
-
-    const existingCosts =
-      productVariantCosts.get(variant.shopify_product_id) ?? [];
-    existingCosts.push(variant.unit_cost);
-    productVariantCosts.set(variant.shopify_product_id, existingCosts);
-  }
-
-  const costBySingleVariantProductId = new Map(
-    Array.from(productVariantCosts.entries())
-      .filter(([, costs]) => costs.length === 1)
-      .map(([productId, costs]) => [productId, costs[0]]),
-  );
-  const productIds = Array.from(costBySingleVariantProductId.keys());
-
-  if (variantIds.length === 0 && skus.length === 0 && productIds.length === 0) {
-    return 0;
-  }
-
-  const baseSelect =
-    "shopify_line_item_id, shopify_variant_id, sku, quantity, revenue";
-  const orderLinesById = new Map<string, OrderLineCostRecomputeRow>();
-
-  if (variantIds.length > 0) {
-    const variantMatchedRows =
-      await selectRowsInBatches<OrderLineCostRecomputeRow>({
-        supabase,
-        table: "order_lines",
-        select: baseSelect,
-        shop,
-        column: "shopify_variant_id",
-        values: variantIds,
-      });
-
-    for (const orderLine of variantMatchedRows) {
-      orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
-    }
-  }
-
-  if (skus.length > 0) {
-    const skuMatchedRows = await selectRowsInBatches<OrderLineCostRecomputeRow>({
-      supabase,
-      table: "order_lines",
-      select: baseSelect,
-      shop,
-      column: "sku",
-      values: skus,
-    });
-
-    for (const orderLine of skuMatchedRows) {
-      orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
-    }
-  }
-
-  if (productIds.length > 0) {
-    const { error: productIdColumnError } = await supabase
-      .from("order_lines")
-      .select("shopify_product_id")
-      .eq("shop_domain", shop)
-      .limit(1);
-
-    if (!productIdColumnError) {
-      const productMatchedRows =
-        await selectRowsInBatches<OrderLineCostRecomputeRow>({
-          supabase,
-          table: "order_lines",
-          select: `${baseSelect}, shopify_product_id`,
-          shop,
-          column: "shopify_product_id",
-          values: productIds,
-        });
-
-      for (const orderLine of productMatchedRows) {
-        orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
-      }
-    }
-  }
-
-  let recomputedCount = 0;
-
-  for (const orderLine of orderLinesById.values()) {
-    const sku = isUsableSku(orderLine.sku) ? normalizeSku(orderLine.sku) : null;
-    const unitCost =
-      (orderLine.shopify_variant_id
-        ? costByVariantId.get(orderLine.shopify_variant_id)
-        : undefined) ??
-      (sku ? costBySku.get(sku) : undefined) ??
-      (orderLine.shopify_product_id
-        ? costBySingleVariantProductId.get(orderLine.shopify_product_id)
-        : undefined);
-
-    if (unitCost === undefined) {
-      continue;
-    }
-
-    const quantity = Number(orderLine.quantity ?? 0);
-    const revenue = Number(orderLine.revenue ?? 0);
-    const cogs = unitCost === null ? null : unitCost * quantity;
-
-    const { error: updateError } = await supabase
-      .from("order_lines")
-      .update({
-        unit_cost: unitCost,
-        cogs,
-        gross_profit: cogs === null ? null : revenue - cogs,
-        cost_source:
-          unitCost === null
-            ? "MISSING_COST"
-            : "recomputed_from_current_variant_cost",
-      })
-      .eq("shop_domain", shop)
-      .eq("shopify_line_item_id", orderLine.shopify_line_item_id);
-
-    if (updateError) {
-      throw new Error(updateError.message);
-    }
-
-    recomputedCount += 1;
-  }
-
-  return recomputedCount;
-}
-
 async function getAllLineItemsForOrder({
   admin,
   order,
@@ -1788,6 +1857,203 @@ export async function syncProducts({
   }
 }
 
+export async function syncProductsBulk({
+  admin,
+  shop,
+  supabase,
+  source,
+  log,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  source: SyncSource;
+  log?: SyncLogger;
+}) {
+  const startedAt = new Date().toISOString();
+  const totalStartedAt = Date.now();
+  let bulkOperationId: string | null = null;
+
+  try {
+    const bulkStartedAt = Date.now();
+    const bulkOperation = await runBulkOperation({
+      admin,
+      log,
+      query: `{
+        products {
+          edges {
+            node {
+              id
+              title
+              vendor
+              productType
+              status
+              variants {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    inventoryItem {
+                      id
+                      unitCost {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }`,
+    });
+    bulkOperationId = bulkOperation.id;
+
+    const productsById = new Map<string, ProductNode>();
+    const variantEdgesByProductId = new Map<string, ProductNode["variants"]["edges"]>();
+    const downloadStartedAt = Date.now();
+
+    logSync(log, `downloading products bulk result: ${bulkOperation.id}`);
+    await streamJsonlFromUrl({
+      url: bulkOperation.url,
+      onRow: (row) => {
+        const id = typeof row.id === "string" ? row.id : null;
+        const parentId =
+          typeof row.__parentId === "string" ? row.__parentId : null;
+
+        if (!id) {
+          return;
+        }
+
+        if (!parentId) {
+          productsById.set(id, {
+            id,
+            title: typeof row.title === "string" ? row.title : "",
+            vendor: typeof row.vendor === "string" ? row.vendor : null,
+            productType:
+              typeof row.productType === "string" ? row.productType : null,
+            status: typeof row.status === "string" ? row.status : null,
+            variants: {
+              edges: [],
+              pageInfo: {
+                hasNextPage: false,
+                endCursor: null,
+              },
+            },
+          });
+          return;
+        }
+
+        const inventoryItem = row.inventoryItem as
+          | {
+              id?: string;
+              unitCost?: { amount?: string; currencyCode?: string } | null;
+            }
+          | null
+          | undefined;
+        const edges = variantEdgesByProductId.get(parentId) ?? [];
+
+        edges.push({
+          node: {
+            id,
+            title: typeof row.title === "string" ? row.title : "",
+            sku: typeof row.sku === "string" ? row.sku : null,
+            price:
+              typeof row.price === "string" || typeof row.price === "number"
+                ? String(row.price)
+                : null,
+            inventoryItem: inventoryItem?.id
+              ? {
+                  id: inventoryItem.id,
+                  unitCost: inventoryItem.unitCost?.amount
+                    ? {
+                        amount: inventoryItem.unitCost.amount,
+                        currencyCode:
+                          inventoryItem.unitCost.currencyCode ?? "CAD",
+                      }
+                    : null,
+                }
+              : null,
+          },
+        });
+        variantEdgesByProductId.set(parentId, edges);
+      },
+    });
+
+    for (const [productId, edges] of variantEdgesByProductId.entries()) {
+      const product = productsById.get(productId);
+
+      if (product) {
+        product.variants.edges = edges;
+      }
+    }
+
+    const dbStartedAt = Date.now();
+    const counts = await syncProductNodes({
+      supabase,
+      shop,
+      products: Array.from(productsById.values()),
+    });
+    const dbUpsertMs = getDurationMs(dbStartedAt);
+
+    const cogsStartedAt = Date.now();
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
+      supabase,
+      shop,
+    });
+    const cogsRecomputeMs = getDurationMs(cogsStartedAt);
+
+    const timings: SyncTimingDetails = {
+      bulkPollMs: bulkOperation.pollDurationMs,
+      bulkDownloadMs: getDurationMs(downloadStartedAt),
+      dbUpsertMs,
+      cogsRecomputeMs,
+      totalMs: getDurationMs(totalStartedAt),
+    };
+    const result = {
+      ...counts,
+      orderLinesCogsRecomputed,
+      bulkOperationId: bulkOperation.id,
+      bulkObjectCount: bulkOperation.objectCount,
+      bulkFileSize: bulkOperation.fileSize,
+      duration: timings,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "products",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  } catch (error) {
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "products",
+      status: "error",
+      source,
+      startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      details: {
+        bulkOperationId,
+        duration: {
+          totalMs: getDurationMs(totalStartedAt),
+        },
+      },
+    });
+
+    throw error;
+  }
+}
+
 export async function syncProductById({
   admin,
   shop,
@@ -1802,8 +2068,10 @@ export async function syncProductById({
   productId: string;
 }) {
   const startedAt = new Date().toISOString();
+  const totalStartedAt = Date.now();
 
   try {
+    const shopifyStartedAt = Date.now();
     const response = await admin.graphql(
       `#graphql
         query getProductForSync($id: ID!) {
@@ -1853,6 +2121,8 @@ export async function syncProductById({
     if (!product) {
       throw new Error(`Product not found for ${productId}.`);
     }
+    const shopifyFetchMs = getDurationMs(shopifyStartedAt);
+    const dbStartedAt = Date.now();
 
     const productRows = [
       {
@@ -1925,14 +2195,17 @@ export async function syncProductById({
           unitCost: variant.unit_cost,
           hasUnitCostValue: variant.unit_cost !== null,
           costSource: "PRODUCT_SYNC_UNIT_COST",
-        })),
+      })),
     });
+    const dbUpsertMs = getDurationMs(dbStartedAt);
 
-    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
+    const cogsStartedAt = Date.now();
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariantsSql({
       supabase,
       shop,
-      variantRows,
+      variantIds: variantRows.map((variant) => variant.shopify_variant_id),
     });
+    const cogsRecomputeMs = getDurationMs(cogsStartedAt);
     const variantsWithUnitCostSynced = variantRows.filter(
       (variant) => variant.unit_cost !== null,
     ).length;
@@ -1945,6 +2218,12 @@ export async function syncProductById({
       variantsWithUnitCostSynced,
       variantsWithMissingUnitCost,
       orderLinesCogsRecomputed,
+      duration: {
+        shopifyFetchMs,
+        dbUpsertMs,
+        cogsRecomputeMs,
+        totalMs: getDurationMs(totalStartedAt),
+      },
     };
 
     await insertSyncRun({
@@ -1967,6 +2246,11 @@ export async function syncProductById({
       source,
       startedAt,
       errorMessage: error instanceof Error ? error.message : String(error),
+      details: {
+        duration: {
+          totalMs: getDurationMs(totalStartedAt),
+        },
+      },
     });
 
     throw error;
@@ -2328,7 +2612,7 @@ export async function syncInventoryBatch({
     }),
   });
 
-  const variantUpdateResult = await updateVariantsFromInventoryItemSnapshots({
+  const variantsUnitCostUpdated = await updateVariantCostsFromInventoryItemsSql({
     supabase,
     shop,
     inventoryItemIds: inventoryItems.map((inventoryItem) => inventoryItem.id),
@@ -2371,7 +2655,7 @@ export async function syncInventoryBatch({
     counts: {
       inventoryItemsProcessed: inventoryItems.length,
       inventoryLevelsSynced: rows.length,
-      variantsUnitCostUpdated: variantUpdateResult.variantsUpdated,
+      variantsUnitCostUpdated,
       orderLinesCogsRecomputed,
     },
   };
@@ -2393,6 +2677,10 @@ export async function syncInventoryItems({
   inventoryItemUpdates?: InventoryItemCostWebhookUpdate[];
 }) {
   const startedAt = new Date().toISOString();
+  const totalStartedAt = Date.now();
+  let shopifyFetchMs = 0;
+  let dbUpsertMs = 0;
+  let cogsRecomputeMs = 0;
 
   try {
     const normalizedInventoryItemUpdates = (inventoryItemUpdates ?? []).map(
@@ -2443,6 +2731,7 @@ export async function syncInventoryItems({
       normalizedInventoryItemIds,
       INVENTORY_BATCH_SIZE,
     )) {
+      const shopifyStartedAt = Date.now();
       const response = await admin.graphql(
         `#graphql
           query getInventoryItemsForSync($ids: [ID!]!) {
@@ -2489,6 +2778,7 @@ export async function syncInventoryItems({
       const inventoryItems: InventoryItemNode[] = (
         data.data?.nodes ?? []
       ).filter(Boolean);
+      shopifyFetchMs += getDurationMs(shopifyStartedAt);
       const fetchedInventoryItemIds = new Set(
         inventoryItems.map((inventoryItem) => inventoryItem.id),
       );
@@ -2536,22 +2826,19 @@ export async function syncInventoryItems({
         });
       }
 
+      const dbStartedAt = Date.now();
       await upsertInventoryItemSnapshots({
         supabase,
         shop,
         snapshots,
       });
 
-      const variantUpdateResult =
-        await updateVariantsFromInventoryItemSnapshots({
+      totalVariantsUnitCostUpdated +=
+        await updateVariantCostsFromInventoryItemsSql({
           supabase,
           shop,
-          inventoryItemIds: snapshots.map(
-            (snapshot) => snapshot.inventoryItemId,
-          ),
+          inventoryItemIds: snapshots.map((snapshot) => snapshot.inventoryItemId),
         });
-
-      totalVariantsUnitCostUpdated += variantUpdateResult.variantsUpdated;
 
       const rows = inventoryItems.flatMap((inventoryItem) => {
         const variant = variantByInventoryItemId.get(inventoryItem.id);
@@ -2581,14 +2868,18 @@ export async function syncInventoryItems({
           throw new Error(error.message);
         }
       }
+      dbUpsertMs += getDurationMs(dbStartedAt);
 
       totalInventoryItemsProcessed += inventoryItems.length;
       totalInventoryLevelsSynced += rows.length;
-      totalOrderLinesCogsRecomputed += await recomputeOrderLineCogsForVariants({
-        supabase,
-        shop,
-        variantRows: variantUpdateResult.affectedVariantRows,
-      });
+      const cogsStartedAt = Date.now();
+      totalOrderLinesCogsRecomputed +=
+        await recomputeOrderLineCogsForInventoryItemsSql({
+          supabase,
+          shop,
+          inventoryItemIds: snapshots.map((snapshot) => snapshot.inventoryItemId),
+        });
+      cogsRecomputeMs += getDurationMs(cogsStartedAt);
     }
 
     const matchedInventoryItemIds = new Set(
@@ -2606,6 +2897,12 @@ export async function syncInventoryItems({
       inventoryItemsWithoutVariantMatch: normalizedInventoryItemIds.filter(
         (inventoryItemId) => !matchedInventoryItemIds.has(inventoryItemId),
       ).length,
+      duration: {
+        shopifyFetchMs,
+        dbUpsertMs,
+        cogsRecomputeMs,
+        totalMs: getDurationMs(totalStartedAt),
+      },
     };
 
     await insertSyncRun({
@@ -2628,6 +2925,14 @@ export async function syncInventoryItems({
       source,
       startedAt,
       errorMessage: error instanceof Error ? error.message : String(error),
+      details: {
+        duration: {
+          shopifyFetchMs,
+          dbUpsertMs,
+          cogsRecomputeMs,
+          totalMs: getDurationMs(totalStartedAt),
+        },
+      },
     });
 
     throw error;
@@ -3090,8 +3395,13 @@ export async function syncOrdersBatch({
     });
   }
 
+  const isDone = !pageResult.hasNextPage || pageResult.ordersSynced === 0;
+  const orderLinesCogsRecomputed = isDone
+    ? await recomputeOrderLineCogsForShop({ supabase, shop })
+    : 0;
+
   return {
-    done: !pageResult.hasNextPage || pageResult.ordersSynced === 0,
+    done: isDone,
     progress: {
       cursor: pageResult.hasNextPage ? pageResult.cursor : null,
       startDate: dateRange.startDate,
@@ -3102,6 +3412,7 @@ export async function syncOrdersBatch({
       ordersSynced: pageResult.ordersSynced,
       orderLinesSynced: pageResult.orderLinesSynced,
       pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
+      orderLinesCogsRecomputed,
       staffAttributionAvailable,
       staffAttributionError,
     },
@@ -3419,12 +3730,21 @@ export async function syncOrders({
       syncResult = await runOrdersSync(false);
     }
 
+    const cogsStartedAt = Date.now();
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
+      supabase,
+      shop,
+    });
     const result = {
       ...syncResult,
+      orderLinesCogsRecomputed,
       startDate: startDate ?? null,
       endDate: endDate ?? null,
       staffAttributionAvailable,
       staffAttributionError,
+      duration: {
+        cogsRecomputeMs: getDurationMs(cogsStartedAt),
+      },
     };
 
     await insertSyncRun({
@@ -3447,6 +3767,295 @@ export async function syncOrders({
       source,
       startedAt,
       errorMessage: error instanceof Error ? error.message : String(error),
+    });
+
+    throw error;
+  }
+}
+
+export async function syncOrdersBulk({
+  admin,
+  shop,
+  supabase,
+  source,
+  startDate,
+  endDate,
+  log,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  source: SyncSource;
+  startDate?: string | null;
+  endDate?: string | null;
+  log?: SyncLogger;
+}) {
+  const startedAt = new Date().toISOString();
+  const totalStartedAt = Date.now();
+  let bulkOperationId: string | null = null;
+
+  try {
+    const orderQuery = buildOrderQuery({ startDate, endDate });
+    const ordersArgs = orderQuery ? `(query: ${JSON.stringify(orderQuery)})` : "";
+    const bulkOperation = await runBulkOperation({
+      admin,
+      log,
+      query: `{
+        orders${ordersArgs} {
+          edges {
+            node {
+              id
+              name
+              createdAt
+              displayFinancialStatus
+              totalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              retailLocation {
+                id
+                name
+              }
+              lineItems {
+                edges {
+                  node {
+                    id
+                    title
+                    quantity
+                    sku
+                    variant {
+                      id
+                      title
+                      sku
+                      inventoryItem {
+                        id
+                      }
+                      product {
+                        id
+                        title
+                        vendor
+                      }
+                    }
+                    discountedUnitPriceSet {
+                      shopMoney {
+                        amount
+                        currencyCode
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }`,
+    });
+    bulkOperationId = bulkOperation.id;
+
+    type BulkOrderParent = {
+      id: string;
+      name: string;
+      createdAt: string;
+      displayFinancialStatus?: string | null;
+      totalPriceSet?: { shopMoney?: { amount?: string | null } | null } | null;
+      retailLocation?: { id?: string | null; name?: string | null } | null;
+    };
+    type BulkLineItem = Record<string, unknown> & {
+      id: string;
+      __parentId: string;
+    };
+
+    const ordersById = new Map<string, BulkOrderParent>();
+    const lineItems: BulkLineItem[] = [];
+    const downloadStartedAt = Date.now();
+
+    logSync(log, `downloading orders bulk result: ${bulkOperation.id}`);
+    await streamJsonlFromUrl({
+      url: bulkOperation.url,
+      onRow: (row) => {
+        const id = typeof row.id === "string" ? row.id : null;
+        const parentId =
+          typeof row.__parentId === "string" ? row.__parentId : null;
+
+        if (!id) {
+          return;
+        }
+
+        if (parentId) {
+          lineItems.push({ ...row, id, __parentId: parentId });
+          return;
+        }
+
+        ordersById.set(id, {
+          id,
+          name: typeof row.name === "string" ? row.name : id,
+          createdAt:
+            typeof row.createdAt === "string"
+              ? row.createdAt
+              : new Date().toISOString(),
+          displayFinancialStatus:
+            typeof row.displayFinancialStatus === "string"
+              ? row.displayFinancialStatus
+              : null,
+          totalPriceSet: row.totalPriceSet as BulkOrderParent["totalPriceSet"],
+          retailLocation:
+            row.retailLocation as BulkOrderParent["retailLocation"],
+        });
+      },
+    });
+
+    const now = new Date().toISOString();
+    const orderRows = Array.from(ordersById.values()).map((order) => ({
+      shop_domain: shop,
+      shopify_order_id: order.id,
+      order_name: order.name,
+      created_at_shopify: order.createdAt,
+      financial_status: order.displayFinancialStatus ?? null,
+      retail_location_id: order.retailLocation?.id ?? null,
+      retail_location_name: order.retailLocation?.name ?? null,
+      total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
+      staff_member_id: null,
+      staff_member_name: null,
+      staff_member_email: null,
+      staff_source: "unavailable",
+      updated_at: now,
+    }));
+    const orderLineRows = lineItems.flatMap((lineItem) => {
+      const order = ordersById.get(lineItem.__parentId);
+
+      if (!order) {
+        return [];
+      }
+
+      const variant = lineItem.variant as
+        | {
+            id?: string | null;
+            title?: string | null;
+            sku?: string | null;
+            inventoryItem?: { id?: string | null } | null;
+            product?: {
+              id?: string | null;
+              title?: string | null;
+              vendor?: string | null;
+            } | null;
+          }
+        | null
+        | undefined;
+      const quantity = Number(lineItem.quantity ?? 0);
+      const unitPrice = getNumericAmount(
+        (
+          lineItem.discountedUnitPriceSet as
+            | { shopMoney?: { amount?: string | null } | null }
+            | undefined
+        )?.shopMoney?.amount,
+      );
+      const revenue = unitPrice * quantity;
+
+      return [
+        {
+          shop_domain: shop,
+          shopify_order_id: order.id,
+          shopify_line_item_id: lineItem.id,
+          order_name: order.name,
+          created_at_shopify: order.createdAt,
+          retail_location_id: order.retailLocation?.id ?? null,
+          retail_location_name: order.retailLocation?.name ?? null,
+          shopify_variant_id: variant?.id ?? null,
+          inventory_item_id: variant?.inventoryItem?.id ?? null,
+          product_title:
+            variant?.product?.title ??
+            (typeof lineItem.title === "string" ? lineItem.title : null),
+          variant_title: variant?.title ?? null,
+          sku:
+            (typeof lineItem.sku === "string" ? lineItem.sku : null) ??
+            variant?.sku ??
+            null,
+          vendor: variant?.product?.vendor ?? null,
+          quantity,
+          unit_price: unitPrice,
+          revenue,
+          unit_cost: null,
+          cogs: null,
+          gross_profit: null,
+          cost_source: null,
+          staff_member_id: null,
+          staff_member_name: null,
+          staff_member_email: null,
+          staff_source: "unavailable",
+        },
+      ];
+    });
+    const dbStartedAt = Date.now();
+
+    await upsertInBatches({
+      supabase,
+      table: "orders",
+      rows: orderRows,
+      onConflict: "shop_domain,shopify_order_id",
+    });
+    await upsertInBatches({
+      supabase,
+      table: "order_lines",
+      rows: orderLineRows,
+      onConflict: "shop_domain,shopify_line_item_id",
+    });
+
+    const dbUpsertMs = getDurationMs(dbStartedAt);
+    const cogsStartedAt = Date.now();
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
+      supabase,
+      shop,
+    });
+    const cogsRecomputeMs = getDurationMs(cogsStartedAt);
+    const duration: SyncTimingDetails = {
+      bulkPollMs: bulkOperation.pollDurationMs,
+      bulkDownloadMs: getDurationMs(downloadStartedAt),
+      dbUpsertMs,
+      cogsRecomputeMs,
+      totalMs: getDurationMs(totalStartedAt),
+    };
+    const result = {
+      ordersSynced: orderRows.length,
+      orderLinesSynced: orderLineRows.length,
+      orderLinesCogsRecomputed,
+      startDate: startDate ?? null,
+      endDate: endDate ?? null,
+      bulkOperationId: bulkOperation.id,
+      bulkObjectCount: bulkOperation.objectCount,
+      bulkFileSize: bulkOperation.fileSize,
+      duration,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "orders",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  } catch (error) {
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "orders",
+      status: "error",
+      source,
+      startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      details: {
+        bulkOperationId,
+        startDate: startDate ?? null,
+        endDate: endDate ?? null,
+        duration: {
+          totalMs: getDurationMs(totalStartedAt),
+        },
+      },
     });
 
     throw error;
