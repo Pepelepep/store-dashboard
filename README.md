@@ -189,6 +189,66 @@ Admin Sync is intentionally not the primary full-refresh engine. Use it for smal
 
 ---
 
+## Privacy / compliance webhooks
+
+The app includes Shopify mandatory compliance webhook handlers for future App Store readiness:
+
+```text
+customers/data_request
+customers/redact
+shop/redact
+```
+
+Configured routes:
+
+```text
+/webhooks/customers/data_request
+/webhooks/customers/redact
+/webhooks/shop/redact
+```
+
+Behavior:
+
+```text
+customers/data_request
+→ authenticates the Shopify webhook
+→ records a safe audit event
+→ returns 200
+→ does not log customer email, phone, or payload details
+
+customers/redact
+→ authenticates the Shopify webhook
+→ anonymizes matched order display names when Shopify order IDs are provided
+→ preserves order IDs and financial totals so aggregate analytics remain stable
+→ records a safe audit event
+→ returns 200
+
+shop/redact
+→ authenticates the Shopify webhook
+→ deletes shop-scoped Supabase rows for the requested shop_domain only
+→ removes Shopify sessions for that shop
+→ records a minimal compliance audit event
+→ returns 200
+```
+
+Current limitation:
+
+```text
+The app does not store direct customer profile records.
+Customer-level data export is not implemented yet.
+Customer redaction is limited to anonymizing matched order display names where Shopify provides order IDs.
+```
+
+Compliance audit events are stored in:
+
+```text
+compliance_webhook_events
+```
+
+The audit table stores topic, shop domain, status, timestamp, and non-sensitive details.
+
+---
+
 ## Final sync architecture
 
 Stable release: `v0.1.0-client-stable`.
