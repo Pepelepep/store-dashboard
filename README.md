@@ -150,22 +150,24 @@ Cost source
 
 ```text
 /app/admin/sync
-/app/admin/sync-locations
-/app/admin/sync-products
-/app/admin/sync-inventory
-/app/admin/sync-orders
 ```
 
 Purpose:
 
 ```text
-Sync Shopify data into Supabase
+Light manual troubleshooting sync into Supabase
 Track table counts
 Track recent sync runs
 Avoid live Shopify queries in dashboard
 ```
 
-Recommended sync order:
+Primary full refresh command:
+
+```text
+npm run sync:local -- --shop fh1z1f-5i.myshopify.com --steps locations,products,inventory,orders
+```
+
+Default refresh order:
 
 ```text
 1. Locations
@@ -174,7 +176,7 @@ Recommended sync order:
 4. Orders / order lines
 ```
 
-For orders, sync by date range, ideally month by month, to avoid Shopify API query cost and timeout issues.
+For targeted orders refreshes, use `--orders-start YYYY-MM-DD` and `--orders-end YYYY-MM-DD`.
 
 ---
 
@@ -535,7 +537,6 @@ app/routes/app.admin.sync-locations.tsx
 app/routes/app.admin.sync-products.tsx
 app/routes/app.admin.sync-inventory.tsx
 app/routes/app.admin.sync-orders.tsx
-app/routes/app.debug.db.tsx
 app/lib/db/supabase.server.ts
 app/lib/permissions/location-access.ts
 app/lib/types/permissions.ts
@@ -614,7 +615,7 @@ Recommended MVP stack:
 Render or Railway
 Supabase Pro
 Shopify Dev Dashboard
-manual refresh + future scheduled job
+local full refresh + webhooks
 ```
 
 Later:
@@ -622,8 +623,6 @@ Later:
 ```text
 webhooks
 bulk operations
-background worker
-queued sync jobs
 permissions admin UI
 expenses settings page
 ```
@@ -655,10 +654,10 @@ Do not share `.env` values.
 1. Finish project cleanup.
 2. Make `/app` and `/app/live-dashboard` redirect to `/app/db-dashboard`.
 3. Make `/app/db-dashboard` visually match the final live dashboard UI.
-4. Validate paginated `/app/admin/sync-orders`.
-5. Improve sync UX/progress.
+4. Validate local full refresh in staging.
+5. Improve Admin Sync troubleshooting UX/progress.
 6. Add DB-backed expenses settings page.
 7. Add server-side permissions.
 8. Prepare Render/Railway production deploy.
 9. Replace manual Cloudflare workflow.
-10. Add scheduled sync / webhooks / bulk operations later.
+10. Continue webhook and local bulk refresh hardening.
