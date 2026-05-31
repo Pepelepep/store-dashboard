@@ -36,6 +36,18 @@ uri = "/webhooks/products/update"
 topics = ["products/delete"]
 uri = "/webhooks/products/delete"
 
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request"]
+uri = "/webhooks/customers/data_request"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/redact"]
+uri = "/webhooks/customers/redact"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["shop/redact"]
+uri = "/webhooks/shop/redact"
+
 [access_scopes]
 scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations,read_users"
 
