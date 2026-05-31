@@ -238,6 +238,7 @@ export type SyncSource =
   | "webhook";
 
 const INVENTORY_BATCH_SIZE = 25;
+const SUPABASE_LOOKUP_BATCH_SIZE = 250;
 const PRODUCT_SYNC_PAGE_SIZE = 20;
 const PRODUCT_VARIANT_SYNC_PAGE_SIZE = 50;
 const ORDERS_PAGE_SIZE = 50;
@@ -633,6 +634,41 @@ async function upsertInBatches({
   }
 }
 
+async function selectRowsInBatches<Row>({
+  supabase,
+  table,
+  select,
+  shop,
+  column,
+  values,
+}: {
+  supabase: SupabaseAdminClient;
+  table: string;
+  select: string;
+  shop: string;
+  column: string;
+  values: string[];
+}) {
+  const rows: Row[] = [];
+  const uniqueValues = Array.from(new Set(values)).filter(Boolean);
+
+  for (const batch of chunkArray(uniqueValues, SUPABASE_LOOKUP_BATCH_SIZE)) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(select)
+      .eq("shop_domain", shop)
+      .in(column, batch);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    rows.push(...((data ?? []) as Row[]));
+  }
+
+  return rows;
+}
+
 async function upsertInventoryItemSnapshots({
   supabase,
   shop,
@@ -653,24 +689,17 @@ async function upsertInventoryItemSnapshots({
     return new Map<string, InventoryItemSnapshotRow>();
   }
 
-  const inventoryItemIds = Array.from(
-    new Set(normalizedSnapshots.map((snapshot) => snapshot.inventoryItemId)),
-  );
-  const { data: existingRows, error: existingError } = await supabase
-    .from("inventory_items")
-    .select("inventory_item_id, sku, tracked, unit_cost")
-    .eq("shop_domain", shop)
-    .in("inventory_item_id", inventoryItemIds);
-
-  if (existingError) {
-    throw new Error(existingError.message);
-  }
+  const existingRows = await selectRowsInBatches<InventoryItemSnapshotRow>({
+    supabase,
+    table: "inventory_items",
+    select: "inventory_item_id, sku, tracked, unit_cost",
+    shop,
+    column: "inventory_item_id",
+    values: normalizedSnapshots.map((snapshot) => snapshot.inventoryItemId),
+  });
 
   const existingById = new Map(
-    ((existingRows ?? []) as InventoryItemSnapshotRow[]).map((row) => [
-      row.inventory_item_id,
-      row,
-    ]),
+    existingRows.map((row) => [row.inventory_item_id, row]),
   );
   const snapshotById = new Map<string, InventoryItemSnapshotInput>();
 
@@ -734,23 +763,20 @@ async function getExistingVariantCosts({
     return new Map<string, number | null>();
   }
 
-  const { data, error } = await supabase
-    .from("variants")
-    .select("shopify_variant_id, unit_cost")
-    .eq("shop_domain", shop)
-    .in("shopify_variant_id", uniqueVariantIds);
-
-  if (error) {
-    throw new Error(error.message);
-  }
+  const data = await selectRowsInBatches<{
+    shopify_variant_id: string;
+    unit_cost: number | null;
+  }>({
+    supabase,
+    table: "variants",
+    select: "shopify_variant_id, unit_cost",
+    shop,
+    column: "shopify_variant_id",
+    values: uniqueVariantIds,
+  });
 
   return new Map(
-    (
-      (data ?? []) as Array<{
-        shopify_variant_id: string;
-        unit_cost: number | null;
-      }>
-    ).map((row) => [row.shopify_variant_id, row.unit_cost]),
+    data.map((row) => [row.shopify_variant_id, row.unit_cost]),
   );
 }
 
@@ -779,34 +805,30 @@ async function updateVariantsFromInventoryItemSnapshots({
     };
   }
 
-  const { data: snapshots, error: snapshotsError } = await supabase
-    .from("inventory_items")
-    .select("inventory_item_id, sku, unit_cost")
-    .eq("shop_domain", shop)
-    .in("inventory_item_id", normalizedInventoryItemIds);
-
-  if (snapshotsError) {
-    throw new Error(snapshotsError.message);
-  }
+  const snapshots = await selectRowsInBatches<InventoryItemSnapshotRow>({
+    supabase,
+    table: "inventory_items",
+    select: "inventory_item_id, sku, unit_cost",
+    shop,
+    column: "inventory_item_id",
+    values: normalizedInventoryItemIds,
+  });
 
   const snapshotByInventoryItemId = new Map(
-    ((snapshots ?? []) as InventoryItemSnapshotRow[]).map((snapshot) => [
+    snapshots.map((snapshot) => [
       snapshot.inventory_item_id,
       snapshot,
     ]),
   );
 
-  const { data: variantsData, error: variantsError } = await supabase
-    .from("variants")
-    .select("shopify_variant_id, shopify_product_id, inventory_item_id, sku")
-    .eq("shop_domain", shop)
-    .in("inventory_item_id", normalizedInventoryItemIds);
-
-  if (variantsError) {
-    throw new Error(variantsError.message);
-  }
-
-  const variants = (variantsData ?? []) as VariantDbRow[];
+  const variants = await selectRowsInBatches<VariantDbRow>({
+    supabase,
+    table: "variants",
+    select: "shopify_variant_id, shopify_product_id, inventory_item_id, sku",
+    shop,
+    column: "inventory_item_id",
+    values: normalizedInventoryItemIds,
+  });
   const affectedVariantRows: Array<{
     shopify_variant_id: string;
     shopify_product_id?: string | null;
@@ -849,6 +871,48 @@ async function updateVariantsFromInventoryItemSnapshots({
     variantsUpdated,
     affectedVariantRows,
   };
+}
+
+async function recomputeOrderLineCogsForShop({
+  supabase,
+  shop,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+}) {
+  const { data, error } = await supabase.rpc(
+    "recompute_order_line_cogs_for_shop",
+    {
+      p_shop_domain: shop,
+    },
+  );
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return typeof data === "number" ? data : Number(data ?? 0);
+}
+
+async function updateVariantCostsFromInventoryItemsForShop({
+  supabase,
+  shop,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+}) {
+  const { data, error } = await supabase.rpc(
+    "update_variant_costs_from_inventory_items_for_shop",
+    {
+      p_shop_domain: shop,
+    },
+  );
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return typeof data === "number" ? data : Number(data ?? 0);
 }
 
 async function getRemainingProductVariantsForSync({
@@ -1097,11 +1161,6 @@ async function syncProductNodes({
       })),
   });
 
-  const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
-    supabase,
-    shop,
-    variantRows,
-  });
   const variantsWithUnitCostSynced = variantRows.filter(
     (variant) => variant.unit_cost !== null,
   ).length;
@@ -1111,7 +1170,7 @@ async function syncProductNodes({
     variantsSynced: variantRows.length,
     variantsWithUnitCostSynced,
     variantsWithMissingUnitCost: variantRows.length - variantsWithUnitCostSynced,
-    orderLinesCogsRecomputed,
+    orderLinesCogsRecomputed: 0,
   };
 }
 
@@ -1215,11 +1274,17 @@ export async function syncProductsBatch({
     });
   }
 
-  const counts = await syncProductNodes({ supabase, shop, products });
   const hasNextPage = Boolean(connection?.pageInfo?.hasNextPage);
+  const isDone = !hasNextPage || pageProducts.length === 0;
+  const counts = {
+    ...(await syncProductNodes({ supabase, shop, products })),
+    orderLinesCogsRecomputed: isDone
+      ? await recomputeOrderLineCogsForShop({ supabase, shop })
+      : 0,
+  };
 
   return {
-    done: !hasNextPage || pageProducts.length === 0,
+    done: isDone,
     progress: {
       cursor: hasNextPage ? (connection?.pageInfo?.endCursor ?? null) : null,
     },
@@ -1293,35 +1358,32 @@ async function recomputeOrderLineCogsForVariants({
   const orderLinesById = new Map<string, OrderLineCostRecomputeRow>();
 
   if (variantIds.length > 0) {
-    const { data: variantMatchedRows, error } = await supabase
-      .from("order_lines")
-      .select(baseSelect)
-      .eq("shop_domain", shop)
-      .in("shopify_variant_id", variantIds);
+    const variantMatchedRows =
+      await selectRowsInBatches<OrderLineCostRecomputeRow>({
+        supabase,
+        table: "order_lines",
+        select: baseSelect,
+        shop,
+        column: "shopify_variant_id",
+        values: variantIds,
+      });
 
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    for (const orderLine of (variantMatchedRows ??
-      []) as OrderLineCostRecomputeRow[]) {
+    for (const orderLine of variantMatchedRows) {
       orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
     }
   }
 
   if (skus.length > 0) {
-    const { data: skuMatchedRows, error } = await supabase
-      .from("order_lines")
-      .select(baseSelect)
-      .eq("shop_domain", shop)
-      .in("sku", skus);
+    const skuMatchedRows = await selectRowsInBatches<OrderLineCostRecomputeRow>({
+      supabase,
+      table: "order_lines",
+      select: baseSelect,
+      shop,
+      column: "sku",
+      values: skus,
+    });
 
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    for (const orderLine of (skuMatchedRows ??
-      []) as OrderLineCostRecomputeRow[]) {
+    for (const orderLine of skuMatchedRows) {
       orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
     }
   }
@@ -1334,18 +1396,17 @@ async function recomputeOrderLineCogsForVariants({
       .limit(1);
 
     if (!productIdColumnError) {
-      const { data: productMatchedRows, error } = await supabase
-        .from("order_lines")
-        .select(`${baseSelect}, shopify_product_id`)
-        .eq("shop_domain", shop)
-        .in("shopify_product_id", productIds);
+      const productMatchedRows =
+        await selectRowsInBatches<OrderLineCostRecomputeRow>({
+          supabase,
+          table: "order_lines",
+          select: `${baseSelect}, shopify_product_id`,
+          shop,
+          column: "shopify_product_id",
+          values: productIds,
+        });
 
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      for (const orderLine of (productMatchedRows ??
-        []) as OrderLineCostRecomputeRow[]) {
+      for (const orderLine of productMatchedRows) {
         orderLinesById.set(orderLine.shopify_line_item_id, orderLine);
       }
     }
@@ -1676,10 +1737,9 @@ export async function syncProducts({
         })),
     });
 
-    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
       supabase,
       shop,
-      variantRows,
     });
     const variantsWithUnitCostSynced = variantRows.filter(
       (variant) => variant.unit_cost !== null,
@@ -2087,22 +2147,6 @@ export async function syncInventory({
         }),
       });
 
-      const variantUpdateResult =
-        await updateVariantsFromInventoryItemSnapshots({
-          supabase,
-          shop,
-          inventoryItemIds: inventoryItems.map(
-            (inventoryItem) => inventoryItem.id,
-          ),
-        });
-
-      totalVariantsUnitCostUpdated += variantUpdateResult.variantsUpdated;
-      totalOrderLinesCogsRecomputed += await recomputeOrderLineCogsForVariants({
-        supabase,
-        shop,
-        variantRows: variantUpdateResult.affectedVariantRows,
-      });
-
       const rows = inventoryItems.flatMap((inventoryItem) => {
         const variant = variantByInventoryItemId.get(inventoryItem.id);
 
@@ -2135,6 +2179,16 @@ export async function syncInventory({
       totalInventoryItemsProcessed += inventoryItems.length;
       totalInventoryLevelsSynced += rows.length;
     }
+
+    totalVariantsUnitCostUpdated =
+      await updateVariantCostsFromInventoryItemsForShop({
+        supabase,
+        shop,
+      });
+    totalOrderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
+      supabase,
+      shop,
+    });
 
     const result = {
       inventoryItemsProcessed: totalInventoryItemsProcessed,
@@ -2279,11 +2333,10 @@ export async function syncInventoryBatch({
     shop,
     inventoryItemIds: inventoryItems.map((inventoryItem) => inventoryItem.id),
   });
-  const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariants({
-    supabase,
-    shop,
-    variantRows: variantUpdateResult.affectedVariantRows,
-  });
+  const isDone = variants.length < INVENTORY_BATCH_SIZE;
+  const orderLinesCogsRecomputed = isDone
+    ? await recomputeOrderLineCogsForShop({ supabase, shop })
+    : 0;
   const rows = inventoryItems.flatMap((inventoryItem) => {
     const variant = variantByInventoryItemId.get(inventoryItem.id);
 
@@ -2311,7 +2364,7 @@ export async function syncInventoryBatch({
   });
 
   return {
-    done: variants.length < INVENTORY_BATCH_SIZE,
+    done: isDone,
     progress: {
       offset: offset + variants.length,
     },
@@ -2367,17 +2420,14 @@ export async function syncInventoryItems({
       ]),
     );
 
-    const { data: variantRows, error: variantsError } = await supabase
-      .from("variants")
-      .select("shopify_variant_id, shopify_product_id, inventory_item_id, sku")
-      .eq("shop_domain", shop)
-      .in("inventory_item_id", normalizedInventoryItemIds);
-
-    if (variantsError) {
-      throw new Error(variantsError.message);
-    }
-
-    const variants = (variantRows ?? []) as VariantDbRow[];
+    const variants = await selectRowsInBatches<VariantDbRow>({
+      supabase,
+      table: "variants",
+      select: "shopify_variant_id, shopify_product_id, inventory_item_id, sku",
+      shop,
+      column: "inventory_item_id",
+      values: normalizedInventoryItemIds,
+    });
     const variantByInventoryItemId = new Map<string, VariantDbRow>();
 
     for (const variant of variants) {

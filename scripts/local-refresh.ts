@@ -21,9 +21,7 @@ function loadLocalEnv() {
     return;
   }
 
-  const contents = fs.readFileSync(envPath, "utf8");
-
-  for (const line of contents.split(/\r?\n/)) {
+  for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
     const trimmed = line.trim();
 
     if (!trimmed || trimmed.startsWith("#")) {
@@ -66,12 +64,10 @@ function printUsageAndExit(message?: string): never {
       "",
       "Options:",
       "  --steps locations,products,inventory,orders",
-      "  --shop fh1z1f-5i.myshopify.com",
       "  --orders-start YYYY-MM-DD",
       "  --orders-end YYYY-MM-DD",
     ].join("\n"),
   );
-
   process.exit(1);
 }
 
@@ -105,13 +101,12 @@ function parseSteps(value?: string): RefreshStep[] {
     .split(",")
     .map((step) => step.trim())
     .filter(Boolean);
+  const validSteps = new Set<string>(defaultSteps);
+  const invalidSteps = requestedSteps.filter((step) => !validSteps.has(step));
 
   if (requestedSteps.length === 0) {
     printUsageAndExit("--steps must include at least one step.");
   }
-
-  const validSteps = new Set<string>(defaultSteps);
-  const invalidSteps = requestedSteps.filter((step) => !validSteps.has(step));
 
   if (invalidSteps.length > 0) {
     printUsageAndExit(`Unknown step(s): ${invalidSteps.join(", ")}`);
@@ -180,28 +175,19 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 function formatDuration(ms: number) {
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-
-  return `${(ms / 1000).toFixed(1)}s`;
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 function printCounts(result: SyncResult) {
-  const entries = Object.entries(result).filter(
-    ([, value]) =>
-      value === null || ["string", "number", "boolean"].includes(typeof value),
-  );
-
-  if (entries.length === 0) {
-    console.log("  counts: none reported");
-    return;
-  }
-
   console.log("  counts:");
 
-  for (const [key, value] of entries) {
-    console.log(`    ${key}: ${String(value)}`);
+  for (const [key, value] of Object.entries(result)) {
+    if (
+      value === null ||
+      ["string", "number", "boolean"].includes(typeof value)
+    ) {
+      console.log(`    ${key}: ${String(value)}`);
+    }
   }
 }
 
@@ -210,14 +196,12 @@ async function main() {
 
   const args = parseArgs(process.argv.slice(2));
   const startedAt = Date.now();
-
   const [{ getOfflineAdminClient }, { getSupabaseAdminClient }, syncModule] =
     await Promise.all([
       import("../app/lib/shopify/offline-admin.server"),
       import("../app/lib/db/supabase.server"),
       import("../app/lib/sync/shopify-sync.server"),
     ]);
-
   const admin = await getOfflineAdminClient(args.shop);
   const supabase = getSupabaseAdminClient();
   const source = "local_manual_refresh";
