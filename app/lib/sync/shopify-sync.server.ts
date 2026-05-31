@@ -234,6 +234,7 @@ type OrderNode = {
 export type SyncSource =
   | "manual_admin_sync"
   | "scheduled_daily_sync"
+  | "local_manual_refresh"
   | "webhook";
 
 const INVENTORY_BATCH_SIZE = 25;
