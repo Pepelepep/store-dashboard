@@ -1,23 +1,10 @@
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import {
-  Form,
-  useActionData,
-  useLoaderData,
-  useNavigation,
-} from "react-router";
+import type { LoaderFunctionArgs } from "react-router";
+import { useLoaderData } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
-import {
-  createManualSyncJob,
-  processManualSyncJobBatch,
-} from "../lib/sync/sync-jobs.server";
-import type {
-  SyncJobRow,
-  SyncJobType,
-} from "../lib/sync/sync-jobs.server";
-import { AppButton } from "../components/ui/AppButton";
+import type { SyncJobRow } from "../lib/sync/sync-jobs.server";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { StatusBadge } from "../components/ui/StatusBadge";
@@ -47,20 +34,9 @@ type LoaderData = {
   recentJobs: SyncJobRow[];
 };
 
-type ActionData = {
-  ok: boolean;
-  message: string;
-  intent?: string;
-  failedStep?: string | null;
-  details?: unknown;
-  job?: SyncJobRow;
-};
-
 type SyncTypeConfig = {
   syncType: string;
   label: string;
-  actionLabel: string;
-  intent: string;
 };
 
 const freshnessMs = 24 * 60 * 60 * 1000;
@@ -68,26 +44,18 @@ const syncTypeConfigs: SyncTypeConfig[] = [
   {
     syncType: "locations",
     label: "Locations",
-    actionLabel: "Sync Locations",
-    intent: "sync_locations",
   },
   {
     syncType: "products",
     label: "Products",
-    actionLabel: "Start Products Sync",
-    intent: "sync_products",
   },
   {
     syncType: "inventory",
     label: "Inventory",
-    actionLabel: "Start Inventory Sync",
-    intent: "sync_inventory",
   },
   {
     syncType: "orders",
     label: "Orders",
-    actionLabel: "Start Orders Sync",
-    intent: "sync_orders",
   },
 ];
 
@@ -150,6 +118,56 @@ function formatDuration(startedAt?: string | null, finishedAt?: string | null) {
   return remainingSeconds > 0
     ? `${minutes}m ${remainingSeconds}s`
     : `${minutes}m`;
+}
+
+function formatMilliseconds(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
+
+  const seconds = value / 1000;
+
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+
+  return remainingSeconds > 0
+    ? `${minutes}m ${remainingSeconds}s`
+    : `${minutes}m`;
+}
+
+function getDurationDetails(run?: SyncRun | null) {
+  const duration = run?.details?.duration;
+
+  return duration && typeof duration === "object"
+    ? (duration as Record<string, unknown>)
+    : {};
+}
+
+function getTotalDuration(run: SyncRun) {
+  const duration = getDurationDetails(run);
+  const fromDetails = formatMilliseconds(duration.totalMs);
+
+  return fromDetails === "-"
+    ? formatDuration(run.started_at, run.finished_at)
+    : fromDetails;
+}
+
+function getCogsDuration(run: SyncRun) {
+  return formatMilliseconds(getDurationDetails(run).cogsRecomputeMs);
+}
+
+function getBulkOperationId(run: SyncRun) {
+  const value = run.details?.bulkOperationId;
+
+  return typeof value === "string" && value ? value : "-";
 }
 
 function getFreshness(run?: SyncRun | null) {
@@ -327,49 +345,6 @@ function formatDetailSummary(run?: SyncRun | null) {
   }
 }
 
-function getActionDetailSummary(actionData?: ActionData) {
-  const details = actionData?.details;
-
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-
-  if ("failedStep" in details && typeof details.failedStep === "string") {
-    return `Failed step: ${details.failedStep}`;
-  }
-
-  const syncResult = details as Record<string, unknown>;
-
-  return [
-    typeof syncResult.syncedCount === "number"
-      ? `${syncResult.syncedCount} records synced`
-      : null,
-    typeof syncResult.productsSynced === "number"
-      ? `${syncResult.productsSynced} products`
-      : null,
-    typeof syncResult.variantsSynced === "number"
-      ? `${syncResult.variantsSynced} variants`
-      : null,
-    typeof syncResult.inventoryItemsProcessed === "number"
-      ? `${syncResult.inventoryItemsProcessed} inventory items`
-      : null,
-    typeof syncResult.inventoryLevelsSynced === "number"
-      ? `${syncResult.inventoryLevelsSynced} inventory levels`
-      : null,
-    typeof syncResult.ordersSynced === "number"
-      ? `${syncResult.ordersSynced} orders`
-      : null,
-    typeof syncResult.orderLinesSynced === "number"
-      ? `${syncResult.orderLinesSynced} lines`
-      : null,
-    typeof syncResult.orderLinesCogsRecomputed === "number"
-      ? `${syncResult.orderLinesCogsRecomputed} COGS recalculated`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-
 function getSyncTypeSummary(runs: SyncRun[], syncType: string) {
   const typeRuns = runs.filter((run) => run.sync_type === syncType);
   const latestRun = typeRuns[0] ?? null;
@@ -382,63 +357,6 @@ function getSyncTypeSummary(runs: SyncRun[], syncType: string) {
     lastSuccess,
     lastError,
     freshness: getFreshness(lastSuccess),
-  };
-}
-
-function getRunningLabel(intent?: string | null) {
-  switch (intent) {
-    case "sync_locations":
-      return "Syncing locations...";
-    case "sync_products":
-      return "Syncing products...";
-    case "sync_inventory":
-      return "Syncing inventory...";
-    case "sync_orders":
-      return "Syncing orders...";
-    default:
-      return "Syncing...";
-  }
-}
-
-function getJobTypeForIntent(intent: string): SyncJobType | null {
-  switch (intent) {
-    case "sync_locations":
-      return "locations";
-    case "sync_products":
-      return "products";
-    case "sync_inventory":
-      return "inventory";
-    case "sync_orders":
-      return "orders";
-    default:
-      return null;
-  }
-}
-
-function getJobActionResponse({
-  intent,
-  job,
-}: {
-  intent: string;
-  job: SyncJobRow;
-}): ActionData {
-  const status = job.status;
-  const label = job.job_type;
-
-  return {
-    ok: status !== "error" && status !== "cancelled",
-    intent,
-    message:
-      status === "success"
-        ? `${label} sync completed.`
-        : status === "error"
-          ? `${label} sync failed at ${job.current_step}: ${job.error_message}`
-          : status === "cancelled"
-            ? `${label} sync was cancelled.`
-            : `${label} sync batch completed. Continue to process the next batch.`,
-    failedStep: status === "error" ? job.current_step : null,
-    details: job.counts,
-    job,
   };
 }
 
@@ -577,78 +495,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
 }
 
-export async function action({ request }: ActionFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
-  const supabase = getSupabaseAdminClient();
-
-  await assertAdminAccess({ request, session, supabase });
-
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") ?? "");
-
-  try {
-    if (intent === "continue_job") {
-      const jobId = String(formData.get("jobId") ?? "");
-
-      if (!jobId) {
-        return {
-          ok: false,
-          intent,
-          message: "Missing sync job id.",
-        } satisfies ActionData;
-      }
-
-      const result = await processManualSyncJobBatch({
-        admin,
-        supabase,
-        shop: session.shop,
-        jobId,
-      });
-
-      return getJobActionResponse({
-        intent,
-        job: result.job,
-      });
-    }
-
-    const jobType = getJobTypeForIntent(intent);
-
-    if (jobType) {
-      const { job } = await createManualSyncJob({
-        supabase,
-        shop: session.shop,
-        jobType,
-      });
-      const result = await processManualSyncJobBatch({
-        admin,
-        supabase,
-        shop: session.shop,
-        jobId: job.id,
-      });
-
-      return getJobActionResponse({
-        intent,
-        job: result.job,
-      });
-    }
-
-    return {
-      ok: false,
-      intent,
-      message: "Unknown sync action.",
-    } satisfies ActionData;
-  } catch (error) {
-    return {
-      ok: false,
-      intent,
-      message: `${intent || "Sync"} failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      details: error instanceof Error ? error.message : String(error),
-    } satisfies ActionData;
-  }
-}
-
 function Card({
   title,
   children,
@@ -675,30 +521,18 @@ function Card({
 function SyncTypeStatusCard({
   config,
   runs,
-  activeIntent,
   activeJob,
-  isAnyJobActive,
 }: {
   config: SyncTypeConfig;
   runs: SyncRun[];
-  activeIntent?: string | null;
   activeJob?: SyncJobRow | null;
-  isAnyJobActive: boolean;
 }) {
   const summary = getSyncTypeSummary(runs, config.syncType);
   const latestRun = summary.latestRun;
-  const duration = formatDuration(
-    latestRun?.started_at,
-    latestRun?.finished_at,
-  );
+  const duration = latestRun ? getTotalDuration(latestRun) : "-";
   const isRunning =
-    activeIntent === config.intent ||
-    (isActiveJob(activeJob) &&
-      (activeJob?.job_type === config.syncType ||
-        activeJob?.job_type === "full"));
-  const canContinue =
-    isActiveJob(activeJob) && activeJob.job_type === config.syncType;
-  const isDisabled = Boolean(activeIntent) || (isAnyJobActive && !canContinue);
+    isActiveJob(activeJob) &&
+    (activeJob?.job_type === config.syncType || activeJob?.job_type === "full");
   const statusLabel = isRunning
     ? "running"
     : latestRun
@@ -764,6 +598,16 @@ function SyncTypeStatusCard({
             <strong>Duration:</strong> {duration}
           </div>
         ) : null}
+        {latestRun && getCogsDuration(latestRun) !== "-" ? (
+          <div>
+            <strong>COGS RPC:</strong> {getCogsDuration(latestRun)}
+          </div>
+        ) : null}
+        {latestRun && getBulkOperationId(latestRun) !== "-" ? (
+          <div>
+            <strong>Bulk operation:</strong> {getBulkOperationId(latestRun)}
+          </div>
+        ) : null}
       </div>
 
       {summary.lastError?.error_message ? (
@@ -794,23 +638,6 @@ function SyncTypeStatusCard({
       >
         {formatDetailSummary(latestRun)}
       </div>
-
-      <Form method="post">
-        <input type="hidden" name="intent" value={config.intent} />
-        <AppButton
-          type="submit"
-          disabled={isDisabled}
-          variant="secondary"
-          compact
-          fullWidth
-        >
-          {canContinue
-            ? `Continue ${config.label} Sync`
-            : isRunning
-              ? getRunningLabel(config.intent)
-              : config.actionLabel}
-        </AppButton>
-      </Form>
     </section>
   );
 }
@@ -818,21 +645,11 @@ function SyncTypeStatusCard({
 export default function AdminSyncPage() {
   const { shop, counts, lastSyncRuns, activeJob, recentJobs } =
     useLoaderData<LoaderData>();
-  const actionData = useActionData<ActionData>();
-  const navigation = useNavigation();
-  const liveJob = selectCurrentSyncJob([
-    activeJob,
-    actionData?.job,
-  ]);
-  const activeIntent =
-    navigation.state !== "idle"
-      ? String(navigation.formData?.get("intent") ?? "")
-      : null;
-  const isAnyJobActive = isActiveJob(liveJob);
+  const liveJob = selectCurrentSyncJob([activeJob]);
   const lastSuccessfulSync = lastSyncRuns.find(
     (run) => run.status === "success" && run.finished_at,
   );
-  const actionDetailSummary = getActionDetailSummary(actionData);
+  const fullRefreshCommand = `npm run sync:local -- --shop ${shop} --steps locations,products,inventory,orders`;
 
   return (
     <main
@@ -846,14 +663,47 @@ export default function AdminSyncPage() {
     >
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <header style={{ marginBottom: 28 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Data Sync</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Sync Monitor</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Refresh Shopify data and monitor data freshness.
+            Monitor sync freshness, history, and troubleshooting details.
           </p>
           <div style={{ color: "#8a8f93", fontSize: 12, marginTop: 8 }}>
             Shop: {shop}
           </div>
         </header>
+
+        <section
+          style={{
+            background: "white",
+            border: "1px solid #e3e3e3",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 20,
+            display: "grid",
+            gap: 10,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 800 }}>Official full refresh command</div>
+            <HelperText>
+              Use local refresh for full database reloads. Webhooks keep Shopify
+              changes updated afterward. This page is for monitoring only.
+            </HelperText>
+          </div>
+          <pre
+            style={{
+              background: "#202223",
+              borderRadius: 10,
+              color: "white",
+              margin: 0,
+              overflowX: "auto",
+              padding: 12,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {fullRefreshCommand}
+          </pre>
+        </section>
 
         <section
           style={{
@@ -909,9 +759,7 @@ export default function AdminSyncPage() {
                 key={config.syncType}
                 config={config}
                 runs={lastSyncRuns}
-                activeIntent={activeIntent}
                 activeJob={liveJob}
-                isAnyJobActive={isAnyJobActive}
               />
             ))}
           </div>
@@ -964,32 +812,7 @@ export default function AdminSyncPage() {
             {liveJob.error_message ? (
               <InlineResult variant="error">{liveJob.error_message}</InlineResult>
             ) : null}
-            {isActiveJob(liveJob) ? (
-              <Form method="post">
-                <input type="hidden" name="intent" value="continue_job" />
-                <input type="hidden" name="jobId" value={liveJob.id} />
-                <AppButton
-                  type="submit"
-                  disabled={Boolean(activeIntent)}
-                  variant="secondary"
-                  compact
-                >
-                  Continue Current Job
-                </AppButton>
-              </Form>
-            ) : null}
           </section>
-        ) : null}
-
-        {actionData ? (
-          <div style={{ marginBottom: 24 }}>
-            <InlineResult variant={actionData.ok ? "success" : "error"}>
-              {actionData.message}
-            </InlineResult>
-            {actionDetailSummary ? (
-              <HelperText>{actionDetailSummary}</HelperText>
-            ) : null}
-          </div>
         ) : null}
 
         <Card title="Database records">
@@ -1028,8 +851,7 @@ export default function AdminSyncPage() {
 
         <Card title="Recent sync jobs">
           <HelperText>
-            Live manual job status. Each job is processed in small server
-            batches from this page.
+            Legacy/manual job status retained for troubleshooting history.
           </HelperText>
           <div style={{ overflowX: "auto", marginTop: 12 }}>
             <table
@@ -1124,6 +946,9 @@ export default function AdminSyncPage() {
                     "Source",
                     "Started",
                     "Finished",
+                    "Duration",
+                    "COGS RPC",
+                    "Bulk operation",
                     "Details",
                     "Error",
                   ].map((header) => (
@@ -1191,6 +1016,32 @@ export default function AdminSyncPage() {
                         borderBottom: "1px solid #eee",
                       }}
                     >
+                      {getTotalDuration(run)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
+                      {getCogsDuration(run)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                        maxWidth: 220,
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {getBulkOperationId(run)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "10px",
+                        borderBottom: "1px solid #eee",
+                      }}
+                    >
                       {formatSyncRunDetails(run)}
                     </td>
                     <td
@@ -1207,7 +1058,7 @@ export default function AdminSyncPage() {
                 {lastSyncRuns.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={10}
                       style={{
                         padding: "14px 10px",
                         color: "#616161",
