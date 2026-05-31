@@ -8,147 +8,151 @@ import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
   buildShopifyOrderUrl,
-  formatCurrency,
   formatNumber,
   formatStoreDateTime,
 } from "../lib/dashboard/dashboard-metrics";
-import type { LocationRow, OrderLineDbRow } from "../lib/dashboard/dashboard-types";
+import type { LocationRow } from "../lib/dashboard/dashboard-types";
 import { authenticate } from "../shopify.server";
+
+type HealthStatus = "OK" | "Warning" | "Critical";
 
 type ExpenseRow = {
   shopify_location_id: string | null;
   is_active: boolean;
 };
 
-type SampleRow = {
-  orderName: string;
-  orderUrl: string | null;
-  date: string;
-  location: string;
-  product: string;
-  sku: string;
-  revenue: number;
-};
-
-type QualityCheck = {
-  count: number;
-  affectedRevenue: number;
-  affectedRevenuePct?: number;
-  samples: SampleRow[];
-};
-
-type ExpenseCoverageRow = {
-  locationName: string;
-  status: "Covered" | "Missing";
-};
-
 type SyncFreshnessRow = {
   label: string;
-  status: "Fresh" | "Stale" | "Unknown";
+  status: HealthStatus | "Unknown";
   finishedAt: string | null;
 };
 
+type IssueSample = Record<string, unknown>;
+
+type QualityIssue = {
+  key: string;
+  title: string;
+  explanation: string;
+  count: number;
+  status: HealthStatus;
+  optional?: boolean;
+  samples: IssueSample[];
+};
+
+type SyncHealth = {
+  failedLast24h: number;
+  failedLast7d: number;
+};
+
 type LoaderData = {
+  shop: string;
   preservedSearch: string;
-  missingCosts: QualityCheck;
-  missingStaff: QualityCheck;
-  missingVendor: QualityCheck;
-  expenseCoverage: ExpenseCoverageRow[];
+  syncHealth: SyncHealth;
   syncFreshness: SyncFreshnessRow[];
+  issues: QualityIssue[];
+  optionalIssues: QualityIssue[];
+  expenseCoverage: {
+    covered: number;
+    missing: number;
+    rows: Array<{ locationName: string; status: "Covered" | "Missing" }>;
+  };
   errors: string[];
 };
 
 const sampleLimit = 10;
 const freshnessMs = 24 * 60 * 60 * 1000;
-const syncTypes = ["locations", "products", "inventory", "orders", "staff"];
+const syncTypes = ["locations", "products", "inventory", "orders"];
 
 function numberValue(value: unknown) {
   return Number(value ?? 0);
 }
 
-function isMissingText(value: string | null | undefined) {
-  return !value || value.trim() === "";
-}
-
-function createSamples({
-  rows,
-  shop,
-}: {
-  rows: OrderLineDbRow[];
-  shop: string;
-}) {
-  return rows.slice(0, sampleLimit).map((row) => ({
-    orderName: row.order_name || "-",
-    orderUrl: row.shopify_order_id
-      ? buildShopifyOrderUrl(shop, row.shopify_order_id)
-      : null,
-    date: row.created_at_shopify,
-    location: row.retail_location_name || "-",
-    product: row.product_title || "Unknown product",
-    sku: row.sku || "-",
-    revenue: numberValue(row.revenue),
-  }));
-}
-
-function createQualityCheck({
-  rows,
-  totalRevenue,
-  shop,
-  includeRevenuePct = false,
-}: {
-  rows: OrderLineDbRow[];
-  totalRevenue: number;
-  shop: string;
-  includeRevenuePct?: boolean;
-}): QualityCheck {
-  const affectedRevenue = rows.reduce(
-    (sum, row) => sum + numberValue(row.revenue),
-    0,
-  );
-
-  return {
-    count: rows.length,
-    affectedRevenue,
-    affectedRevenuePct:
-      includeRevenuePct && totalRevenue > 0
-        ? (affectedRevenue / totalRevenue) * 100
-        : undefined,
-    samples: createSamples({ rows, shop }),
-  };
-}
-
-function getSyncType(run: Record<string, unknown>) {
-  const candidateKeys = [
-    "sync_type",
-    "type",
-    "resource",
-    "job_type",
-    "name",
-    "operation",
-  ];
-  const rawText = candidateKeys
-    .map((key) => String(run[key] ?? ""))
-    .join(" ")
-    .toLowerCase();
-  const fullText = `${rawText} ${JSON.stringify(run).toLowerCase()}`;
-
-  return syncTypes.find((type) => fullText.includes(type)) ?? null;
-}
-
-function getFinishedAt(run: Record<string, unknown>) {
-  const value =
-    run.finished_at || run.completed_at || run.updated_at || run.created_at || null;
-
-  return typeof value === "string" ? value : null;
-}
-
-function getFreshnessStatus(finishedAt: string | null) {
+function getFreshnessStatus(finishedAt: string | null): SyncFreshnessRow["status"] {
   if (!finishedAt) return "Unknown";
 
   const timestamp = new Date(finishedAt).getTime();
   if (Number.isNaN(timestamp)) return "Unknown";
 
-  return Date.now() - timestamp <= freshnessMs ? "Fresh" : "Stale";
+  return Date.now() - timestamp <= freshnessMs ? "OK" : "Warning";
+}
+
+function statusVariant(status: string) {
+  if (status === "OK" || status === "Covered") return "success";
+  if (status === "Critical") return "error";
+  if (status === "Warning" || status === "Missing") return "warning";
+  return "neutral";
+}
+
+function reportIssue(
+  report: Record<string, unknown>,
+  key: string,
+): { count: number; samples: IssueSample[] } {
+  const rawIssue = report[key];
+
+  if (!rawIssue || typeof rawIssue !== "object") {
+    return { count: 0, samples: [] };
+  }
+
+  const issue = rawIssue as Record<string, unknown>;
+  const samples = Array.isArray(issue.samples)
+    ? (issue.samples as IssueSample[]).slice(0, sampleLimit)
+    : [];
+
+  return {
+    count: numberValue(issue.count),
+    samples,
+  };
+}
+
+function buildIssue({
+  report,
+  key,
+  title,
+  explanation,
+  severity,
+  optional = false,
+}: {
+  report: Record<string, unknown>;
+  key: string;
+  title: string;
+  explanation: string;
+  severity: "warning" | "critical";
+  optional?: boolean;
+}): QualityIssue {
+  const issue = reportIssue(report, key);
+
+  return {
+    key,
+    title,
+    explanation,
+    count: issue.count,
+    status: issue.count > 0 ? (severity === "critical" ? "Critical" : "Warning") : "OK",
+    optional,
+    samples: issue.samples,
+  };
+}
+
+async function getFailedSyncCount({
+  supabase,
+  shop,
+  since,
+}: {
+  supabase: ReturnType<typeof getSupabaseAdminClient>;
+  shop: string;
+  since: string;
+}) {
+  const { count, error } = await supabase
+    .from("sync_runs")
+    .select("*", { count: "exact", head: true })
+    .eq("shop_domain", shop)
+    .eq("status", "error")
+    .gte("started_at", since);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return count ?? 0;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -184,18 +188,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const accessibleLocationIds = accessibleLocations.map(
     (location) => location.shopify_location_id,
   );
+  const now = Date.now();
+  const since24h = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+  const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [orderLinesResult, expensesResult, syncRunsResult] = await Promise.all([
-    accessibleLocationIds.length > 0
-      ? supabase
-          .from("order_lines")
-          .select(
-            "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source",
-          )
-          .eq("shop_domain", session.shop)
-          .in("retail_location_id", accessibleLocationIds)
-          .order("created_at_shopify", { ascending: false })
-      : Promise.resolve({ data: [], error: null }),
+  const [
+    expensesResult,
+    syncRunsResult,
+    reportResult,
+    failed24hResult,
+    failed7dResult,
+  ] = await Promise.allSettled([
     supabase
       .from("fixed_expenses")
       .select("shopify_location_id, is_active")
@@ -203,70 +206,147 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .eq("is_active", true),
     supabase
       .from("sync_runs")
-      .select("*")
+      .select("sync_type, status, source, finished_at, started_at")
       .eq("shop_domain", session.shop)
       .eq("status", "success")
-      .order("finished_at", { ascending: false }),
+      .order("finished_at", { ascending: false })
+      .limit(100),
+    supabase.rpc("get_data_quality_report", {
+      p_shop_domain: session.shop,
+      p_location_ids: accessibleLocationIds,
+    }),
+    getFailedSyncCount({ supabase, shop: session.shop, since: since24h }),
+    getFailedSyncCount({ supabase, shop: session.shop, since: since7d }),
   ]);
 
-  if (orderLinesResult.error) errors.push(orderLinesResult.error.message);
-  if (expensesResult.error) errors.push(expensesResult.error.message);
-  if (syncRunsResult.error) errors.push(syncRunsResult.error.message);
+  const expenses =
+    expensesResult.status === "fulfilled" && !expensesResult.value.error
+      ? ((expensesResult.value.data ?? []) as ExpenseRow[])
+      : [];
+  const syncRuns =
+    syncRunsResult.status === "fulfilled" && !syncRunsResult.value.error
+      ? ((syncRunsResult.value.data ?? []) as Array<Record<string, unknown>>)
+      : [];
+  const report =
+    reportResult.status === "fulfilled" && !reportResult.value.error
+      ? ((reportResult.value.data ?? {}) as Record<string, unknown>)
+      : {};
+  const failedLast24h =
+    failed24hResult.status === "fulfilled" ? failed24hResult.value : 0;
+  const failedLast7d =
+    failed7dResult.status === "fulfilled" ? failed7dResult.value : 0;
 
-  const orderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
-  const expenses = (expensesResult.data ?? []) as ExpenseRow[];
-  const syncRuns = (syncRunsResult.data ?? []) as Array<Record<string, unknown>>;
-  const totalRevenue = orderLines.reduce(
-    (sum, row) => sum + numberValue(row.revenue),
-    0,
-  );
-  const missingCostRows = orderLines.filter(
-    (row) => row.cogs === null || numberValue(row.cogs) <= 0,
-  );
-  const missingStaffRows = orderLines.filter(
-    (row) =>
-      isMissingText(row.staff_member_id) &&
-      isMissingText(row.staff_member_email) &&
-      isMissingText(row.staff_member_name),
-  );
-  const missingVendorRows = orderLines.filter((row) => isMissingText(row.vendor));
+  if (expensesResult.status === "fulfilled" && expensesResult.value.error) {
+    errors.push(expensesResult.value.error.message);
+  }
+  if (syncRunsResult.status === "fulfilled" && syncRunsResult.value.error) {
+    errors.push(syncRunsResult.value.error.message);
+  }
+  if (reportResult.status === "fulfilled" && reportResult.value.error) {
+    errors.push(reportResult.value.error.message);
+  }
+  if (failed24hResult.status === "rejected") {
+    errors.push(failed24hResult.reason?.message ?? String(failed24hResult.reason));
+  }
+  if (failed7dResult.status === "rejected") {
+    errors.push(failed7dResult.reason?.message ?? String(failed7dResult.reason));
+  }
+
+  const latestSyncByType = new Map<string, string | null>();
+
+  for (const run of syncRuns) {
+    const type = String(run.sync_type ?? "").toLowerCase();
+
+    if (!syncTypes.includes(type) || latestSyncByType.has(type)) {
+      continue;
+    }
+
+    latestSyncByType.set(
+      type,
+      typeof run.finished_at === "string" ? run.finished_at : null,
+    );
+  }
+
   const coveredLocationIds = new Set(
     expenses
       .map((expense) => expense.shopify_location_id)
       .filter((value): value is string => Boolean(value)),
   );
-  const latestSyncByType = new Map<string, string | null>();
-
-  for (const run of syncRuns) {
-    const type = getSyncType(run);
-    if (!type || latestSyncByType.has(type)) continue;
-    latestSyncByType.set(type, getFinishedAt(run));
-  }
+  const expenseRows = accessibleLocations.map((location) => ({
+    locationName: location.name,
+    status: coveredLocationIds.has(location.shopify_location_id)
+      ? ("Covered" as const)
+      : ("Missing" as const),
+  }));
+  const issues = [
+    buildIssue({
+      report,
+      key: "productsWithoutVariants",
+      title: "Products without variants",
+      explanation: "Products without variants cannot map cleanly into sales or inventory reporting.",
+      severity: "warning",
+    }),
+    buildIssue({
+      report,
+      key: "variantsMissingInventoryItemId",
+      title: "Variants missing inventory item ID",
+      explanation: "Missing inventory item IDs prevent inventory levels and cost snapshots from linking reliably.",
+      severity: "warning",
+    }),
+    buildIssue({
+      report,
+      key: "variantsMissingUnitCost",
+      title: "Variants missing unit cost",
+      explanation: "Missing current cost forces order lines to use fallback or missing-cost handling.",
+      severity: "warning",
+    }),
+    buildIssue({
+      report,
+      key: "orderLinesMissingCogs",
+      title: "Order lines missing COGS",
+      explanation: "These rows do not currently have cost of goods sold after the latest recompute.",
+      severity: "critical",
+    }),
+    buildIssue({
+      report,
+      key: "orderLinesUsingFallbackCost",
+      title: "Order lines using fallback cost",
+      explanation: "These rows use the 50% fallback because no current cost exists.",
+      severity: "warning",
+    }),
+    buildIssue({
+      report,
+      key: "ordersWithoutOrderLines",
+      title: "Orders without order lines",
+      explanation: "Orders without lines usually indicate an incomplete orders sync.",
+      severity: "critical",
+    }),
+    buildIssue({
+      report,
+      key: "inventoryLevelsWithoutMatchingVariantOrProduct",
+      title: "Inventory levels without matching variant/product",
+      explanation: "Inventory rows that cannot join to variant/product data can distort stock reporting.",
+      severity: "critical",
+    }),
+  ];
+  const optionalIssues = [
+    buildIssue({
+      report,
+      key: "orderLinesMissingStaffAttribution",
+      title: "Missing staff attribution",
+      explanation: "Optional/non-blocking. Shopify does not always provide staff attribution.",
+      severity: "warning",
+      optional: true,
+    }),
+  ];
 
   return {
+    shop: session.shop,
     preservedSearch,
-    missingCosts: createQualityCheck({
-      rows: missingCostRows,
-      totalRevenue,
-      shop: session.shop,
-    }),
-    missingStaff: createQualityCheck({
-      rows: missingStaffRows,
-      totalRevenue,
-      shop: session.shop,
-      includeRevenuePct: true,
-    }),
-    missingVendor: createQualityCheck({
-      rows: missingVendorRows,
-      totalRevenue,
-      shop: session.shop,
-    }),
-    expenseCoverage: accessibleLocations.map((location) => ({
-      locationName: location.name,
-      status: coveredLocationIds.has(location.shopify_location_id)
-        ? "Covered"
-        : "Missing",
-    })),
+    syncHealth: {
+      failedLast24h,
+      failedLast7d,
+    },
     syncFreshness: syncTypes.map((type) => {
       const finishedAt = latestSyncByType.get(type) ?? null;
 
@@ -276,6 +356,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
         finishedAt,
       };
     }),
+    issues,
+    optionalIssues,
+    expenseCoverage: {
+      covered: expenseRows.filter((row) => row.status === "Covered").length,
+      missing: expenseRows.filter((row) => row.status === "Missing").length,
+      rows: expenseRows,
+    },
     errors,
   } satisfies LoaderData;
 }
@@ -283,9 +370,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
 function SummaryMetric({
   label,
   value,
+  status,
 }: {
   label: string;
   value: string;
+  status?: HealthStatus;
 }) {
   return (
     <div
@@ -299,104 +388,142 @@ function SummaryMetric({
       <div style={{ color: "#616161", fontSize: 12, fontWeight: 800 }}>
         {label}
       </div>
-      <div style={{ color: "#202223", fontSize: 20, fontWeight: 800 }}>
+      <div
+        style={{
+          alignItems: "center",
+          color: "#202223",
+          display: "flex",
+          fontSize: 20,
+          fontWeight: 800,
+          gap: 8,
+        }}
+      >
         {value}
+        {status ? (
+          <StatusBadge variant={statusVariant(status)}>{status}</StatusBadge>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function statusVariant(status: string) {
-  if (status === "Fresh" || status === "Covered") return "success";
-  if (status === "Stale") return "warning";
-  if (status === "Missing") return "warning";
-  return "neutral";
+function SyncHealthSection({ syncHealth }: { syncHealth: SyncHealth }) {
+  return (
+    <section style={cardStyle}>
+      <div style={sectionHeaderStyle}>
+        <div>
+          <h2 style={sectionTitleStyle}>Sync failures</h2>
+          <HelperText>Failed sync runs should be reviewed before trusting reports.</HelperText>
+        </div>
+      </div>
+      <div style={metricGridStyle}>
+        <SummaryMetric
+          label="Failed syncs in last 24h"
+          value={formatNumber(syncHealth.failedLast24h)}
+          status={syncHealth.failedLast24h > 0 ? "Critical" : "OK"}
+        />
+        <SummaryMetric
+          label="Failed syncs in last 7d"
+          value={formatNumber(syncHealth.failedLast7d)}
+          status={syncHealth.failedLast7d > 0 ? "Warning" : "OK"}
+        />
+      </div>
+    </section>
+  );
 }
 
-function QualitySection({
-  title,
-  impact,
-  check,
-  showPercent,
+function QualityIssueSection({
+  issue,
+  shop,
 }: {
-  title: string;
-  impact: string;
-  check: QualityCheck;
-  showPercent?: boolean;
+  issue: QualityIssue;
+  shop: string;
 }) {
   return (
     <section style={cardStyle}>
       <div style={sectionHeaderStyle}>
         <div>
-          <h2 style={sectionTitleStyle}>{title}</h2>
-          <HelperText>{impact}</HelperText>
+          <h2 style={sectionTitleStyle}>
+            {issue.title}
+            {issue.optional ? " (optional)" : ""}
+          </h2>
+          <HelperText>{issue.explanation}</HelperText>
         </div>
-        <StatusBadge variant={check.count > 0 ? "warning" : "success"}>
-          {check.count > 0 ? "Needs review" : "Looks good"}
+        <StatusBadge variant={statusVariant(issue.status)}>
+          {issue.status}
         </StatusBadge>
       </div>
 
       <div style={metricGridStyle}>
-        <SummaryMetric label="Affected rows" value={formatNumber(check.count)} />
-        <SummaryMetric
-          label="Revenue affected"
-          value={formatCurrency(check.affectedRevenue)}
-        />
-        {showPercent ? (
-          <SummaryMetric
-            label="Revenue affected"
-            value={
-              check.affectedRevenuePct === undefined
-                ? "-"
-                : `${check.affectedRevenuePct.toFixed(1)}%`
-            }
-          />
-        ) : null}
+        <SummaryMetric label="Affected rows" value={formatNumber(issue.count)} />
       </div>
 
-      <SampleTable rows={check.samples} />
+      <SampleTable rows={issue.samples} shop={shop} />
     </section>
   );
 }
 
-function SampleTable({ rows }: { rows: SampleRow[] }) {
-  if (rows.length === 0) {
-    return (
-      <div style={emptyStateStyle}>No sample rows to show.</div>
-    );
+function formatSampleValue(key: string, value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
   }
+
+  if (key.includes("created_at") && typeof value === "string") {
+    return formatStoreDateTime(value);
+  }
+
+  if (typeof value === "number") {
+    return formatNumber(value);
+  }
+
+  return String(value);
+}
+
+function SampleTable({ rows, shop }: { rows: IssueSample[]; shop: string }) {
+  if (rows.length === 0) {
+    return <div style={emptyStateStyle}>No sample rows to show.</div>;
+  }
+
+  const headers = Array.from(
+    new Set(rows.flatMap((row) => Object.keys(row))),
+  ).slice(0, 8);
 
   return (
     <div style={tableWrapStyle}>
       <table style={tableStyle}>
         <thead>
           <tr>
-            {["Order", "Date", "Location", "Product", "SKU", "Revenue"].map(
-              (header) => (
-                <th key={header} style={thStyle}>
-                  {header}
-                </th>
-              ),
-            )}
+            {headers.map((header) => (
+              <th key={header} style={thStyle}>
+                {header.replaceAll("_", " ")}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={`${row.orderName}-${index}`}>
-              <td style={tdStyle}>
-                {row.orderUrl ? (
-                  <a href={row.orderUrl} target="_blank" rel="noreferrer">
-                    {row.orderName}
-                  </a>
-                ) : (
-                  row.orderName
-                )}
-              </td>
-              <td style={tdStyle}>{formatStoreDateTime(row.date)}</td>
-              <td style={tdStyle}>{row.location}</td>
-              <td style={tdStyle}>{row.product}</td>
-              <td style={tdStyle}>{row.sku}</td>
-              <td style={tdStyle}>{formatCurrency(row.revenue)}</td>
+            <tr key={index}>
+              {headers.map((header) => {
+                const value = row[header];
+                const isOrder =
+                  header === "order_name" && typeof row.shopify_order_id === "string";
+
+                return (
+                  <td key={header} style={tdStyle}>
+                    {isOrder ? (
+                      <a
+                        href={buildShopifyOrderUrl(shop, row.shopify_order_id as string)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {formatSampleValue(header, value)}
+                      </a>
+                    ) : (
+                      formatSampleValue(header, value)
+                    )}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
@@ -407,13 +534,13 @@ function SampleTable({ rows }: { rows: SampleRow[] }) {
 
 function ExpensesCoverageSection({
   rows,
+  missing,
   preservedSearch,
 }: {
-  rows: ExpenseCoverageRow[];
+  rows: LoaderData["expenseCoverage"]["rows"];
+  missing: number;
   preservedSearch: string;
 }) {
-  const missingCount = rows.filter((row) => row.status === "Missing").length;
-
   return (
     <section style={cardStyle}>
       <div style={sectionHeaderStyle}>
@@ -429,7 +556,11 @@ function ExpensesCoverageSection({
       </div>
 
       <div style={metricGridStyle}>
-        <SummaryMetric label="Locations missing expenses" value={formatNumber(missingCount)} />
+        <SummaryMetric
+          label="Locations missing expenses"
+          value={formatNumber(missing)}
+          status={missing > 0 ? "Warning" : "OK"}
+        />
       </div>
 
       <div style={tableWrapStyle}>
@@ -475,7 +606,7 @@ function SyncFreshnessSection({
           </HelperText>
         </div>
         <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
-          Open Data Sync
+          Open Sync Monitor
         </AppButtonLink>
       </div>
 
@@ -532,7 +663,7 @@ const sectionTitleStyle = {
 const metricGridStyle = {
   display: "grid",
   gap: 12,
-  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   marginBottom: 14,
 } as const;
 
@@ -555,6 +686,7 @@ const thStyle = {
   fontWeight: 800,
   padding: "12px 10px",
   textAlign: "left",
+  textTransform: "capitalize",
   whiteSpace: "nowrap",
 } as const;
 
@@ -573,12 +705,13 @@ const emptyStateStyle = {
 
 export default function DataQualityPage() {
   const {
+    shop,
     preservedSearch,
-    missingCosts,
-    missingStaff,
-    missingVendor,
-    expenseCoverage,
+    syncHealth,
     syncFreshness,
+    issues,
+    optionalIssues,
+    expenseCoverage,
     errors,
   } = useLoaderData<LoaderData>();
 
@@ -606,7 +739,7 @@ export default function DataQualityPage() {
             Data Quality
           </h1>
           <p style={{ color: "#616161", margin: "6px 0 0" }}>
-            Find missing or outdated data that can affect your reporting.
+            Fast health checks for sync freshness, costs, orders, variants, and inventory joins.
           </p>
         </section>
 
@@ -628,30 +761,22 @@ export default function DataQualityPage() {
         ) : null}
 
         <div style={{ display: "grid", gap: 20 }}>
-          <QualitySection
-            title="Missing product costs"
-            impact="Missing costs can understate COGS and overstate gross profit."
-            check={missingCosts}
-          />
-          <QualitySection
-            title="Missing staff attribution"
-            impact="Missing staff attribution makes Sales by Staff incomplete."
-            check={missingStaff}
-            showPercent
-          />
-          <QualitySection
-            title="Missing vendor"
-            impact="Missing vendors make vendor performance incomplete."
-            check={missingVendor}
-          />
-          <ExpensesCoverageSection
-            rows={expenseCoverage}
-            preservedSearch={preservedSearch}
-          />
+          <SyncHealthSection syncHealth={syncHealth} />
           <SyncFreshnessSection
             rows={syncFreshness}
             preservedSearch={preservedSearch}
           />
+          {issues.map((issue) => (
+            <QualityIssueSection key={issue.key} issue={issue} shop={shop} />
+          ))}
+          <ExpensesCoverageSection
+            rows={expenseCoverage.rows}
+            missing={expenseCoverage.missing}
+            preservedSearch={preservedSearch}
+          />
+          {optionalIssues.map((issue) => (
+            <QualityIssueSection key={issue.key} issue={issue} shop={shop} />
+          ))}
         </div>
       </div>
     </main>
