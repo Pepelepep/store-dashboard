@@ -253,7 +253,6 @@ type OrderNode = {
 
 export type SyncSource =
   | "manual_admin_sync"
-  | "scheduled_daily_sync"
   | "local_manual_refresh"
   | "webhook";
 
@@ -4059,84 +4058,5 @@ export async function syncOrdersBulk({
     });
 
     throw error;
-  }
-}
-
-export async function runFullSync({
-  admin,
-  shop,
-  source = "manual_admin_sync",
-  orderLookbackDays = 7,
-}: {
-  admin: ShopifyAdminClient;
-  shop: string;
-  source?: SyncSource;
-  orderLookbackDays?: number;
-}) {
-  const supabase = getSupabaseAdminClient();
-  const startedAt = new Date().toISOString();
-  let currentStep = "initializing";
-
-  try {
-    currentStep = "locations";
-    const locations = await syncLocations({
-      admin,
-      shop,
-      supabase,
-      source,
-    });
-
-    currentStep = "products";
-    const products = await syncProducts({
-      admin,
-      shop,
-      supabase,
-      source,
-    });
-
-    currentStep = "inventory";
-    const inventory = await syncInventory({
-      admin,
-      shop,
-      supabase,
-      source,
-    });
-
-    const { startDate, endDate } =
-      getIncrementalOrderDateRange(orderLookbackDays);
-
-    currentStep = "orders";
-    const orders = await syncOrders({
-      admin,
-      shop,
-      supabase,
-      source,
-      startDate,
-      endDate,
-    });
-
-    return {
-      ok: true,
-      source,
-      shop,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      locations,
-      products,
-      inventory,
-      orders,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      source,
-      shop,
-      failedStep: currentStep,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      error: error instanceof Error ? error.message : String(error),
-      errorName: error instanceof Error ? error.name : null,
-      errorStack: error instanceof Error ? error.stack : null,
-    };
   }
 }
