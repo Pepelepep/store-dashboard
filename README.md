@@ -18,6 +18,30 @@ The project started as a live Shopify API dashboard. It is now being moved to a 
 
 ---
 
+## Release marker
+
+`v0.1.0-client-stable` marks the validated client-stable release.
+
+Compare current code to the release tag:
+
+```bash
+git diff v0.1.0-client-stable..HEAD
+```
+
+Inspect the exact release:
+
+```bash
+git checkout v0.1.0-client-stable
+```
+
+Return to the working branch afterward:
+
+```bash
+git checkout -
+```
+
+---
+
 ## Current architecture
 
 ```text
@@ -25,9 +49,9 @@ Shopify Admin embedded app
         ↓
 React Router / Node app
         ↓
-Shopify Admin GraphQL API
+Local full refresh + webhooks + light Admin Sync
         ↓
-Sync routes / future background jobs
+Shopify Admin GraphQL API / Bulk Operations
         ↓
 Supabase PostgreSQL
         ↓
@@ -161,22 +185,61 @@ Track recent sync runs
 Avoid live Shopify queries in dashboard
 ```
 
-Primary full refresh command:
+Admin Sync is intentionally not the primary full-refresh engine. Use it for small manual checks, troubleshooting, and table-count visibility.
+
+---
+
+## Final sync architecture
+
+Stable release: `v0.1.0-client-stable`.
+
+```text
+Local full refresh
+→ primary heavy refresh path from terminal
+
+Shopify Bulk Operations
+→ products / variants / inventory item cost snapshots
+→ orders / order lines
+
+Optimized Shopify GraphQL
+→ inventory levels
+
+Webhooks
+→ incremental product, inventory, and order updates
+
+Admin Sync
+→ light troubleshooting only
+```
+
+All sync paths use upserts. Full refresh does not delete business data.
+
+### Full refresh
+
+Run from the project root:
 
 ```text
 npm run sync:local -- --shop fh1z1f-5i.myshopify.com --steps locations,products,inventory,orders
 ```
 
-Default refresh order:
+Default order:
 
 ```text
 1. Locations
-2. Products & variants
-3. Inventory
+2. Products / variants / inventory_items through Shopify Bulk Operations
+3. Inventory levels through optimized GraphQL
 4. Orders / order lines
 ```
 
-For targeted orders refreshes, use `--orders-start YYYY-MM-DD` and `--orders-end YYYY-MM-DD`.
+Optional targeted commands:
+
+```bash
+npm run sync:local -- --shop fh1z1f-5i.myshopify.com --steps products
+npm run sync:local -- --shop fh1z1f-5i.myshopify.com --steps inventory
+npm run sync:local -- --shop fh1z1f-5i.myshopify.com --steps orders
+npm run sync:local -- --shop fh1z1f-5i.myshopify.com --steps orders --orders-start 2026-05-01 --orders-end 2026-05-31
+```
+
+The local refresh script logs each phase, counts, errors, Shopify bulk operation status, and duration.
 
 ---
 
@@ -303,18 +366,18 @@ Confirmed 7 locations synced.
 
 ### Products / variants
 
-Working.
+Working through Shopify Bulk Operations for full local refresh.
 
 ```text
 Shopify products + variants + inventoryItem.unitCost
-→ Supabase products / variants
+→ Supabase products / variants / inventory_items
 ```
 
 `unit_cost` is needed for COGS and gross profit.
 
 ### Inventory
 
-Working with batched strategy.
+Working with optimized GraphQL.
 
 Do not use the heavy query:
 
@@ -338,35 +401,35 @@ Supabase inventory_levels
 
 ### Orders / order_lines
 
-Should use paginated sync, not only `orders(first: 100)`.
+Working through Shopify Bulk Operations for full local refresh.
 
 Requirements:
 
 ```text
-- paginate all accessible orders
+- sync all Shopify history available
 - optional startDate / endDate
-- line item pagination for large orders
 - upsert orders
 - upsert order_lines
 - compute revenue
-- compute COGS
-- compute gross profit
-- store cost_source
+- recompute COGS after order_lines are upserted
 ```
 
 ---
 
 ## COGS / gross profit rules
 
-For each order line:
+The dashboard uses current variant / inventory item cost for historical order lines.
+
+After products, inventory, or orders refresh, SQL bulk recompute updates `order_lines`:
 
 ```text
-If Shopify unit_cost exists:
-COGS = quantity × unit_cost
-cost_source = SHOPIFY_UNIT_COST
+order_lines.unit_cost = current variants.unit_cost
+order_lines.cogs = quantity × current unit_cost
+order_lines.gross_profit = revenue - cogs
+cost_source = recomputed_from_current_variant_cost
 ```
 
-For custom/manual sales without product cost:
+Fallback is used only when no current cost exists:
 
 ```text
 COGS = revenue × 50%
@@ -374,12 +437,65 @@ gross profit = revenue × 50%
 cost_source = FALLBACK_50_PERCENT_CUSTOM_SALE
 ```
 
-If no cost is available and it is not a clear custom/manual sale:
+If no cost and no revenue fallback are available:
 
 ```text
 COGS = null
 gross_profit = null
 cost_source = MISSING_COST
+```
+
+COGS recompute must stay in SQL/RPC bulk updates. Do not reintroduce per-product, per-variant, or per-order-line recompute loops.
+
+---
+
+## Supabase validation SQL
+
+Latest sync runs:
+
+```sql
+select
+  sync_type,
+  status,
+  source,
+  started_at,
+  finished_at,
+  error_message,
+  details
+from public.sync_runs
+where shop_domain = 'fh1z1f-5i.myshopify.com'
+order by started_at desc
+limit 20;
+```
+
+COGS coverage:
+
+```sql
+select
+  count(*) as total_order_lines,
+  count(*) filter (where cogs is not null) as lines_with_cogs,
+  count(*) filter (where gross_profit is not null) as lines_with_gross_profit,
+  round(
+    100.0 * count(*) filter (where cogs is not null) / nullif(count(*), 0),
+    2
+  ) as cogs_coverage_percent
+from public.order_lines
+where shop_domain = 'fh1z1f-5i.myshopify.com';
+```
+
+Cost source distribution:
+
+```sql
+select
+  coalesce(cost_source, 'NULL') as cost_source,
+  count(*) as order_lines,
+  sum(revenue) as revenue,
+  sum(cogs) as cogs,
+  sum(gross_profit) as gross_profit
+from public.order_lines
+where shop_domain = 'fh1z1f-5i.myshopify.com'
+group by coalesce(cost_source, 'NULL')
+order by order_lines desc;
 ```
 
 ---
@@ -621,8 +737,6 @@ local full refresh + webhooks
 Later:
 
 ```text
-webhooks
-bulk operations
 permissions admin UI
 expenses settings page
 ```
