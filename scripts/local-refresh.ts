@@ -227,11 +227,12 @@ async function main() {
           source,
         });
       } else if (step === "products") {
-        result = await syncModule.syncProducts({
+        result = await syncModule.syncProductsBulk({
           admin,
           shop: args.shop,
           supabase,
           source,
+          log: (message: string) => console.log(`  ${message}`),
         });
       } else if (step === "inventory") {
         result = await syncModule.syncInventory({
@@ -241,13 +242,14 @@ async function main() {
           source,
         });
       } else {
-        result = await syncModule.syncOrders({
+        result = await syncModule.syncOrdersBulk({
           admin,
           shop: args.shop,
           supabase,
           source,
           startDate: args.ordersStart,
           endDate: args.ordersEnd,
+          log: (message: string) => console.log(`  ${message}`),
         });
       }
 
