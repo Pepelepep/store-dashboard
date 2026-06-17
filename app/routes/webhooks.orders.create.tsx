@@ -1,13 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 
-import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-import { getOfflineAdminClient } from "../lib/shopify/offline-admin.server";
-import { syncOrders } from "../lib/sync/shopify-sync.server";
+import { enqueueAuthenticatedWebhook } from "../lib/webhooks/webhook-events.server";
 import { authenticate } from "../shopify.server";
-
-type OrdersCreatePayload = {
-  created_at?: string | null;
-};
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { payload, shop, topic } = await authenticate.webhook(request);
@@ -15,30 +9,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   console.log(`Received ${topic} webhook for ${shop}`);
 
   try {
-    const createdAt = (payload as OrdersCreatePayload).created_at;
-    const orderDate = createdAt?.slice(0, 10);
-
-    if (!orderDate) {
-      console.error(`Missing created_at for ${topic} webhook from ${shop}.`);
-      return new Response();
-    }
-
-    const admin = await getOfflineAdminClient(shop);
-    const supabase = getSupabaseAdminClient();
-
-    await syncOrders({
-      admin,
+    const result = await enqueueAuthenticatedWebhook({
+      request,
+      payload,
       shop,
-      supabase,
-      source: "webhook",
-      startDate: orderDate,
-      endDate: orderDate,
+      topic,
     });
-  } catch (error) {
-    console.error(
-      `Failed to sync orders after ${topic} webhook for ${shop}.`,
-      error,
+    console.log(
+      result.skipped
+        ? `Skipped duplicate ${topic} webhook for ${shop}`
+        : `Queued ${topic} webhook for ${shop}`,
     );
+  } catch (error) {
+    console.error(`Failed to queue ${topic} webhook for ${shop}.`, error);
   }
 
   return new Response();

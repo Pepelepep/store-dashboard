@@ -1,48 +1,27 @@
 import type { ActionFunctionArgs } from "react-router";
 
-import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-import { markProductDeletedById } from "../lib/sync/shopify-sync.server";
+import { enqueueAuthenticatedWebhook } from "../lib/webhooks/webhook-events.server";
 import { authenticate } from "../shopify.server";
-
-type ProductsDeletePayload = {
-  id?: string | number | null;
-  admin_graphql_api_id?: string | null;
-};
-
-function getProductId(payload: ProductsDeletePayload) {
-  if (payload.admin_graphql_api_id) {
-    return payload.admin_graphql_api_id;
-  }
-
-  return payload.id ? `gid://shopify/Product/${payload.id}` : null;
-}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { payload, shop, topic } = await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
 
-  const productId = getProductId(payload as ProductsDeletePayload);
-
-  if (!productId) {
-    console.warn(`Skipping ${topic} sync for ${shop}: missing product id.`);
-    return new Response();
-  }
-
   try {
-    const supabase = getSupabaseAdminClient();
-
-    await markProductDeletedById({
+    const result = await enqueueAuthenticatedWebhook({
+      request,
+      payload,
       shop,
-      supabase,
-      source: "webhook",
-      productId,
+      topic,
     });
-  } catch (error) {
-    console.error(
-      `Failed to mark product deleted after ${topic} webhook for ${shop}.`,
-      error,
+    console.log(
+      result.skipped
+        ? `Skipped duplicate ${topic} webhook for ${shop}`
+        : `Queued ${topic} webhook for ${shop}`,
     );
+  } catch (error) {
+    console.error(`Failed to queue ${topic} webhook for ${shop}.`, error);
   }
 
   return new Response();

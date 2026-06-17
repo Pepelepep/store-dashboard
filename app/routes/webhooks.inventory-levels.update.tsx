@@ -1,45 +1,27 @@
 import type { ActionFunctionArgs } from "react-router";
 
-import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-import { getOfflineAdminClient } from "../lib/shopify/offline-admin.server";
-import { syncInventoryItems } from "../lib/sync/shopify-sync.server";
+import { enqueueAuthenticatedWebhook } from "../lib/webhooks/webhook-events.server";
 import { authenticate } from "../shopify.server";
-
-type InventoryLevelsUpdatePayload = {
-  inventory_item_id?: string | number | null;
-};
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { payload, shop, topic } = await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
 
-  const inventoryItemId = (payload as InventoryLevelsUpdatePayload)
-    .inventory_item_id;
-
-  if (!inventoryItemId) {
-    console.warn(
-      `Skipping ${topic} sync for ${shop}: missing inventory_item_id.`,
-    );
-    return new Response();
-  }
-
   try {
-    const admin = await getOfflineAdminClient(shop);
-    const supabase = getSupabaseAdminClient();
-
-    await syncInventoryItems({
-      admin,
+    const result = await enqueueAuthenticatedWebhook({
+      request,
+      payload,
       shop,
-      supabase,
-      source: "webhook",
-      inventoryItemIds: [String(inventoryItemId)],
+      topic,
     });
-  } catch (error) {
-    console.error(
-      `Failed to sync inventory after ${topic} webhook for ${shop}.`,
-      error,
+    console.log(
+      result.skipped
+        ? `Skipped duplicate ${topic} webhook for ${shop}`
+        : `Queued ${topic} webhook for ${shop}`,
     );
+  } catch (error) {
+    console.error(`Failed to queue ${topic} webhook for ${shop}.`, error);
   }
 
   return new Response();

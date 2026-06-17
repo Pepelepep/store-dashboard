@@ -3100,6 +3100,143 @@ async function getVariantCostMaps({
   };
 }
 
+async function upsertOrderNodes({
+  admin,
+  shop,
+  supabase,
+  orders,
+  includeStaffAttribution,
+  replaceExistingLines = false,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  orders: OrderNode[];
+  includeStaffAttribution: boolean;
+  replaceExistingLines?: boolean;
+}) {
+  const { costByVariantId, costBySku } = await getVariantCostMaps({
+    supabase,
+    shop,
+  });
+  const orderRows = orders.map((order) => {
+    const orderStaff = includeStaffAttribution
+      ? getOrderStaffAttribution(order)
+      : getStaffAttribution(null);
+
+    return {
+      shop_domain: shop,
+      shopify_order_id: order.id,
+      order_name: order.name,
+      created_at_shopify: order.createdAt,
+      financial_status: order.displayFinancialStatus ?? null,
+      retail_location_id: order.retailLocation?.id ?? null,
+      retail_location_name: order.retailLocation?.name ?? null,
+      total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
+      staff_member_id: orderStaff.staffMemberId,
+      staff_member_name: orderStaff.staffMemberName,
+      staff_member_email: orderStaff.staffMemberEmail,
+      staff_source: orderStaff.staffSource,
+      updated_at: new Date().toISOString(),
+    };
+  });
+  const orderLineRows: Record<string, unknown>[] = [];
+
+  for (const order of orders) {
+    const orderStaff = includeStaffAttribution
+      ? getOrderStaffAttribution(order)
+      : getStaffAttribution(null);
+    const allLineItems = await getAllLineItemsForOrder({
+      admin,
+      order,
+      includeStaffAttribution,
+    });
+
+    for (const lineItem of allLineItems) {
+      const variantId = lineItem.variant?.id ?? null;
+      const sku = lineItem.sku ?? lineItem.variant?.sku ?? null;
+      const unitPrice = getNumericAmount(
+        lineItem.discountedUnitPriceSet?.shopMoney?.amount,
+      );
+      const revenue = unitPrice * lineItem.quantity;
+      const variantCost =
+        (variantId ? costByVariantId.get(variantId) : undefined) ??
+        (sku ? costBySku.get(sku) : undefined);
+      const costInfo = getCostInfo({
+        lineItem,
+        variantCost,
+        revenue,
+        quantity: lineItem.quantity,
+      });
+      const lineStaff = includeStaffAttribution
+        ? getStaffAttribution(lineItem.staffMember, "line_item_staff")
+        : getStaffAttribution(null);
+      const staffAttribution = lineStaff.staffMemberId ? lineStaff : orderStaff;
+
+      orderLineRows.push({
+        shop_domain: shop,
+        shopify_order_id: order.id,
+        shopify_line_item_id: lineItem.id,
+        order_name: order.name,
+        created_at_shopify: order.createdAt,
+        retail_location_id: order.retailLocation?.id ?? null,
+        retail_location_name: order.retailLocation?.name ?? null,
+        shopify_variant_id: variantId,
+        inventory_item_id: variantCost?.inventory_item_id ?? null,
+        product_title: lineItem.variant?.product?.title ?? lineItem.title,
+        variant_title: lineItem.variant?.title ?? null,
+        sku,
+        vendor: lineItem.variant?.product?.vendor ?? null,
+        quantity: lineItem.quantity,
+        unit_price: unitPrice,
+        revenue,
+        unit_cost: costInfo.unitCost,
+        cogs: costInfo.cogs,
+        gross_profit: costInfo.grossProfit,
+        cost_source: costInfo.costSource,
+        staff_member_id: staffAttribution.staffMemberId,
+        staff_member_name: staffAttribution.staffMemberName,
+        staff_member_email: staffAttribution.staffMemberEmail,
+        staff_source: staffAttribution.staffSource,
+      });
+    }
+  }
+
+  if (replaceExistingLines && orders.length > 0) {
+    const { error } = await supabase
+      .from("order_lines")
+      .delete()
+      .eq("shop_domain", shop)
+      .in(
+        "shopify_order_id",
+        orders.map((order) => order.id),
+      );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  }
+
+  await upsertInBatches({
+    supabase,
+    table: "orders",
+    rows: orderRows,
+    onConflict: "shop_domain,shopify_order_id",
+  });
+
+  await upsertInBatches({
+    supabase,
+    table: "order_lines",
+    rows: orderLineRows,
+    onConflict: "shop_domain,shopify_line_item_id",
+  });
+
+  return {
+    ordersSynced: orderRows.length,
+    orderLinesSynced: orderLineRows.length,
+  };
+}
+
 async function syncOrdersPage({
   admin,
   shop,
@@ -3115,10 +3252,6 @@ async function syncOrdersPage({
   orderQuery: string;
   includeStaffAttribution: boolean;
 }) {
-  const { costByVariantId, costBySku } = await getVariantCostMaps({
-    supabase,
-    shop,
-  });
   const data = await executeShopifyGraphql({
     admin,
     query: `#graphql
@@ -3238,106 +3371,17 @@ async function syncOrdersPage({
   )?.orders;
   const orders: OrderNode[] =
     ordersConnection?.edges?.map((edge) => edge.node) ?? [];
-  const orderRows = orders.map((order) => {
-    const orderStaff = includeStaffAttribution
-      ? getOrderStaffAttribution(order)
-      : getStaffAttribution(null);
-
-    return {
-      shop_domain: shop,
-      shopify_order_id: order.id,
-      order_name: order.name,
-      created_at_shopify: order.createdAt,
-      financial_status: order.displayFinancialStatus ?? null,
-      retail_location_id: order.retailLocation?.id ?? null,
-      retail_location_name: order.retailLocation?.name ?? null,
-      total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
-      staff_member_id: orderStaff.staffMemberId,
-      staff_member_name: orderStaff.staffMemberName,
-      staff_member_email: orderStaff.staffMemberEmail,
-      staff_source: orderStaff.staffSource,
-      updated_at: new Date().toISOString(),
-    };
-  });
-  const orderLineRows: Record<string, unknown>[] = [];
-
-  for (const order of orders) {
-    const orderStaff = includeStaffAttribution
-      ? getOrderStaffAttribution(order)
-      : getStaffAttribution(null);
-    const allLineItems = await getAllLineItemsForOrder({
-      admin,
-      order,
-      includeStaffAttribution,
-    });
-
-    for (const lineItem of allLineItems) {
-      const variantId = lineItem.variant?.id ?? null;
-      const sku = lineItem.sku ?? lineItem.variant?.sku ?? null;
-      const unitPrice = getNumericAmount(
-        lineItem.discountedUnitPriceSet?.shopMoney?.amount,
-      );
-      const revenue = unitPrice * lineItem.quantity;
-      const variantCost =
-        (variantId ? costByVariantId.get(variantId) : undefined) ??
-        (sku ? costBySku.get(sku) : undefined);
-      const costInfo = getCostInfo({
-        lineItem,
-        variantCost,
-        revenue,
-        quantity: lineItem.quantity,
-      });
-      const lineStaff = includeStaffAttribution
-        ? getStaffAttribution(lineItem.staffMember, "line_item_staff")
-        : getStaffAttribution(null);
-      const staffAttribution = lineStaff.staffMemberId ? lineStaff : orderStaff;
-
-      orderLineRows.push({
-        shop_domain: shop,
-        shopify_order_id: order.id,
-        shopify_line_item_id: lineItem.id,
-        order_name: order.name,
-        created_at_shopify: order.createdAt,
-        retail_location_id: order.retailLocation?.id ?? null,
-        retail_location_name: order.retailLocation?.name ?? null,
-        shopify_variant_id: variantId,
-        inventory_item_id: variantCost?.inventory_item_id ?? null,
-        product_title: lineItem.variant?.product?.title ?? lineItem.title,
-        variant_title: lineItem.variant?.title ?? null,
-        sku,
-        vendor: lineItem.variant?.product?.vendor ?? null,
-        quantity: lineItem.quantity,
-        unit_price: unitPrice,
-        revenue,
-        unit_cost: costInfo.unitCost,
-        cogs: costInfo.cogs,
-        gross_profit: costInfo.grossProfit,
-        cost_source: costInfo.costSource,
-        staff_member_id: staffAttribution.staffMemberId,
-        staff_member_name: staffAttribution.staffMemberName,
-        staff_member_email: staffAttribution.staffMemberEmail,
-        staff_source: staffAttribution.staffSource,
-      });
-    }
-  }
-
-  await upsertInBatches({
+  const counts = await upsertOrderNodes({
+    admin,
+    shop,
     supabase,
-    table: "orders",
-    rows: orderRows,
-    onConflict: "shop_domain,shopify_order_id",
-  });
-
-  await upsertInBatches({
-    supabase,
-    table: "order_lines",
-    rows: orderLineRows,
-    onConflict: "shop_domain,shopify_line_item_id",
+    orders,
+    includeStaffAttribution,
   });
 
   return {
-    ordersSynced: orderRows.length,
-    orderLinesSynced: orderLineRows.length,
+    ordersSynced: counts.ordersSynced,
+    orderLinesSynced: counts.orderLinesSynced,
     hasNextPage: Boolean(ordersConnection?.pageInfo?.hasNextPage),
     cursor: ordersConnection?.pageInfo?.endCursor ?? null,
   };
@@ -3416,6 +3460,215 @@ export async function syncOrdersBatch({
       staffAttributionError,
     },
   };
+}
+
+async function fetchOrderByIdForSync({
+  admin,
+  orderId,
+  includeStaffAttribution,
+}: {
+  admin: ShopifyAdminClient;
+  orderId: string;
+  includeStaffAttribution: boolean;
+}) {
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getOrderByIdForSync($orderId: ID!) {
+        node(id: $orderId) {
+          ... on Order {
+            id
+            name
+            createdAt
+            displayFinancialStatus
+            ${
+              includeStaffAttribution
+                ? `
+            staffMember {
+              id
+              name
+              email
+            }
+            transactions(first: 10) {
+              id
+              kind
+              status
+              user {
+                id
+                name
+                email
+              }
+            }
+            `
+                : ""
+            }
+            totalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            retailLocation {
+              id
+              name
+            }
+            lineItems(first: ${LINE_ITEMS_PAGE_SIZE}) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  id
+                  title
+                  quantity
+                  sku
+                  ${
+                    includeStaffAttribution
+                      ? `
+                  staffMember {
+                    id
+                    name
+                    email
+                  }
+                  `
+                      : ""
+                  }
+                  variant {
+                    id
+                    title
+                    sku
+                    product {
+                      id
+                      title
+                      vendor
+                    }
+                  }
+                  discountedUnitPriceSet {
+                    shopMoney {
+                      amount
+                      currencyCode
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getOrderByIdForSync",
+    variables: {
+      orderId,
+    },
+  });
+
+  return ((data.data as { node?: OrderNode | null } | undefined)?.node ??
+    null) as OrderNode | null;
+}
+
+export async function syncOrderById({
+  admin,
+  shop,
+  supabase,
+  source,
+  orderId,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  source: SyncSource;
+  orderId: string;
+}) {
+  const startedAt = new Date().toISOString();
+
+  try {
+    let staffAttributionAvailable = true;
+    let staffAttributionError: string | null = null;
+    let order: OrderNode | null = null;
+
+    try {
+      order = await fetchOrderByIdForSync({
+        admin,
+        orderId,
+        includeStaffAttribution: true,
+      });
+    } catch (error) {
+      staffAttributionAvailable = false;
+      staffAttributionError = error instanceof Error ? error.message : String(error);
+      order = await fetchOrderByIdForSync({
+        admin,
+        orderId,
+        includeStaffAttribution: false,
+      });
+    }
+
+    if (!order) {
+      const result = {
+        ordersSynced: 0,
+        orderLinesSynced: 0,
+        orderId,
+        orderFound: false,
+        staffAttributionAvailable,
+        staffAttributionError,
+      };
+
+      await insertSyncRun({
+        supabase,
+        shop,
+        syncType: "orders",
+        status: "success",
+        source,
+        startedAt,
+        details: result,
+      });
+
+      return result;
+    }
+
+    const counts = await upsertOrderNodes({
+      admin,
+      shop,
+      supabase,
+      orders: [order],
+      includeStaffAttribution: staffAttributionAvailable,
+      replaceExistingLines: true,
+    });
+    const result = {
+      ...counts,
+      orderId,
+      orderFound: true,
+      staffAttributionAvailable,
+      staffAttributionError,
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "orders",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  } catch (error) {
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "orders",
+      status: "error",
+      source,
+      startedAt,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      details: {
+        orderId,
+      },
+    });
+
+    throw error;
+  }
 }
 
 export async function syncOrders({
