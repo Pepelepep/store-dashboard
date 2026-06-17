@@ -88,12 +88,6 @@ const emptyAccessForm: AccessFormState = {
   selectedStaffId: "",
 };
 
-const roleDescriptions: Record<string, string> = {
-  admin: "Admin — all locations and permission management.",
-  manager: "Manager — selected locations.",
-  viewer: "Viewer — read-only access to selected locations.",
-};
-
 const buttonBaseStyle = {
   borderRadius: 10,
   padding: "10px 14px",
@@ -560,9 +554,6 @@ export default function AdminPermissionsPage() {
   const fieldErrors = visibleActionData?.ok ? undefined : visibleActionData?.fieldErrors;
   const hasStaffError = Boolean(fieldErrors?.staff || fieldErrors?.user_email);
   const emailFieldBorder = fieldErrors?.user_email ? "1px solid #d92d20" : "1px solid #c9cccf";
-  const shopifyUserIdFieldBorder = fieldErrors?.shopify_user_id
-    ? "1px solid #d92d20"
-    : "1px solid #c9cccf";
   const staffFieldBorder = hasStaffError ? "1px solid #d92d20" : "1px solid #c9cccf";
   const roleFieldBorder = fieldErrors?.role ? "1px solid #d92d20" : "1px solid #c9cccf";
   const locationsBorder = fieldErrors?.locations ? "1px solid #d92d20" : "1px solid transparent";
@@ -684,6 +675,7 @@ export default function AdminPermissionsPage() {
           <Card title="Grant access">
             <Form method="post" style={{ display: "grid", gap: 18 }}>
               <input type="hidden" name="intent" value="save" />
+              <input type="hidden" name="shopify_user_id" value={formState.shopify_user_id} />
 
               <div style={{ display: "grid", gap: 10 }}>
                 <div>
@@ -713,62 +705,33 @@ export default function AdminPermissionsPage() {
                   </select>
                   <FieldHelp>
                     {staffMembers.length > 0
-                      ? "The selected staff member fills the email and Shopify user ID automatically."
+                      ? "Select a staff member to fill their email automatically."
                       : "No staff members synced yet. Go to Sync Center and run Sync staff members."}
                   </FieldHelp>
                   <FieldError>{fieldErrors?.staff}</FieldError>
                 </label>
 
-                <details style={{ border: hasStaffError ? "1px solid #d92d20" : "1px solid #e3e3e3", borderRadius: 10, padding: 14, background: hasStaffError ? "#fff4f4" : "#fafafa" }}>
-                  <summary
-                    onClick={clearActionFeedback}
-                    style={{ cursor: "pointer", fontWeight: 800 }}
-                  >
-                    Advanced: email and Shopify user ID
-                  </summary>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginTop: 14 }}>
-                    <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                      Email
-                      <input
-                        name="user_email"
-                        placeholder="manager@local.ca"
-                        value={formState.user_email}
-                        onChange={(event) => {
-                          clearActionFeedback();
-                          setFormState((current) => ({
-                            ...current,
-                            user_email: event.target.value,
-                          }));
-                        }}
-                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: emailFieldBorder }}
-                      />
-                      <FieldHelp>Required permission identity.</FieldHelp>
-                      <FieldError>{fieldErrors?.user_email}</FieldError>
-                    </label>
-
-                    <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                      Shopify user ID
-                      <input
-                        name="shopify_user_id"
-                        placeholder="90052427974"
-                        value={formState.shopify_user_id}
-                        onChange={(event) => {
-                          clearActionFeedback();
-                          setFormState((current) => ({
-                            ...current,
-                            selectedStaffId: "",
-                            shopify_user_id: event.target.value,
-                          }));
-                        }}
-                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: shopifyUserIdFieldBorder }}
-                      />
-                      <FieldHelp>
-                        Optional Shopify staff/user reference.
-                      </FieldHelp>
-                      <FieldError>{fieldErrors?.shopify_user_id}</FieldError>
-                    </label>
-                  </div>
-                </details>
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Email
+                  <input
+                    name="user_email"
+                    required
+                    placeholder="manager@local.ca"
+                    value={formState.user_email}
+                    onChange={(event) => {
+                      clearActionFeedback();
+                      setFormState((current) => ({
+                        ...current,
+                        selectedStaffId: "",
+                        shopify_user_id: "",
+                        user_email: event.target.value,
+                      }));
+                    }}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: emailFieldBorder }}
+                  />
+                  <FieldHelp>Staff not listed? Enter their Shopify account email.</FieldHelp>
+                  <FieldError>{fieldErrors?.user_email}</FieldError>
+                </label>
               </div>
 
               <div style={{ display: "grid", gap: 10 }}>
@@ -778,7 +741,7 @@ export default function AdminPermissionsPage() {
                   </div>
                   <div style={{ fontWeight: 800, fontSize: 18 }}>Role</div>
                   <FieldHelp>
-                    Admin — all locations and permission management. Manager — selected locations. Viewer — read-only access to selected locations.
+                    Choose what this user can do.
                   </FieldHelp>
                 </div>
 
@@ -805,7 +768,6 @@ export default function AdminPermissionsPage() {
                     <option value="manager">Manager</option>
                     <option value="admin">Admin</option>
                   </select>
-                  <FieldHelp>{roleDescriptions[formState.role]}</FieldHelp>
                   <FieldError>{fieldErrors?.role}</FieldError>
                 </label>
               </div>
@@ -816,7 +778,7 @@ export default function AdminPermissionsPage() {
                 </div>
                 <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 4 }}>Locations</div>
                 <FieldHelp>
-                  Admin can access all locations. Manager/viewer must select one or more locations.
+                  Admins access all locations. For other roles, select one or more locations.
                 </FieldHelp>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
                   {locations.map((location) => (
@@ -947,7 +909,15 @@ export default function AdminPermissionsPage() {
                             >
                               Edit
                             </button>
-                            <Form method="post">
+                            <Form
+                              method="post"
+                              onSubmit={(event) => {
+                                const userLabel = group.user_email || "this user";
+                                if (!window.confirm(`Delete access for ${userLabel}?`)) {
+                                  event.preventDefault();
+                                }
+                              }}
+                            >
                               <input type="hidden" name="intent" value="delete" />
                               <input type="hidden" name="user_email" value={group.user_email} />
                               <button
