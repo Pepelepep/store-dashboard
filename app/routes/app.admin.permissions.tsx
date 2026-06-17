@@ -12,6 +12,8 @@ type LocationRow = {
   is_active: boolean;
 };
 
+type LocationNameRow = Pick<LocationRow, "shopify_location_id" | "name">;
+
 type PermissionRow = {
   id: string;
   shop_domain: string;
@@ -51,6 +53,7 @@ type ActionData = {
   message: string;
   fieldErrors?: {
     staff?: string;
+    user_email?: string;
     shopify_user_id?: string;
     role?: string;
     locations?: string;
@@ -148,6 +151,10 @@ const buttonVariants: Record<
   },
 };
 
+function normalizeEmail(email: string | null | undefined) {
+  return email?.trim().toLowerCase() ?? "";
+}
+
 function getButtonStyle({
   variant,
   disabled,
@@ -244,11 +251,14 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(formData.get("intent") ?? "save");
 
   if (intent === "delete") {
-    const shopifyUserId = String(formData.get("shopify_user_id") ?? "").trim();
-    if (!shopifyUserId) {
+    const email = normalizeEmail(String(formData.get("user_email") ?? ""));
+    if (!email) {
       return {
         ok: false,
-        message: "Missing Shopify user ID.",
+        message: "Missing email.",
+        fieldErrors: {
+          user_email: "Email is required to delete access.",
+        },
       } satisfies ActionData;
     }
 
@@ -256,7 +266,7 @@ export async function action({ request }: ActionFunctionArgs) {
       .from("user_location_access")
       .delete()
       .eq("shop_domain", session.shop)
-      .eq("shopify_user_id", shopifyUserId);
+      .eq("user_email", email);
 
     if (error) {
       return {
@@ -271,18 +281,18 @@ export async function action({ request }: ActionFunctionArgs) {
     } satisfies ActionData;
   }
 
-  const email = String(formData.get("user_email") ?? "").trim().toLowerCase();
+  const email = normalizeEmail(String(formData.get("user_email") ?? ""));
   const shopifyUserId = String(formData.get("shopify_user_id") ?? "").trim() || null;
   const role = String(formData.get("role") ?? "viewer");
   const locationIds = formData.getAll("locationIds").map(String).filter(Boolean);
 
-  if (!shopifyUserId) {
+  if (!email) {
     return {
       ok: false,
-      message: "Shopify user ID is required.",
+      message: "Email is required.",
       fieldErrors: {
-        staff: "Select a staff member or enter a Shopify user ID manually.",
-        shopify_user_id: "Select a staff member or enter a Shopify user ID manually.",
+        staff: "Select a staff member with an email or enter an email manually.",
+        user_email: "Enter an email address.",
       },
     } satisfies ActionData;
   }
@@ -320,17 +330,17 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   const locationsById = new Map(
-    (locationsData ?? []).map((location: any) => [location.shopify_location_id, location.name]),
+    ((locationsData ?? []) as LocationNameRow[]).map((location) => [
+      location.shopify_location_id,
+      location.name,
+    ]),
   );
 
-  let deleteQuery = supabase
+  const { error: deleteError } = await supabase
     .from("user_location_access")
     .delete()
-    .eq("shop_domain", session.shop);
-
-  deleteQuery = deleteQuery.eq("shopify_user_id", shopifyUserId);
-
-  const { error: deleteError } = await deleteQuery;
+    .eq("shop_domain", session.shop)
+    .eq("user_email", email);
   if (deleteError) {
     return {
       ok: false,
@@ -342,7 +352,7 @@ export async function action({ request }: ActionFunctionArgs) {
     ? [
         {
           shop_domain: session.shop,
-          user_email: email || null,
+          user_email: email,
           shopify_user_id: shopifyUserId,
           shopify_location_id: "*",
           location_name: "All locations",
@@ -353,7 +363,7 @@ export async function action({ request }: ActionFunctionArgs) {
       ]
     : locationIds.map((locationId) => ({
         shop_domain: session.shop,
-        user_email: email || null,
+        user_email: email,
         shopify_user_id: shopifyUserId,
         shopify_location_id: locationId,
         location_name: String(locationsById.get(locationId) ?? locationId),
@@ -423,7 +433,12 @@ function groupPermissions(permissions: PermissionRow[]) {
   const groups = new Map<string, PermissionGroup>();
 
   for (const row of permissions) {
-    const key = row.shopify_user_id ?? `missing-${row.id}`;
+    const canonicalEmail = normalizeEmail(row.user_email);
+    const key = canonicalEmail
+      ? `email:${canonicalEmail}`
+      : row.shopify_user_id
+        ? `shopify:${row.shopify_user_id}`
+        : `missing-${row.id}`;
     const existing = groups.get(key);
     const isAdmin = row.role === "admin" || row.shopify_location_id === "*";
     const role = isAdmin ? "admin" : row.role || "viewer";
@@ -431,7 +446,7 @@ function groupPermissions(permissions: PermissionRow[]) {
     if (!existing) {
       groups.set(key, {
         key,
-        user_email: row.user_email ?? "",
+        user_email: canonicalEmail,
         shopify_user_id: row.shopify_user_id ?? "",
         role,
         locationIds:
@@ -446,8 +461,12 @@ function groupPermissions(permissions: PermissionRow[]) {
       continue;
     }
 
-    if (!existing.user_email && row.user_email) {
-      existing.user_email = row.user_email;
+    if (!existing.user_email && canonicalEmail) {
+      existing.user_email = canonicalEmail;
+    }
+
+    if (!existing.shopify_user_id && row.shopify_user_id) {
+      existing.shopify_user_id = row.shopify_user_id;
     }
 
     if (isAdmin) {
@@ -466,7 +485,7 @@ function groupPermissions(permissions: PermissionRow[]) {
       existing.can_manage = true;
     }
 
-    if (row.shopify_location_id) {
+    if (row.shopify_location_id && !existing.locationIds.includes(row.shopify_location_id)) {
       existing.locationIds.push(row.shopify_location_id);
       existing.locationNames.push(row.location_name ?? row.shopify_location_id);
     }
@@ -519,6 +538,15 @@ export default function AdminPermissionsPage() {
       ),
     [staffMembers],
   );
+  const staffByEmail = useMemo(
+    () =>
+      new Map(
+        staffMembers
+          .map((staffMember) => [normalizeEmail(staffMember.email), staffMember] as const)
+          .filter(([email]) => Boolean(email)),
+      ),
+    [staffMembers],
+  );
   const [formState, setFormState] = useState<AccessFormState>(emptyAccessForm);
   const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
   const [hoveredButton, setHoveredButton] = useState<string | null>(null);
@@ -530,7 +558,11 @@ export default function AdminPermissionsPage() {
   const isAdminRole = formState.role === "admin";
   const visibleActionData = isActionFeedbackHidden ? undefined : actionData;
   const fieldErrors = visibleActionData?.ok ? undefined : visibleActionData?.fieldErrors;
-  const hasStaffError = Boolean(fieldErrors?.staff || fieldErrors?.shopify_user_id);
+  const hasStaffError = Boolean(fieldErrors?.staff || fieldErrors?.user_email);
+  const emailFieldBorder = fieldErrors?.user_email ? "1px solid #d92d20" : "1px solid #c9cccf";
+  const shopifyUserIdFieldBorder = fieldErrors?.shopify_user_id
+    ? "1px solid #d92d20"
+    : "1px solid #c9cccf";
   const staffFieldBorder = hasStaffError ? "1px solid #d92d20" : "1px solid #c9cccf";
   const roleFieldBorder = fieldErrors?.role ? "1px solid #d92d20" : "1px solid #c9cccf";
   const locationsBorder = fieldErrors?.locations ? "1px solid #d92d20" : "1px solid transparent";
@@ -589,11 +621,13 @@ export default function AdminPermissionsPage() {
       shopify_user_id: group.shopify_user_id,
       role: group.role,
       locationIds: group.role === "admin" ? [] : group.locationIds,
-      selectedStaffId: staffMembers.some(
-        (staffMember) => staffMember.shopify_staff_id === group.shopify_user_id,
-      )
-        ? group.shopify_user_id
-        : "",
+      selectedStaffId:
+        staffByEmail.get(group.user_email)?.shopify_staff_id ||
+        (staffMembers.some(
+          (staffMember) => staffMember.shopify_staff_id === group.shopify_user_id,
+        )
+          ? group.shopify_user_id
+          : ""),
     });
   }
 
@@ -618,15 +652,16 @@ export default function AdminPermissionsPage() {
     const staffMember = staffMembers.find(
       (member) => member.shopify_staff_id === staffId,
     );
-    const existingAccess = permissionGroups.find(
-      (group) => group.shopify_user_id === staffId,
-    );
+    const staffEmail = normalizeEmail(staffMember?.email);
+    const existingAccess =
+      permissionGroups.find((group) => group.user_email === staffEmail) ??
+      permissionGroups.find((group) => group.shopify_user_id === staffId);
 
     setFormState((current) => ({
       ...current,
       selectedStaffId: staffId,
       shopify_user_id: staffMember?.shopify_staff_id ?? current.shopify_user_id,
-      user_email: existingAccess?.user_email || staffMember?.email || current.user_email,
+      user_email: existingAccess?.user_email || staffEmail || current.user_email,
       role: existingAccess?.role ?? emptyAccessForm.role,
       locationIds:
         existingAccess?.role === "admin"
@@ -689,7 +724,7 @@ export default function AdminPermissionsPage() {
                     onClick={clearActionFeedback}
                     style={{ cursor: "pointer", fontWeight: 800 }}
                   >
-                    Advanced: manual Shopify user ID
+                    Advanced: email and Shopify user ID
                   </summary>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginTop: 14 }}>
                     <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
@@ -705,16 +740,16 @@ export default function AdminPermissionsPage() {
                             user_email: event.target.value,
                           }));
                         }}
-                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #c9cccf" }}
+                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: emailFieldBorder }}
                       />
-                      <FieldHelp>Optional display label.</FieldHelp>
+                      <FieldHelp>Required permission identity.</FieldHelp>
+                      <FieldError>{fieldErrors?.user_email}</FieldError>
                     </label>
 
                     <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
                       Shopify user ID
                       <input
                         name="shopify_user_id"
-                        required
                         placeholder="90052427974"
                         value={formState.shopify_user_id}
                         onChange={(event) => {
@@ -725,10 +760,10 @@ export default function AdminPermissionsPage() {
                             shopify_user_id: event.target.value,
                           }));
                         }}
-                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
+                        style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: shopifyUserIdFieldBorder }}
                       />
                       <FieldHelp>
-                        Use this only if the staff member is not listed.
+                        Optional Shopify staff/user reference.
                       </FieldHelp>
                       <FieldError>{fieldErrors?.shopify_user_id}</FieldError>
                     </label>
@@ -865,7 +900,8 @@ export default function AdminPermissionsPage() {
                 </thead>
                 <tbody>
                   {permissionGroups.map((group) => {
-                    const staffMember = staffById.get(group.shopify_user_id);
+                    const staffMember =
+                      staffByEmail.get(group.user_email) ?? staffById.get(group.shopify_user_id);
                     const displayName = getStaffDisplayName(staffMember);
                     const primaryLabel =
                       displayName || group.user_email || "Manual user";
@@ -901,11 +937,11 @@ export default function AdminPermissionsPage() {
                             <button
                               type="button"
                               onClick={() => editGroup(group)}
-                              disabled={isSubmitting || !group.shopify_user_id}
+                              disabled={isSubmitting}
                               {...getButtonProps({
                                 id: `edit-${group.key}`,
                                 variant: "secondary",
-                                disabled: isSubmitting || !group.shopify_user_id,
+                                disabled: isSubmitting,
                                 compact: true,
                               })}
                             >
@@ -913,14 +949,14 @@ export default function AdminPermissionsPage() {
                             </button>
                             <Form method="post">
                               <input type="hidden" name="intent" value="delete" />
-                              <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
+                              <input type="hidden" name="user_email" value={group.user_email} />
                               <button
-                                disabled={isSubmitting || !group.shopify_user_id}
+                                disabled={isSubmitting || !group.user_email}
                                 type="submit"
                                 {...getButtonProps({
                                   id: `delete-${group.key}`,
                                   variant: "danger",
-                                  disabled: isSubmitting || !group.shopify_user_id,
+                                  disabled: isSubmitting || !group.user_email,
                                   compact: true,
                                 })}
                               >
