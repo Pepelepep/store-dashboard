@@ -30,6 +30,8 @@ type InventoryItemUpdate = {
 
 const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_MAX_ATTEMPTS = 5;
+const MISSING_INVENTORY_LEVEL_PAYLOAD_ERROR =
+  "Missing inventory_item_id/location_id/available in inventory level webhook payload";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -52,6 +54,40 @@ function parsePayloadCost(cost: unknown) {
   return Number.isFinite(amount) ? amount : null;
 }
 
+function getPayloadString(value: unknown) {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return null;
+}
+
+function toShopifyGid(resource: string, value: unknown) {
+  const id = getPayloadString(value);
+
+  if (!id) {
+    return null;
+  }
+
+  if (id.startsWith("gid://")) {
+    return id;
+  }
+
+  return `gid://shopify/${resource}/${id}`;
+}
+
+function isInventoryLevelTopic(topic: string) {
+  return (
+    topic === "inventory/levels/update" ||
+    topic === "inventory-levels/update" ||
+    topic === "inventory_levels/update"
+  );
+}
+
 function getInventoryItemUpdate(event: WebhookEventRow): InventoryItemUpdate | null {
   if (!event.resource_gid || !isRecord(event.payload)) {
     return null;
@@ -65,6 +101,83 @@ function getInventoryItemUpdate(event: WebhookEventRow): InventoryItemUpdate | n
     unitCost: parsePayloadCost(event.payload.cost),
     hasExplicitUnitCost: hasPayloadCost(event.payload),
   };
+}
+
+function getInventoryLevelAvailable(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const available = Number(value);
+  return Number.isFinite(available) ? available : null;
+}
+
+function getInventoryLevelSyncedAt(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    return new Date().toISOString();
+  }
+
+  const updatedAt = new Date(value);
+  return Number.isNaN(updatedAt.getTime())
+    ? new Date().toISOString()
+    : updatedAt.toISOString();
+}
+
+async function upsertInventoryLevelFromWebhook({
+  event,
+  supabase,
+}: {
+  event: WebhookEventRow;
+  supabase: SupabaseAdminClient;
+}) {
+  if (!isRecord(event.payload)) {
+    throw new Error(MISSING_INVENTORY_LEVEL_PAYLOAD_ERROR);
+  }
+
+  const inventoryItemId = toShopifyGid(
+    "InventoryItem",
+    event.payload.inventory_item_id,
+  );
+  const locationId = toShopifyGid("Location", event.payload.location_id);
+  const available = getInventoryLevelAvailable(event.payload.available);
+
+  if (!inventoryItemId || !locationId || available === null) {
+    throw new Error(MISSING_INVENTORY_LEVEL_PAYLOAD_ERROR);
+  }
+
+  const syncedAt = getInventoryLevelSyncedAt(event.payload.updated_at);
+  const row = {
+    available,
+    synced_at: syncedAt,
+  };
+
+  const { data: updatedRows, error: updateError } = await supabase
+    .from("inventory_levels")
+    .update(row)
+    .eq("shop_domain", event.shop_domain)
+    .eq("shopify_location_id", locationId)
+    .eq("inventory_item_id", inventoryItemId)
+    .select("id");
+
+  if (updateError) {
+    throw new Error(updateError.message);
+  }
+
+  if ((updatedRows ?? []).length > 0) {
+    return;
+  }
+
+  const { error: insertError } = await supabase.from("inventory_levels").insert({
+    shop_domain: event.shop_domain,
+    shopify_location_id: locationId,
+    inventory_item_id: inventoryItemId,
+    available,
+    synced_at: syncedAt,
+  });
+
+  if (insertError) {
+    throw new Error(insertError.message);
+  }
 }
 
 function getRetryAvailableAt(attemptCount: number) {
@@ -211,10 +324,7 @@ async function processWebhookEvent({
   if (
     topic === "inventory/items/update" ||
     topic === "inventory-items/update" ||
-    topic === "inventory_items/update" ||
-    topic === "inventory/levels/update" ||
-    topic === "inventory-levels/update" ||
-    topic === "inventory_levels/update"
+    topic === "inventory_items/update"
   ) {
     const inventoryItemUpdate = getInventoryItemUpdate(event);
     const inventoryItemId = inventoryItemUpdate?.inventoryItemId ?? resourceGid;
@@ -232,6 +342,11 @@ async function processWebhookEvent({
       inventoryItemIds: [inventoryItemId],
       inventoryItemUpdates: inventoryItemUpdate ? [inventoryItemUpdate] : [],
     });
+    return;
+  }
+
+  if (isInventoryLevelTopic(topic)) {
+    await upsertInventoryLevelFromWebhook({ event, supabase });
     return;
   }
 
