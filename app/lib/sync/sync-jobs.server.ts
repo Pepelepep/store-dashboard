@@ -1,12 +1,10 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
-import type {
-  SyncBatchResult,
-  SyncSource,
-} from "./shopify-sync.server";
+import type { SyncBatchResult, SyncSource } from "./shopify-sync.server";
 import {
   syncInventoryBatch,
   syncLocations,
   syncOrdersBatch,
+  syncOrdersReconciliation48hBatch,
   syncProductsBatch,
 } from "./shopify-sync.server";
 
@@ -26,6 +24,7 @@ export type SyncJobType =
   | "products"
   | "inventory"
   | "orders"
+  | "orders_reconciliation_48h"
   | "full";
 
 export type SyncJobStatus =
@@ -53,6 +52,8 @@ export type SyncJobRow = {
 
 const fullSyncSteps = ["locations", "products", "inventory", "orders"];
 const STALE_ACTIVE_JOB_MS = 30 * 60 * 1000;
+const ORDERS_RECONCILIATION_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const ORDERS_RECONCILIATION_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 function getInitialStep(jobType: SyncJobType) {
   return jobType === "full" ? fullSyncSteps[0] : jobType;
@@ -101,6 +102,29 @@ function getErrorDetails(error: unknown) {
   }
 
   return null;
+}
+
+function getSyncJobSource(job: SyncJobRow): SyncSource {
+  const source =
+    job.details && typeof job.details.source === "string"
+      ? job.details.source
+      : null;
+
+  return source === "cron" ||
+    source === "webhook" ||
+    source === "local_manual_refresh" ||
+    source === "manual_admin_sync"
+    ? source
+    : "manual_admin_sync";
+}
+
+function getOrdersReconciliationWindow(now = new Date()) {
+  return {
+    windowStart: new Date(
+      now.getTime() - ORDERS_RECONCILIATION_WINDOW_MS,
+    ).toISOString(),
+    windowEnd: now.toISOString(),
+  };
 }
 
 function isStaleActiveJob(job: SyncJobRow) {
@@ -189,7 +213,11 @@ async function getActiveBlockingJob({
   jobType: SyncJobType;
 }) {
   const blockingTypes =
-    jobType === "full" ? [...fullSyncSteps, "full"] : [jobType, "full"];
+    jobType === "full"
+      ? [...fullSyncSteps, "full", "orders_reconciliation_48h"]
+      : jobType === "orders_reconciliation_48h"
+        ? ["orders_reconciliation_48h", "orders", "full"]
+        : [jobType, "full"];
 
   await cancelStaleActiveJobs({
     supabase,
@@ -257,6 +285,135 @@ export async function createManualSyncJob({
   };
 }
 
+export async function enqueueOrdersReconciliation48hJob({
+  supabase,
+  shop,
+  now = new Date(),
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  now?: Date;
+}) {
+  const activeJob = await getActiveBlockingJob({
+    supabase,
+    shop,
+    jobType: "orders_reconciliation_48h",
+  });
+
+  if (activeJob) {
+    return {
+      job: activeJob,
+      enqueued: false,
+      skippedReason: "active_job",
+    };
+  }
+
+  const dailySince = new Date(
+    now.getTime() - ORDERS_RECONCILIATION_DAILY_INTERVAL_MS,
+  ).toISOString();
+  const { data: recentSuccessfulJobs, error: recentSuccessfulError } =
+    await supabase
+      .from("sync_jobs")
+      .select("*")
+      .eq("shop_domain", shop)
+      .eq("job_type", "orders_reconciliation_48h")
+      .eq("status", "success")
+      .gte("finished_at", dailySince)
+      .order("finished_at", { ascending: false })
+      .limit(1);
+
+  if (recentSuccessfulError) {
+    throw new Error(recentSuccessfulError.message);
+  }
+
+  const recentSuccessfulJob = ((recentSuccessfulJobs ?? [])[0] ??
+    null) as SyncJobRow | null;
+
+  if (recentSuccessfulJob) {
+    return {
+      job: recentSuccessfulJob,
+      enqueued: false,
+      skippedReason: "recent_success",
+    };
+  }
+
+  const { data: recentSuccessfulRuns, error: recentSuccessfulRunsError } =
+    await supabase
+      .from("sync_runs")
+      .select("id")
+      .eq("shop_domain", shop)
+      .eq("sync_type", "orders_reconciliation_48h")
+      .eq("status", "success")
+      .gte("finished_at", dailySince)
+      .order("finished_at", { ascending: false })
+      .limit(1);
+
+  if (recentSuccessfulRunsError) {
+    throw new Error(recentSuccessfulRunsError.message);
+  }
+
+  if ((recentSuccessfulRuns ?? []).length > 0) {
+    return {
+      job: null,
+      enqueued: false,
+      skippedReason: "recent_success",
+    };
+  }
+
+  const window = getOrdersReconciliationWindow(now);
+  const { data, error } = await supabase
+    .from("sync_jobs")
+    .insert({
+      shop_domain: shop,
+      job_type: "orders_reconciliation_48h",
+      status: "pending",
+      current_step: "orders_reconciliation_48h",
+      progress: {
+        orders_reconciliation_48h: window,
+      },
+      counts: {},
+      details: {
+        source: "cron",
+        cadence: "daily",
+        window,
+      },
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return {
+    job: data as SyncJobRow,
+    enqueued: true,
+    skippedReason: null,
+  };
+}
+
+export async function getRunnableOrdersReconciliation48hJobs({
+  supabase,
+  limit,
+}: {
+  supabase: SupabaseAdminClient;
+  limit: number;
+}) {
+  const { data, error } = await supabase
+    .from("sync_jobs")
+    .select("*")
+    .eq("job_type", "orders_reconciliation_48h")
+    .in("status", ["pending", "running"])
+    .order("updated_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []) as SyncJobRow[];
+}
+
 async function markStepCompleted({
   supabase,
   shop,
@@ -279,7 +436,7 @@ async function markStepCompleted({
     shop,
     syncType: step,
     status: "success",
-    source: "manual_admin_sync",
+    source: getSyncJobSource(job),
     startedAt: job.started_at ?? job.created_at,
     details: {
       jobId: job.id,
@@ -348,6 +505,23 @@ async function runStepBatch({
               cursor?: string | null;
               startDate?: string | null;
               endDate?: string | null;
+              staffAttributionAvailable?: boolean;
+            }
+          | undefined) ?? null,
+    });
+  }
+
+  if (step === "orders_reconciliation_48h") {
+    return syncOrdersReconciliation48hBatch({
+      admin,
+      shop,
+      supabase,
+      progress:
+        (progress?.orders_reconciliation_48h as
+          | {
+              cursor?: string | null;
+              windowStart?: string | null;
+              windowEnd?: string | null;
               staffAttributionAvailable?: boolean;
             }
           | undefined) ?? null,
@@ -470,11 +644,7 @@ export async function processManualSyncJobBatch({
       ...(claimedJob.progress ?? {}),
       [step]: batchResult.progress,
     };
-    const nextCounts = mergeCounts(
-      claimedJob.counts,
-      step,
-      batchResult.counts,
-    );
+    const nextCounts = mergeCounts(claimedJob.counts, step, batchResult.counts);
     const nextStep =
       batchResult.done && claimedJob.job_type === "full"
         ? getNextFullStep(step)
@@ -532,7 +702,7 @@ export async function processManualSyncJobBatch({
       shop,
       syncType: step,
       status: "error",
-      source: "manual_admin_sync",
+      source: getSyncJobSource(claimedJob),
       startedAt,
       errorMessage,
       details: {

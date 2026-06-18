@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import prisma from "../../db.server";
 import { getOfflineAdminClient } from "../shopify/offline-admin.server";
 import type { WebhookEventRow } from "../webhooks/webhook-events.server";
 import {
@@ -11,6 +12,11 @@ import {
   syncOrderById,
   syncProductById,
 } from "./shopify-sync.server";
+import {
+  enqueueOrdersReconciliation48hJob,
+  getRunnableOrdersReconciliation48hJobs,
+  processManualSyncJobBatch,
+} from "./sync-jobs.server";
 
 type SupabaseAdminClient = ReturnType<typeof getSupabaseAdminClient>;
 
@@ -18,6 +24,8 @@ type ProcessWebhookEventsBatchArgs = {
   supabase?: SupabaseAdminClient;
   batchSize?: number;
   maxAttempts?: number;
+  maxReconciliationJobs?: number;
+  maxReconciliationShops?: number;
 };
 
 type InventoryItemUpdate = {
@@ -30,6 +38,8 @@ type InventoryItemUpdate = {
 
 const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_MAX_ATTEMPTS = 5;
+const DEFAULT_MAX_RECONCILIATION_JOBS = 2;
+const DEFAULT_MAX_RECONCILIATION_SHOPS = 25;
 const MISSING_INVENTORY_LEVEL_PAYLOAD_ERROR =
   "Missing inventory_item_id/location_id/available in inventory level webhook payload";
 
@@ -88,7 +98,9 @@ function isInventoryLevelTopic(topic: string) {
   );
 }
 
-function getInventoryItemUpdate(event: WebhookEventRow): InventoryItemUpdate | null {
+function getInventoryItemUpdate(
+  event: WebhookEventRow,
+): InventoryItemUpdate | null {
   if (!event.resource_gid || !isRecord(event.payload)) {
     return null;
   }
@@ -167,13 +179,15 @@ async function upsertInventoryLevelFromWebhook({
     return;
   }
 
-  const { error: insertError } = await supabase.from("inventory_levels").insert({
-    shop_domain: event.shop_domain,
-    shopify_location_id: locationId,
-    inventory_item_id: inventoryItemId,
-    available,
-    synced_at: syncedAt,
-  });
+  const { error: insertError } = await supabase
+    .from("inventory_levels")
+    .insert({
+      shop_domain: event.shop_domain,
+      shopify_location_id: locationId,
+      inventory_item_id: inventoryItemId,
+      available,
+      synced_at: syncedAt,
+    });
 
   if (insertError) {
     throw new Error(insertError.message);
@@ -353,10 +367,110 @@ async function processWebhookEvent({
   throw new Error(`Unsupported webhook topic: ${event.topic}.`);
 }
 
+async function getInstalledShopDomains(limit: number) {
+  const sessions = await prisma.session.findMany({
+    where: {
+      isOnline: false,
+    },
+    select: {
+      shop: true,
+    },
+    distinct: ["shop"],
+    orderBy: {
+      shop: "asc",
+    },
+    take: limit,
+  });
+
+  return sessions.map((session) => session.shop).filter(Boolean);
+}
+
+async function enqueueDueOrdersReconciliationJobs({
+  supabase,
+  shopLimit,
+}: {
+  supabase: SupabaseAdminClient;
+  shopLimit: number;
+}) {
+  const shops = await getInstalledShopDomains(shopLimit);
+  const summary = {
+    shopsChecked: shops.length,
+    enqueued: 0,
+    skipped: 0,
+    failed: 0,
+  };
+
+  for (const shop of shops) {
+    try {
+      const result = await enqueueOrdersReconciliation48hJob({
+        supabase,
+        shop,
+      });
+
+      if (result.enqueued) {
+        summary.enqueued += 1;
+      } else {
+        summary.skipped += 1;
+      }
+    } catch {
+      summary.failed += 1;
+    }
+  }
+
+  return summary;
+}
+
+async function processOrdersReconciliationJobs({
+  supabase,
+  jobLimit,
+}: {
+  supabase: SupabaseAdminClient;
+  jobLimit: number;
+}) {
+  const jobs = await getRunnableOrdersReconciliation48hJobs({
+    supabase,
+    limit: jobLimit,
+  });
+  const summary = {
+    jobsChecked: jobs.length,
+    processed: 0,
+    completed: 0,
+    failed: 0,
+  };
+
+  for (const job of jobs) {
+    try {
+      const admin = await getOfflineAdminClient(job.shop_domain);
+      const result = await processManualSyncJobBatch({
+        admin,
+        supabase,
+        shop: job.shop_domain,
+        jobId: job.id,
+      });
+
+      if (result.processed) {
+        summary.processed += 1;
+      }
+
+      if (result.job.status === "success") {
+        summary.completed += 1;
+      } else if (result.job.status === "error") {
+        summary.failed += 1;
+      }
+    } catch {
+      summary.failed += 1;
+    }
+  }
+
+  return summary;
+}
+
 export async function processWebhookEventsBatch({
   supabase = getSupabaseAdminClient(),
   batchSize = DEFAULT_BATCH_SIZE,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
+  maxReconciliationJobs = DEFAULT_MAX_RECONCILIATION_JOBS,
+  maxReconciliationShops = DEFAULT_MAX_RECONCILIATION_SHOPS,
 }: ProcessWebhookEventsBatchArgs = {}) {
   const claimedEvents = await claimWebhookEvents({
     supabase,
@@ -381,5 +495,20 @@ export async function processWebhookEventsBatch({
     }
   }
 
-  return summary;
+  const reconciliationEnqueue = await enqueueDueOrdersReconciliationJobs({
+    supabase,
+    shopLimit: maxReconciliationShops,
+  });
+  const reconciliationProcessing = await processOrdersReconciliationJobs({
+    supabase,
+    jobLimit: maxReconciliationJobs,
+  });
+
+  return {
+    ...summary,
+    ordersReconciliation: {
+      enqueue: reconciliationEnqueue,
+      processing: reconciliationProcessing,
+    },
+  };
 }

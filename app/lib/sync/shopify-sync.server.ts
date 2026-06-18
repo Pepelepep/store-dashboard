@@ -227,6 +227,7 @@ type OrderNode = {
   id: string;
   name: string;
   createdAt: string;
+  updatedAt?: string | null;
   displayFinancialStatus?: string | null;
   staffMember?: StaffMemberAttributionNode | null;
   transactions?: OrderTransactionNode[] | null;
@@ -254,7 +255,8 @@ type OrderNode = {
 export type SyncSource =
   | "manual_admin_sync"
   | "local_manual_refresh"
-  | "webhook";
+  | "webhook"
+  | "cron";
 
 const INVENTORY_BATCH_SIZE = 25;
 const SUPABASE_LOOKUP_BATCH_SIZE = 250;
@@ -276,6 +278,13 @@ export type OrdersSyncBatchProgress = {
   cursor?: string | null;
   startDate?: string | null;
   endDate?: string | null;
+  staffAttributionAvailable?: boolean;
+};
+
+export type OrdersReconciliation48hBatchProgress = {
+  cursor?: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
   staffAttributionAvailable?: boolean;
 };
 
@@ -532,18 +541,20 @@ function getIncrementalOrderDateRange(lookbackDays = 7) {
 function buildOrderQuery({
   startDate,
   endDate,
+  dateField = "created_at",
 }: {
   startDate?: string | null;
   endDate?: string | null;
+  dateField?: "created_at" | "updated_at";
 }) {
   const filters: string[] = [];
 
   if (startDate?.trim()) {
-    filters.push(`created_at:>=${startDate.trim()}`);
+    filters.push(`${dateField}:>=${startDate.trim()}`);
   }
 
   if (endDate?.trim()) {
-    filters.push(`created_at:<=${endDate.trim()}`);
+    filters.push(`${dateField}:<=${endDate.trim()}`);
   }
 
   return filters.join(" ");
@@ -757,7 +768,7 @@ async function runBulkOperation({
 
   logSync(log, `bulk operation started: ${operationId}`);
 
-  while (true) {
+  for (;;) {
     await sleep(3000);
 
     const operation = await getCurrentBulkOperation(admin);
@@ -774,7 +785,9 @@ async function runBulkOperation({
 
     if (operation.status === "COMPLETED") {
       if (!operation.url) {
-        throw new Error(`Bulk operation ${operationId} completed without a URL.`);
+        throw new Error(
+          `Bulk operation ${operationId} completed without a URL.`,
+        );
       }
 
       return {
@@ -815,7 +828,7 @@ async function streamJsonlFromUrl({
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
+  for (;;) {
     const { done, value } = await reader.read();
 
     if (done) {
@@ -983,9 +996,7 @@ async function getExistingVariantCosts({
     values: uniqueVariantIds,
   });
 
-  return new Map(
-    data.map((row) => [row.shopify_variant_id, row.unit_cost]),
-  );
+  return new Map(data.map((row) => [row.shopify_variant_id, row.unit_cost]));
 }
 
 async function recomputeOrderLineCogsForShop({
@@ -1026,7 +1037,10 @@ async function recomputeOrderLineCogsForVariantsSql({
 
   let recomputedCount = 0;
 
-  for (const batch of chunkArray(uniqueVariantIds, SUPABASE_LOOKUP_BATCH_SIZE)) {
+  for (const batch of chunkArray(
+    uniqueVariantIds,
+    SUPABASE_LOOKUP_BATCH_SIZE,
+  )) {
     const { data, error } = await supabase.rpc(
       "recompute_order_line_cogs_for_variants",
       {
@@ -1402,7 +1416,8 @@ async function syncProductNodes({
     productsSynced: productRows.length,
     variantsSynced: variantRows.length,
     variantsWithUnitCostSynced,
-    variantsWithMissingUnitCost: variantRows.length - variantsWithUnitCostSynced,
+    variantsWithMissingUnitCost:
+      variantRows.length - variantsWithUnitCostSynced,
     orderLinesCogsRecomputed: 0,
   };
 }
@@ -1874,7 +1889,6 @@ export async function syncProductsBulk({
   let bulkOperationId: string | null = null;
 
   try {
-    const bulkStartedAt = Date.now();
     const bulkOperation = await runBulkOperation({
       admin,
       log,
@@ -1912,7 +1926,10 @@ export async function syncProductsBulk({
     bulkOperationId = bulkOperation.id;
 
     const productsById = new Map<string, ProductNode>();
-    const variantEdgesByProductId = new Map<string, ProductNode["variants"]["edges"]>();
+    const variantEdgesByProductId = new Map<
+      string,
+      ProductNode["variants"]["edges"]
+    >();
     const downloadStartedAt = Date.now();
 
     logSync(log, `downloading products bulk result: ${bulkOperation.id}`);
@@ -2194,16 +2211,18 @@ export async function syncProductById({
           unitCost: variant.unit_cost,
           hasUnitCostValue: variant.unit_cost !== null,
           costSource: "PRODUCT_SYNC_UNIT_COST",
-      })),
+        })),
     });
     const dbUpsertMs = getDurationMs(dbStartedAt);
 
     const cogsStartedAt = Date.now();
-    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariantsSql({
-      supabase,
-      shop,
-      variantIds: variantRows.map((variant) => variant.shopify_variant_id),
-    });
+    const orderLinesCogsRecomputed = await recomputeOrderLineCogsForVariantsSql(
+      {
+        supabase,
+        shop,
+        variantIds: variantRows.map((variant) => variant.shopify_variant_id),
+      },
+    );
     const cogsRecomputeMs = getDurationMs(cogsStartedAt);
     const variantsWithUnitCostSynced = variantRows.filter(
       (variant) => variant.unit_cost !== null,
@@ -2598,7 +2617,9 @@ export async function syncInventoryBatch({
     supabase,
     shop,
     snapshots: inventoryItems.map((inventoryItem) => {
-      const unitCost = parseNullableNumericAmount(inventoryItem.unitCost?.amount);
+      const unitCost = parseNullableNumericAmount(
+        inventoryItem.unitCost?.amount,
+      );
 
       return {
         inventoryItemId: inventoryItem.id,
@@ -2611,11 +2632,13 @@ export async function syncInventoryBatch({
     }),
   });
 
-  const variantsUnitCostUpdated = await updateVariantCostsFromInventoryItemsSql({
-    supabase,
-    shop,
-    inventoryItemIds: inventoryItems.map((inventoryItem) => inventoryItem.id),
-  });
+  const variantsUnitCostUpdated = await updateVariantCostsFromInventoryItemsSql(
+    {
+      supabase,
+      shop,
+      inventoryItemIds: inventoryItems.map((inventoryItem) => inventoryItem.id),
+    },
+  );
   const isDone = variants.length < INVENTORY_BATCH_SIZE;
   const orderLinesCogsRecomputed = isDone
     ? await recomputeOrderLineCogsForShop({ supabase, shop })
@@ -2836,7 +2859,9 @@ export async function syncInventoryItems({
         await updateVariantCostsFromInventoryItemsSql({
           supabase,
           shop,
-          inventoryItemIds: snapshots.map((snapshot) => snapshot.inventoryItemId),
+          inventoryItemIds: snapshots.map(
+            (snapshot) => snapshot.inventoryItemId,
+          ),
         });
 
       const rows = inventoryItems.flatMap((inventoryItem) => {
@@ -2876,7 +2901,9 @@ export async function syncInventoryItems({
         await recomputeOrderLineCogsForInventoryItemsSql({
           supabase,
           shop,
-          inventoryItemIds: snapshots.map((snapshot) => snapshot.inventoryItemId),
+          inventoryItemIds: snapshots.map(
+            (snapshot) => snapshot.inventoryItemId,
+          ),
         });
       cogsRecomputeMs += getDurationMs(cogsStartedAt);
     }
@@ -3243,14 +3270,18 @@ async function syncOrdersPage({
   supabase,
   cursor,
   orderQuery,
+  sortKey = "CREATED_AT",
   includeStaffAttribution,
+  replaceExistingLines = false,
 }: {
   admin: ShopifyAdminClient;
   shop: string;
   supabase: SupabaseAdminClient;
   cursor?: string | null;
   orderQuery: string;
+  sortKey?: "CREATED_AT" | "UPDATED_AT";
   includeStaffAttribution: boolean;
+  replaceExistingLines?: boolean;
 }) {
   const data = await executeShopifyGraphql({
     admin,
@@ -3259,7 +3290,7 @@ async function syncOrdersPage({
         orders(
           first: ${ORDERS_PAGE_SIZE},
           after: $cursor,
-          sortKey: CREATED_AT,
+          sortKey: ${sortKey},
           reverse: true,
           query: $query
         ) {
@@ -3272,6 +3303,7 @@ async function syncOrdersPage({
               id
               name
               createdAt
+              updatedAt
               displayFinancialStatus
               ${
                 includeStaffAttribution
@@ -3377,6 +3409,7 @@ async function syncOrdersPage({
     supabase,
     orders,
     includeStaffAttribution,
+    replaceExistingLines,
   });
 
   return {
@@ -3407,8 +3440,7 @@ export async function syncOrdersBatch({
       : getIncrementalOrderDateRange();
   const orderQuery = buildOrderQuery(dateRange);
   const cursor = progress?.cursor ?? null;
-  let staffAttributionAvailable =
-    progress?.staffAttributionAvailable !== false;
+  let staffAttributionAvailable = progress?.staffAttributionAvailable !== false;
   let staffAttributionError: string | null = null;
   let pageResult: Awaited<ReturnType<typeof syncOrdersPage>>;
 
@@ -3427,7 +3459,8 @@ export async function syncOrdersBatch({
     }
 
     staffAttributionAvailable = false;
-    staffAttributionError = error instanceof Error ? error.message : String(error);
+    staffAttributionError =
+      error instanceof Error ? error.message : String(error);
     pageResult = await syncOrdersPage({
       admin,
       shop,
@@ -3458,6 +3491,94 @@ export async function syncOrdersBatch({
       orderLinesCogsRecomputed,
       staffAttributionAvailable,
       staffAttributionError,
+    },
+  };
+}
+
+function getOrdersReconciliation48hWindow() {
+  const end = new Date();
+  const start = new Date(end.getTime() - 48 * 60 * 60 * 1000);
+
+  return {
+    windowStart: start.toISOString(),
+    windowEnd: end.toISOString(),
+  };
+}
+
+export async function syncOrdersReconciliation48hBatch({
+  admin,
+  shop,
+  supabase,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  progress?: OrdersReconciliation48hBatchProgress | null;
+}): Promise<SyncBatchResult> {
+  const fallbackWindow = getOrdersReconciliation48hWindow();
+  const windowStart = progress?.windowStart ?? fallbackWindow.windowStart;
+  const windowEnd = progress?.windowEnd ?? fallbackWindow.windowEnd;
+  const orderQuery = buildOrderQuery({
+    startDate: windowStart,
+    endDate: windowEnd,
+    dateField: "updated_at",
+  });
+  const cursor = progress?.cursor ?? null;
+  let staffAttributionAvailable = progress?.staffAttributionAvailable !== false;
+  let staffAttributionError: string | null = null;
+  let pageResult: Awaited<ReturnType<typeof syncOrdersPage>>;
+
+  try {
+    pageResult = await syncOrdersPage({
+      admin,
+      shop,
+      supabase,
+      cursor,
+      orderQuery,
+      sortKey: "UPDATED_AT",
+      includeStaffAttribution: staffAttributionAvailable,
+      replaceExistingLines: true,
+    });
+  } catch (error) {
+    if (!staffAttributionAvailable) {
+      throw error;
+    }
+
+    staffAttributionAvailable = false;
+    staffAttributionError =
+      error instanceof Error ? error.message : String(error);
+    pageResult = await syncOrdersPage({
+      admin,
+      shop,
+      supabase,
+      cursor,
+      orderQuery,
+      sortKey: "UPDATED_AT",
+      includeStaffAttribution: false,
+      replaceExistingLines: true,
+    });
+  }
+
+  const isDone = !pageResult.hasNextPage || pageResult.ordersSynced === 0;
+
+  return {
+    done: isDone,
+    progress: {
+      cursor: pageResult.hasNextPage ? pageResult.cursor : null,
+      windowStart,
+      windowEnd,
+      staffAttributionAvailable,
+    },
+    counts: {
+      ordersSynced: pageResult.ordersSynced,
+      orderLinesSynced: pageResult.orderLinesSynced,
+      pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
+      orderLinesCogsRecomputed: 0,
+      staffAttributionAvailable,
+      staffAttributionError,
+      windowStart,
+      windowEnd,
     },
   };
 }
@@ -3595,7 +3716,8 @@ export async function syncOrderById({
       });
     } catch (error) {
       staffAttributionAvailable = false;
-      staffAttributionError = error instanceof Error ? error.message : String(error);
+      staffAttributionError =
+        error instanceof Error ? error.message : String(error);
       order = await fetchOrderByIdForSync({
         admin,
         orderId,
@@ -3713,6 +3835,7 @@ export async function syncOrders({
       }
     }
 
+    // eslint-disable-next-line no-inner-declarations
     async function runOrdersSync(includeStaffAttribution: boolean) {
       let cursor: string | null = null;
       let hasNextPage = true;
@@ -4048,7 +4171,9 @@ export async function syncOrdersBulk({
 
   try {
     const orderQuery = buildOrderQuery({ startDate, endDate });
-    const ordersArgs = orderQuery ? `(query: ${JSON.stringify(orderQuery)})` : "";
+    const ordersArgs = orderQuery
+      ? `(query: ${JSON.stringify(orderQuery)})`
+      : "";
     const bulkOperation = await runBulkOperation({
       admin,
       log,
