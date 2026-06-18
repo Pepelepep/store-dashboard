@@ -245,7 +245,7 @@ type RefundNode = {
   createdAt?: string | null;
   totalRefundedSet?: MoneySet | null;
   refundLineItems?: ShopifyConnection<RefundLineItemNode> | null;
-  transactions?: ShopifyConnection<OrderTransactionNode> | null;
+  transactions?: OrderTransactionNode[] | null;
 };
 
 type StaffSource =
@@ -271,8 +271,8 @@ type OrderNode = {
   currencyCode?: string | null;
   displayFinancialStatus?: string | null;
   staffMember?: StaffMemberAttributionNode | null;
-  transactions?: ShopifyConnection<OrderTransactionNode> | null;
-  refunds?: ShopifyConnection<RefundNode> | null;
+  transactions?: OrderTransactionNode[] | null;
+  refunds?: RefundNode[] | null;
   subtotalPriceSet?: MoneySet | null;
   currentSubtotalPriceSet?: MoneySet | null;
   totalDiscountsSet?: MoneySet | null;
@@ -311,8 +311,6 @@ const PRODUCT_VARIANT_SYNC_PAGE_SIZE = 50;
 const ORDERS_PAGE_SIZE = 50;
 const LINE_ITEMS_PAGE_SIZE = 100;
 const UPSERT_BATCH_SIZE = 500;
-const MAX_TRANSACTION_PAGES = 10;
-const MAX_REFUND_PAGES = 10;
 const MAX_REFUND_LINE_ITEM_PAGES = 20;
 
 export type ProductsSyncBatchProgress = {
@@ -500,16 +498,8 @@ function getFinancialQueryRefundFields() {
         }
       }
     }
-    transactions(first: 50) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      edges {
-        node {
-          ${getFinancialQueryTransactionFields()}
-        }
-      }
+    transactions {
+      ${getFinancialQueryTransactionFields()}
     }
   `;
 }
@@ -691,9 +681,9 @@ function getStaffAttribution(
 }
 
 function getTransactionStaffAttribution(
-  transactions?: ShopifyConnection<OrderTransactionNode> | null,
+  transactions?: OrderTransactionNode[] | null,
 ): StaffAttribution {
-  const transactionUser = getConnectionNodes(transactions).find(
+  const transactionUser = (transactions ?? []).find(
     (transaction) => transaction.user?.id,
   )?.user;
 
@@ -3591,92 +3581,6 @@ async function upsertOrderTransactions({
   });
 }
 
-async function fetchMoreOrderTransactions({
-  admin,
-  orderId,
-  cursor,
-}: {
-  admin: ShopifyAdminClient;
-  orderId: string;
-  cursor: string | null;
-}) {
-  const data = await executeShopifyGraphql({
-    admin,
-    query: `#graphql
-      query getMoreOrderTransactions($orderId: ID!, $cursor: String) {
-        node(id: $orderId) {
-          ... on Order {
-            transactions(first: 50, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  ${getFinancialQueryTransactionFields()}
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    queryName: "getMoreOrderTransactions",
-    variables: {
-      orderId,
-      cursor,
-    },
-  });
-
-  return ((
-    data.data as {
-      node?: { transactions?: ShopifyConnection<OrderTransactionNode> };
-    }
-  )?.node?.transactions ??
-    null) as ShopifyConnection<OrderTransactionNode> | null;
-}
-
-async function fetchMoreRefunds({
-  admin,
-  orderId,
-  cursor,
-}: {
-  admin: ShopifyAdminClient;
-  orderId: string;
-  cursor: string | null;
-}) {
-  const data = await executeShopifyGraphql({
-    admin,
-    query: `#graphql
-      query getMoreOrderRefunds($orderId: ID!, $cursor: String) {
-        node(id: $orderId) {
-          ... on Order {
-            refunds(first: 50, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  ${getFinancialQueryRefundFields()}
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    queryName: "getMoreOrderRefunds",
-    variables: {
-      orderId,
-      cursor,
-    },
-  });
-
-  return ((data.data as { node?: { refunds?: ShopifyConnection<RefundNode> } })
-    ?.node?.refunds ?? null) as ShopifyConnection<RefundNode> | null;
-}
-
 async function fetchMoreRefundLineItems({
   admin,
   refundId,
@@ -3731,51 +3635,6 @@ async function fetchMoreRefundLineItems({
     null) as ShopifyConnection<RefundLineItemNode> | null;
 }
 
-async function fetchMoreRefundTransactions({
-  admin,
-  refundId,
-  cursor,
-}: {
-  admin: ShopifyAdminClient;
-  refundId: string;
-  cursor: string | null;
-}) {
-  const data = await executeShopifyGraphql({
-    admin,
-    query: `#graphql
-      query getMoreRefundTransactions($refundId: ID!, $cursor: String) {
-        node(id: $refundId) {
-          ... on Refund {
-            transactions(first: 50, after: $cursor) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  ${getFinancialQueryTransactionFields()}
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    queryName: "getMoreRefundTransactions",
-    variables: {
-      refundId,
-      cursor,
-    },
-  });
-
-  return ((
-    data.data as {
-      node?: { transactions?: ShopifyConnection<OrderTransactionNode> };
-    }
-  )?.node?.transactions ??
-    null) as ShopifyConnection<OrderTransactionNode> | null;
-}
-
 async function getCompleteFinancialDetails({
   admin,
   order,
@@ -3786,50 +3645,10 @@ async function getCompleteFinancialDetails({
   const truncatedFields: string[] = [];
   let financialDataComplete = true;
   let financialIncompleteReason: string | null = null;
-  const transactions = [...getConnectionNodes(order.transactions)];
-  const refunds = [...getConnectionNodes(order.refunds)];
+  const transactions = [...(order.transactions ?? [])];
+  const refunds = [...(order.refunds ?? [])];
 
   try {
-    let transactionConnection = order.transactions ?? null;
-    let transactionCursor = getEndCursor(transactionConnection);
-    let transactionPages = 1;
-
-    while (hasNextPage(transactionConnection) && transactionCursor) {
-      if (transactionPages >= MAX_TRANSACTION_PAGES) {
-        truncatedFields.push("transactions");
-        break;
-      }
-
-      transactionConnection = await fetchMoreOrderTransactions({
-        admin,
-        orderId: order.id,
-        cursor: transactionCursor,
-      });
-      transactions.push(...getConnectionNodes(transactionConnection));
-      transactionCursor = getEndCursor(transactionConnection);
-      transactionPages += 1;
-    }
-
-    let refundConnection = order.refunds ?? null;
-    let refundCursor = getEndCursor(refundConnection);
-    let refundPages = 1;
-
-    while (hasNextPage(refundConnection) && refundCursor) {
-      if (refundPages >= MAX_REFUND_PAGES) {
-        truncatedFields.push("refunds");
-        break;
-      }
-
-      refundConnection = await fetchMoreRefunds({
-        admin,
-        orderId: order.id,
-        cursor: refundCursor,
-      });
-      refunds.push(...getConnectionNodes(refundConnection));
-      refundCursor = getEndCursor(refundConnection);
-      refundPages += 1;
-    }
-
     for (const refund of refunds) {
       let refundLineConnection = refund.refundLineItems ?? null;
       let refundLineCursor = getEndCursor(refundLineConnection);
@@ -3856,37 +3675,7 @@ async function getCompleteFinancialDetails({
         refundLineCursor = getEndCursor(refundLineConnection);
         refundLinePages += 1;
       }
-
-      let refundTransactionConnection = refund.transactions ?? null;
-      let refundTransactionCursor = getEndCursor(refundTransactionConnection);
-      let refundTransactionPages = 1;
-
-      while (
-        hasNextPage(refundTransactionConnection) &&
-        refundTransactionCursor
-      ) {
-        if (refundTransactionPages >= MAX_TRANSACTION_PAGES) {
-          truncatedFields.push(`refundTransactions:${refund.id}`);
-          break;
-        }
-
-        refundTransactionConnection = await fetchMoreRefundTransactions({
-          admin,
-          refundId: refund.id,
-          cursor: refundTransactionCursor,
-        });
-        refund.transactions = {
-          pageInfo: refundTransactionConnection?.pageInfo ?? null,
-          edges: [
-            ...(refund.transactions?.edges ?? []),
-            ...(refundTransactionConnection?.edges ?? []),
-          ],
-        };
-        refundTransactionCursor = getEndCursor(refundTransactionConnection);
-        refundTransactionPages += 1;
-      }
-
-      transactions.push(...getConnectionNodes(refund.transactions));
+      transactions.push(...(refund.transactions ?? []));
     }
   } catch (error) {
     financialDataComplete = false;
@@ -4185,26 +3974,10 @@ async function syncOrdersPage({
                   : ""
               }
               transactions(first: 50) {
-                pageInfo {
-                  hasNextPage
-                  endCursor
-                }
-                edges {
-                  node {
-                    ${getFinancialQueryTransactionFields(includeStaffAttribution)}
-                  }
-                }
+                ${getFinancialQueryTransactionFields(includeStaffAttribution)}
               }
-              refunds(first: 50) {
-                pageInfo {
-                  hasNextPage
-                  endCursor
-                }
-                edges {
-                  node {
-                    ${getFinancialQueryRefundFields()}
-                  }
-                }
+              refunds {
+                ${getFinancialQueryRefundFields()}
               }
               subtotalPriceSet {
                 shopMoney {
@@ -4528,26 +4301,10 @@ async function fetchOrderByIdForSync({
                 : ""
             }
             transactions(first: 50) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  ${getFinancialQueryTransactionFields(includeStaffAttribution)}
-                }
-              }
+              ${getFinancialQueryTransactionFields(includeStaffAttribution)}
             }
-            refunds(first: 50) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              edges {
-                node {
-                  ${getFinancialQueryRefundFields()}
-                }
-              }
+            refunds {
+              ${getFinancialQueryRefundFields()}
             }
             subtotalPriceSet {
               shopMoney {
