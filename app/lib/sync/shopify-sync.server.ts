@@ -163,6 +163,21 @@ type VariantCostRow = {
   unit_cost: number | null;
 };
 
+type MoneySet = {
+  shopMoney?: {
+    amount?: string | null;
+    currencyCode?: string | null;
+  } | null;
+};
+
+type ShopifyConnection<T> = {
+  pageInfo?: {
+    hasNextPage: boolean;
+    endCursor?: string | null;
+  } | null;
+  edges?: Array<{ node: T }>;
+};
+
 type OrderLineItemNode = {
   id: string;
   title: string;
@@ -179,12 +194,13 @@ type OrderLineItemNode = {
       vendor?: string | null;
     } | null;
   } | null;
-  discountedUnitPriceSet?: {
-    shopMoney?: {
-      amount: string;
-      currencyCode: string;
-    } | null;
-  } | null;
+  originalUnitPriceSet?: MoneySet | null;
+  discountedUnitPriceSet?: MoneySet | null;
+  discountedTotalSet?: MoneySet | null;
+  totalDiscountSet?: MoneySet | null;
+  taxLines?: Array<{
+    priceSet?: MoneySet | null;
+  }> | null;
 };
 
 type StaffMemberNode = {
@@ -207,7 +223,29 @@ type OrderTransactionNode = {
   id: string;
   kind?: string | null;
   status?: string | null;
+  gateway?: string | null;
+  processedAt?: string | null;
+  amountSet?: MoneySet | null;
+  parentTransaction?: {
+    id: string;
+  } | null;
   user?: StaffMemberAttributionNode | null;
+};
+
+type RefundLineItemNode = {
+  quantity: number;
+  subtotalSet?: MoneySet | null;
+  lineItem?: {
+    id: string;
+  } | null;
+};
+
+type RefundNode = {
+  id: string;
+  createdAt?: string | null;
+  totalRefundedSet?: MoneySet | null;
+  refundLineItems?: ShopifyConnection<RefundLineItemNode> | null;
+  transactions?: ShopifyConnection<OrderTransactionNode> | null;
 };
 
 type StaffSource =
@@ -228,28 +266,36 @@ type OrderNode = {
   name: string;
   createdAt: string;
   updatedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
+  currencyCode?: string | null;
   displayFinancialStatus?: string | null;
   staffMember?: StaffMemberAttributionNode | null;
-  transactions?: OrderTransactionNode[] | null;
-  totalPriceSet?: {
-    shopMoney?: {
-      amount: string;
-      currencyCode: string;
-    } | null;
-  } | null;
+  transactions?: ShopifyConnection<OrderTransactionNode> | null;
+  refunds?: ShopifyConnection<RefundNode> | null;
+  subtotalPriceSet?: MoneySet | null;
+  currentSubtotalPriceSet?: MoneySet | null;
+  totalDiscountsSet?: MoneySet | null;
+  currentTotalDiscountsSet?: MoneySet | null;
+  totalTaxSet?: MoneySet | null;
+  currentTotalTaxSet?: MoneySet | null;
+  totalShippingPriceSet?: MoneySet | null;
+  currentShippingPriceSet?: MoneySet | null;
+  totalPriceSet?: MoneySet | null;
+  currentTotalPriceSet?: MoneySet | null;
+  totalRefundedSet?: MoneySet | null;
   retailLocation?: {
     id: string;
     name: string;
   } | null;
-  lineItems: {
-    pageInfo: {
-      hasNextPage: boolean;
-      endCursor?: string | null;
-    };
-    edges: {
-      node: OrderLineItemNode;
-    }[];
-  };
+  lineItems: ShopifyConnection<OrderLineItemNode>;
+};
+
+type ExistingOrderLineCostAtSaleRow = {
+  shopify_line_item_id: string;
+  cost_at_sale: number | null;
+  cost_at_sale_source: string | null;
+  cost_at_sale_captured_at: string | null;
 };
 
 export type SyncSource =
@@ -265,6 +311,9 @@ const PRODUCT_VARIANT_SYNC_PAGE_SIZE = 50;
 const ORDERS_PAGE_SIZE = 50;
 const LINE_ITEMS_PAGE_SIZE = 100;
 const UPSERT_BATCH_SIZE = 500;
+const MAX_TRANSACTION_PAGES = 10;
+const MAX_REFUND_PAGES = 10;
+const MAX_REFUND_LINE_ITEM_PAGES = 20;
 
 export type ProductsSyncBatchProgress = {
   cursor?: string | null;
@@ -307,6 +356,162 @@ function chunkArray<T>(items: T[], size: number): T[][] {
 function getNumericAmount(value?: string | null) {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) ? amount : 0;
+}
+
+function getShopMoneyAmount(moneySet?: MoneySet | null) {
+  return getNumericAmount(moneySet?.shopMoney?.amount);
+}
+
+function getShopMoneyCurrency(moneySet?: MoneySet | null) {
+  return moneySet?.shopMoney?.currencyCode ?? null;
+}
+
+function getConnectionNodes<T>(connection?: ShopifyConnection<T> | null) {
+  return connection?.edges?.map((edge) => edge.node) ?? [];
+}
+
+function hasNextPage<T>(connection?: ShopifyConnection<T> | null) {
+  return Boolean(connection?.pageInfo?.hasNextPage);
+}
+
+function getEndCursor<T>(connection?: ShopifyConnection<T> | null) {
+  return connection?.pageInfo?.endCursor ?? null;
+}
+
+function getFinancialQueryLineItemFields(includeStaffAttribution: boolean) {
+  return `
+    id
+    title
+    quantity
+    sku
+    ${
+      includeStaffAttribution
+        ? `
+    staffMember {
+      id
+      name
+      email
+    }
+    `
+        : ""
+    }
+    variant {
+      id
+      title
+      sku
+      product {
+        id
+        title
+        vendor
+      }
+    }
+    originalUnitPriceSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+    }
+    discountedUnitPriceSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+    }
+    discountedTotalSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+    }
+    totalDiscountSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+    }
+    taxLines {
+      priceSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+      }
+    }
+  `;
+}
+
+function getFinancialQueryTransactionFields(includeUser = false) {
+  return `
+    id
+    kind
+    status
+    gateway
+    processedAt
+    amountSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+    }
+    parentTransaction {
+      id
+    }
+    ${
+      includeUser
+        ? `
+    user {
+      id
+      name
+      email
+    }
+    `
+        : ""
+    }
+  `;
+}
+
+function getFinancialQueryRefundFields() {
+  return `
+    id
+    createdAt
+    totalRefundedSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+    }
+    refundLineItems(first: 100) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      edges {
+        node {
+          quantity
+          subtotalSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
+          lineItem {
+            id
+          }
+        }
+      }
+    }
+    transactions(first: 50) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      edges {
+        node {
+          ${getFinancialQueryTransactionFields()}
+        }
+      }
+    }
+  `;
 }
 
 function parseNullableNumericAmount(value?: string | null) {
@@ -486,9 +691,9 @@ function getStaffAttribution(
 }
 
 function getTransactionStaffAttribution(
-  transactions?: OrderTransactionNode[] | null,
+  transactions?: ShopifyConnection<OrderTransactionNode> | null,
 ): StaffAttribution {
-  const transactionUser = transactions?.find(
+  const transactionUser = getConnectionNodes(transactions).find(
     (transaction) => transaction.user?.id,
   )?.user;
 
@@ -604,6 +809,224 @@ function getCostInfo({
     cogs: null,
     grossProfit: null,
     costSource: "MISSING_COST",
+  };
+}
+
+function getLineTaxTotal(lineItem: OrderLineItemNode) {
+  return (lineItem.taxLines ?? []).reduce(
+    (sum, taxLine) => sum + getShopMoneyAmount(taxLine.priceSet),
+    0,
+  );
+}
+
+function getRefundLineItemSummaries(refunds: RefundNode[]) {
+  const byLineItemId = new Map<
+    string,
+    {
+      returnedQuantity: number;
+      returns: number;
+      refundedAmount: number;
+    }
+  >();
+
+  for (const refund of refunds) {
+    for (const refundLineItem of getConnectionNodes(refund.refundLineItems)) {
+      const lineItemId = refundLineItem.lineItem?.id;
+
+      if (!lineItemId) continue;
+
+      const existing = byLineItemId.get(lineItemId) ?? {
+        returnedQuantity: 0,
+        returns: 0,
+        refundedAmount: 0,
+      };
+      const subtotal = getShopMoneyAmount(refundLineItem.subtotalSet);
+
+      existing.returnedQuantity += Number(refundLineItem.quantity ?? 0);
+      existing.returns += subtotal;
+      existing.refundedAmount += subtotal;
+      byLineItemId.set(lineItemId, existing);
+    }
+  }
+
+  return byLineItemId;
+}
+
+function isSuccessfulTransaction(transaction: OrderTransactionNode) {
+  return transaction.status?.toUpperCase() === "SUCCESS";
+}
+
+function getTransactionsTotal(transactions: OrderTransactionNode[]) {
+  return transactions.reduce((sum, transaction) => {
+    if (!isSuccessfulTransaction(transaction)) return sum;
+
+    const kind = transaction.kind?.toUpperCase();
+    const amount = getShopMoneyAmount(transaction.amountSet);
+
+    if (kind === "SALE" || kind === "CAPTURE") {
+      return sum + amount;
+    }
+
+    if (kind === "REFUND") {
+      return sum - amount;
+    }
+
+    return sum;
+  }, 0);
+}
+
+function getOrderRefundTotal({
+  order,
+  transactions,
+}: {
+  order: OrderNode;
+  transactions: OrderTransactionNode[];
+}) {
+  const transactionRefunds = transactions
+    .filter(
+      (transaction) =>
+        isSuccessfulTransaction(transaction) &&
+        transaction.kind?.toUpperCase() === "REFUND",
+    )
+    .reduce(
+      (sum, transaction) => sum + getShopMoneyAmount(transaction.amountSet),
+      0,
+    );
+
+  return transactionRefunds || getShopMoneyAmount(order.totalRefundedSet);
+}
+
+function getOrderCurrency(order: OrderNode) {
+  return (
+    order.currencyCode ??
+    getShopMoneyCurrency(order.currentTotalPriceSet) ??
+    getShopMoneyCurrency(order.totalPriceSet) ??
+    getShopMoneyCurrency(order.currentSubtotalPriceSet) ??
+    getShopMoneyCurrency(order.subtotalPriceSet)
+  );
+}
+
+function getLineFinancials({
+  lineItem,
+  refundLineItemsByLineItemId,
+}: {
+  lineItem: OrderLineItemNode;
+  refundLineItemsByLineItemId: Map<
+    string,
+    {
+      returnedQuantity: number;
+      returns: number;
+      refundedAmount: number;
+    }
+  >;
+}) {
+  const grossSales =
+    getShopMoneyAmount(lineItem.originalUnitPriceSet) *
+    Number(lineItem.quantity ?? 0);
+  const discountedTotal = getShopMoneyAmount(lineItem.discountedTotalSet);
+  const explicitDiscounts = getShopMoneyAmount(lineItem.totalDiscountSet);
+  const discounts =
+    explicitDiscounts || Math.max(0, grossSales - discountedTotal);
+  const refundSummary = refundLineItemsByLineItemId.get(lineItem.id) ?? {
+    returnedQuantity: 0,
+    returns: 0,
+    refundedAmount: 0,
+  };
+  const returns = refundSummary.returns;
+  const netSales = grossSales - discounts - returns;
+
+  return {
+    grossSales,
+    discounts,
+    returns,
+    netSales,
+    refundedAmount: refundSummary.refundedAmount || returns,
+    taxes: getLineTaxTotal(lineItem),
+    returnedQuantity: refundSummary.returnedQuantity,
+  };
+}
+
+function getOrderFinancials({
+  order,
+  allLineItems,
+  refunds,
+  transactions,
+  financialDataComplete,
+  financialIncompleteReason,
+  truncatedFields,
+}: {
+  order: OrderNode;
+  allLineItems: OrderLineItemNode[];
+  refunds: RefundNode[];
+  transactions: OrderTransactionNode[];
+  financialDataComplete: boolean;
+  financialIncompleteReason: string | null;
+  truncatedFields: string[];
+}) {
+  const refundLineItemsByLineItemId = getRefundLineItemSummaries(refunds);
+  const lineFinancials = allLineItems.map((lineItem) =>
+    getLineFinancials({ lineItem, refundLineItemsByLineItemId }),
+  );
+  const lineGrossSales = lineFinancials.reduce(
+    (sum, financials) => sum + financials.grossSales,
+    0,
+  );
+  const lineDiscounts = lineFinancials.reduce(
+    (sum, financials) => sum + financials.discounts,
+    0,
+  );
+  const returns = lineFinancials.reduce(
+    (sum, financials) => sum + financials.returns,
+    0,
+  );
+  const grossSales =
+    getShopMoneyAmount(order.subtotalPriceSet) || lineGrossSales;
+  const discounts =
+    getShopMoneyAmount(order.totalDiscountsSet) || lineDiscounts;
+  const netSales = grossSales - discounts - returns;
+  const taxes = getShopMoneyAmount(order.currentTotalTaxSet);
+  const shipping = getShopMoneyAmount(order.currentShippingPriceSet);
+
+  return {
+    lineFinancialsByLineItemId: new Map(
+      allLineItems.map((lineItem, index) => [
+        lineItem.id,
+        lineFinancials[index],
+      ]),
+    ),
+    orderFinancials: {
+      currencyCode: getOrderCurrency(order),
+      grossSales,
+      discounts,
+      returns,
+      netSales,
+      refunds: getOrderRefundTotal({ order, transactions }),
+      taxes,
+      shipping,
+      totalSales: netSales + taxes + shipping,
+      transactionsTotal: getTransactionsTotal(transactions),
+      financialDataComplete,
+      financialIncompleteReason,
+      financialPayload: {
+        truncated: !financialDataComplete,
+        truncatedFields,
+        sourceTotals: {
+          subtotalPriceSet: order.subtotalPriceSet ?? null,
+          currentSubtotalPriceSet: order.currentSubtotalPriceSet ?? null,
+          totalDiscountsSet: order.totalDiscountsSet ?? null,
+          currentTotalDiscountsSet: order.currentTotalDiscountsSet ?? null,
+          totalTaxSet: order.totalTaxSet ?? null,
+          currentTotalTaxSet: order.currentTotalTaxSet ?? null,
+          totalShippingPriceSet: order.totalShippingPriceSet ?? null,
+          currentShippingPriceSet: order.currentShippingPriceSet ?? null,
+          totalPriceSet: order.totalPriceSet ?? null,
+          currentTotalPriceSet: order.currentTotalPriceSet ?? null,
+          totalRefundedSet: order.totalRefundedSet ?? null,
+        },
+        refunds,
+        transactions,
+      },
+    },
   };
 }
 
@@ -1549,12 +1972,14 @@ async function getAllLineItemsForOrder({
   order: OrderNode;
   includeStaffAttribution?: boolean;
 }) {
-  const allLineItems = [...order.lineItems.edges.map((edge) => edge.node)];
+  const allLineItems = [
+    ...(order.lineItems.edges?.map((edge) => edge.node) ?? []),
+  ];
 
-  let cursor = order.lineItems.pageInfo.endCursor ?? null;
-  let hasNextPage = order.lineItems.pageInfo.hasNextPage;
+  let cursor = getEndCursor(order.lineItems);
+  let lineItemsHasNextPage = hasNextPage(order.lineItems);
 
-  while (hasNextPage && cursor) {
+  while (lineItemsHasNextPage && cursor) {
     const response = await admin.graphql(
       `#graphql
         query getMoreOrderLineItems($orderId: ID!, $cursor: String) {
@@ -1567,37 +1992,7 @@ async function getAllLineItemsForOrder({
                 }
                 edges {
                   node {
-                    id
-                    title
-                    quantity
-                    sku
-                    ${
-                      includeStaffAttribution
-                        ? `
-                    staffMember {
-                      id
-                      name
-                      email
-                    }
-                    `
-                        : ""
-                    }
-                    variant {
-                      id
-                      title
-                      sku
-                      product {
-                        id
-                        title
-                        vendor
-                      }
-                    }
-                    discountedUnitPriceSet {
-                      shopMoney {
-                        amount
-                        currencyCode
-                      }
-                    }
+                    ${getFinancialQueryLineItemFields(includeStaffAttribution)}
                   }
                 }
               }
@@ -1630,8 +2025,8 @@ async function getAllLineItemsForOrder({
       ...lineItems.edges.map((edge: { node: OrderLineItemNode }) => edge.node),
     );
 
-    hasNextPage = lineItems.pageInfo.hasNextPage;
-    cursor = lineItems.pageInfo.endCursor;
+    lineItemsHasNextPage = Boolean(lineItems.pageInfo?.hasNextPage);
+    cursor = lineItems.pageInfo?.endCursor ?? null;
   }
 
   return allLineItems;
@@ -3127,6 +3522,397 @@ async function getVariantCostMaps({
   };
 }
 
+async function getExistingOrderLineCostAtSaleMap({
+  supabase,
+  shop,
+  lineItemIds,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  lineItemIds: string[];
+}) {
+  const uniqueLineItemIds = Array.from(new Set(lineItemIds)).filter(Boolean);
+  const existingCosts = new Map<string, ExistingOrderLineCostAtSaleRow>();
+
+  for (const batch of chunkArray(
+    uniqueLineItemIds,
+    SUPABASE_LOOKUP_BATCH_SIZE,
+  )) {
+    const { data, error } = await supabase
+      .from("order_lines")
+      .select(
+        "shopify_line_item_id, cost_at_sale, cost_at_sale_source, cost_at_sale_captured_at",
+      )
+      .eq("shop_domain", shop)
+      .in("shopify_line_item_id", batch);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    for (const row of (data ?? []) as ExistingOrderLineCostAtSaleRow[]) {
+      existingCosts.set(row.shopify_line_item_id, row);
+    }
+  }
+
+  return existingCosts;
+}
+
+async function upsertOrderTransactions({
+  supabase,
+  shop,
+  orderId,
+  transactions,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  orderId: string;
+  transactions: OrderTransactionNode[];
+}) {
+  if (transactions.length === 0) return;
+
+  await upsertInBatches({
+    supabase,
+    table: "order_transactions",
+    rows: transactions.map((transaction) => ({
+      shop_domain: shop,
+      shopify_order_id: orderId,
+      shopify_transaction_id: transaction.id,
+      kind: transaction.kind ?? null,
+      status: transaction.status ?? null,
+      gateway: transaction.gateway ?? null,
+      processed_at: transaction.processedAt ?? null,
+      amount: getShopMoneyAmount(transaction.amountSet),
+      currency_code: getShopMoneyCurrency(transaction.amountSet),
+      parent_transaction_id: transaction.parentTransaction?.id ?? null,
+      updated_at: new Date().toISOString(),
+    })),
+    onConflict: "shop_domain,shopify_transaction_id",
+  });
+}
+
+async function fetchMoreOrderTransactions({
+  admin,
+  orderId,
+  cursor,
+}: {
+  admin: ShopifyAdminClient;
+  orderId: string;
+  cursor: string | null;
+}) {
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getMoreOrderTransactions($orderId: ID!, $cursor: String) {
+        node(id: $orderId) {
+          ... on Order {
+            transactions(first: 50, after: $cursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  ${getFinancialQueryTransactionFields()}
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getMoreOrderTransactions",
+    variables: {
+      orderId,
+      cursor,
+    },
+  });
+
+  return ((
+    data.data as {
+      node?: { transactions?: ShopifyConnection<OrderTransactionNode> };
+    }
+  )?.node?.transactions ??
+    null) as ShopifyConnection<OrderTransactionNode> | null;
+}
+
+async function fetchMoreRefunds({
+  admin,
+  orderId,
+  cursor,
+}: {
+  admin: ShopifyAdminClient;
+  orderId: string;
+  cursor: string | null;
+}) {
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getMoreOrderRefunds($orderId: ID!, $cursor: String) {
+        node(id: $orderId) {
+          ... on Order {
+            refunds(first: 50, after: $cursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  ${getFinancialQueryRefundFields()}
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getMoreOrderRefunds",
+    variables: {
+      orderId,
+      cursor,
+    },
+  });
+
+  return ((data.data as { node?: { refunds?: ShopifyConnection<RefundNode> } })
+    ?.node?.refunds ?? null) as ShopifyConnection<RefundNode> | null;
+}
+
+async function fetchMoreRefundLineItems({
+  admin,
+  refundId,
+  cursor,
+}: {
+  admin: ShopifyAdminClient;
+  refundId: string;
+  cursor: string | null;
+}) {
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getMoreRefundLineItems($refundId: ID!, $cursor: String) {
+        node(id: $refundId) {
+          ... on Refund {
+            refundLineItems(first: 100, after: $cursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  quantity
+                  subtotalSet {
+                    shopMoney {
+                      amount
+                      currencyCode
+                    }
+                  }
+                  lineItem {
+                    id
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getMoreRefundLineItems",
+    variables: {
+      refundId,
+      cursor,
+    },
+  });
+
+  return ((
+    data.data as {
+      node?: { refundLineItems?: ShopifyConnection<RefundLineItemNode> };
+    }
+  )?.node?.refundLineItems ??
+    null) as ShopifyConnection<RefundLineItemNode> | null;
+}
+
+async function fetchMoreRefundTransactions({
+  admin,
+  refundId,
+  cursor,
+}: {
+  admin: ShopifyAdminClient;
+  refundId: string;
+  cursor: string | null;
+}) {
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getMoreRefundTransactions($refundId: ID!, $cursor: String) {
+        node(id: $refundId) {
+          ... on Refund {
+            transactions(first: 50, after: $cursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  ${getFinancialQueryTransactionFields()}
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getMoreRefundTransactions",
+    variables: {
+      refundId,
+      cursor,
+    },
+  });
+
+  return ((
+    data.data as {
+      node?: { transactions?: ShopifyConnection<OrderTransactionNode> };
+    }
+  )?.node?.transactions ??
+    null) as ShopifyConnection<OrderTransactionNode> | null;
+}
+
+async function getCompleteFinancialDetails({
+  admin,
+  order,
+}: {
+  admin: ShopifyAdminClient;
+  order: OrderNode;
+}) {
+  const truncatedFields: string[] = [];
+  let financialDataComplete = true;
+  let financialIncompleteReason: string | null = null;
+  const transactions = [...getConnectionNodes(order.transactions)];
+  const refunds = [...getConnectionNodes(order.refunds)];
+
+  try {
+    let transactionConnection = order.transactions ?? null;
+    let transactionCursor = getEndCursor(transactionConnection);
+    let transactionPages = 1;
+
+    while (hasNextPage(transactionConnection) && transactionCursor) {
+      if (transactionPages >= MAX_TRANSACTION_PAGES) {
+        truncatedFields.push("transactions");
+        break;
+      }
+
+      transactionConnection = await fetchMoreOrderTransactions({
+        admin,
+        orderId: order.id,
+        cursor: transactionCursor,
+      });
+      transactions.push(...getConnectionNodes(transactionConnection));
+      transactionCursor = getEndCursor(transactionConnection);
+      transactionPages += 1;
+    }
+
+    let refundConnection = order.refunds ?? null;
+    let refundCursor = getEndCursor(refundConnection);
+    let refundPages = 1;
+
+    while (hasNextPage(refundConnection) && refundCursor) {
+      if (refundPages >= MAX_REFUND_PAGES) {
+        truncatedFields.push("refunds");
+        break;
+      }
+
+      refundConnection = await fetchMoreRefunds({
+        admin,
+        orderId: order.id,
+        cursor: refundCursor,
+      });
+      refunds.push(...getConnectionNodes(refundConnection));
+      refundCursor = getEndCursor(refundConnection);
+      refundPages += 1;
+    }
+
+    for (const refund of refunds) {
+      let refundLineConnection = refund.refundLineItems ?? null;
+      let refundLineCursor = getEndCursor(refundLineConnection);
+      let refundLinePages = 1;
+
+      while (hasNextPage(refundLineConnection) && refundLineCursor) {
+        if (refundLinePages >= MAX_REFUND_LINE_ITEM_PAGES) {
+          truncatedFields.push(`refundLineItems:${refund.id}`);
+          break;
+        }
+
+        refundLineConnection = await fetchMoreRefundLineItems({
+          admin,
+          refundId: refund.id,
+          cursor: refundLineCursor,
+        });
+        refund.refundLineItems = {
+          pageInfo: refundLineConnection?.pageInfo ?? null,
+          edges: [
+            ...(refund.refundLineItems?.edges ?? []),
+            ...(refundLineConnection?.edges ?? []),
+          ],
+        };
+        refundLineCursor = getEndCursor(refundLineConnection);
+        refundLinePages += 1;
+      }
+
+      let refundTransactionConnection = refund.transactions ?? null;
+      let refundTransactionCursor = getEndCursor(refundTransactionConnection);
+      let refundTransactionPages = 1;
+
+      while (
+        hasNextPage(refundTransactionConnection) &&
+        refundTransactionCursor
+      ) {
+        if (refundTransactionPages >= MAX_TRANSACTION_PAGES) {
+          truncatedFields.push(`refundTransactions:${refund.id}`);
+          break;
+        }
+
+        refundTransactionConnection = await fetchMoreRefundTransactions({
+          admin,
+          refundId: refund.id,
+          cursor: refundTransactionCursor,
+        });
+        refund.transactions = {
+          pageInfo: refundTransactionConnection?.pageInfo ?? null,
+          edges: [
+            ...(refund.transactions?.edges ?? []),
+            ...(refundTransactionConnection?.edges ?? []),
+          ],
+        };
+        refundTransactionCursor = getEndCursor(refundTransactionConnection);
+        refundTransactionPages += 1;
+      }
+
+      transactions.push(...getConnectionNodes(refund.transactions));
+    }
+  } catch (error) {
+    financialDataComplete = false;
+    financialIncompleteReason =
+      error instanceof Error ? error.message : String(error);
+    truncatedFields.push("financial_pagination");
+  }
+
+  if (truncatedFields.length > 0) {
+    financialDataComplete = false;
+    financialIncompleteReason ??= `Financial data truncated: ${truncatedFields.join(", ")}`;
+  }
+
+  return {
+    transactions: Array.from(
+      new Map(
+        transactions.map((transaction) => [transaction.id, transaction]),
+      ).values(),
+    ),
+    refunds,
+    financialDataComplete,
+    financialIncompleteReason,
+    truncatedFields,
+  };
+}
+
 async function upsertOrderNodes({
   admin,
   shop,
@@ -3146,37 +3932,84 @@ async function upsertOrderNodes({
     supabase,
     shop,
   });
-  const orderRows = orders.map((order) => {
-    const orderStaff = includeStaffAttribution
-      ? getOrderStaffAttribution(order)
-      : getStaffAttribution(null);
+  const orderLineItemsByOrderId = new Map<string, OrderLineItemNode[]>();
+  const allLineItemIds: string[] = [];
 
-    return {
-      shop_domain: shop,
-      shopify_order_id: order.id,
-      order_name: order.name,
-      created_at_shopify: order.createdAt,
-      financial_status: order.displayFinancialStatus ?? null,
-      retail_location_id: order.retailLocation?.id ?? null,
-      retail_location_name: order.retailLocation?.name ?? null,
-      total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
-      staff_member_id: orderStaff.staffMemberId,
-      staff_member_name: orderStaff.staffMemberName,
-      staff_member_email: orderStaff.staffMemberEmail,
-      staff_source: orderStaff.staffSource,
-      updated_at: new Date().toISOString(),
-    };
-  });
+  for (const order of orders) {
+    const allLineItems = await getAllLineItemsForOrder({
+      admin,
+      order,
+      includeStaffAttribution,
+    });
+
+    orderLineItemsByOrderId.set(order.id, allLineItems);
+    allLineItemIds.push(...allLineItems.map((lineItem) => lineItem.id));
+  }
+
+  const existingCostAtSaleByLineItemId =
+    await getExistingOrderLineCostAtSaleMap({
+      supabase,
+      shop,
+      lineItemIds: allLineItemIds,
+    });
+  const orderRows: Record<string, unknown>[] = [];
   const orderLineRows: Record<string, unknown>[] = [];
+  const transactionRowsByOrderId = new Map<string, OrderTransactionNode[]>();
 
   for (const order of orders) {
     const orderStaff = includeStaffAttribution
       ? getOrderStaffAttribution(order)
       : getStaffAttribution(null);
-    const allLineItems = await getAllLineItemsForOrder({
-      admin,
+    const allLineItems = orderLineItemsByOrderId.get(order.id) ?? [];
+    const {
+      transactions,
+      refunds,
+      financialDataComplete,
+      financialIncompleteReason,
+      truncatedFields,
+    } = await getCompleteFinancialDetails({ admin, order });
+    const { lineFinancialsByLineItemId, orderFinancials } = getOrderFinancials({
       order,
-      includeStaffAttribution,
+      allLineItems,
+      refunds,
+      transactions,
+      financialDataComplete,
+      financialIncompleteReason,
+      truncatedFields,
+    });
+
+    transactionRowsByOrderId.set(order.id, transactions);
+
+    orderRows.push({
+      shop_domain: shop,
+      shopify_order_id: order.id,
+      order_name: order.name,
+      created_at_shopify: order.createdAt,
+      shopify_updated_at: order.updatedAt ?? null,
+      cancelled_at: order.cancelledAt ?? null,
+      cancel_reason: order.cancelReason ?? null,
+      financial_status: order.displayFinancialStatus ?? null,
+      retail_location_id: order.retailLocation?.id ?? null,
+      retail_location_name: order.retailLocation?.name ?? null,
+      total_price: getNumericAmount(order.totalPriceSet?.shopMoney?.amount),
+      currency_code: orderFinancials.currencyCode,
+      gross_sales: orderFinancials.grossSales,
+      discounts: orderFinancials.discounts,
+      returns: orderFinancials.returns,
+      net_sales: orderFinancials.netSales,
+      refunds: orderFinancials.refunds,
+      taxes: orderFinancials.taxes,
+      shipping: orderFinancials.shipping,
+      total_sales: orderFinancials.totalSales,
+      transactions_total: orderFinancials.transactionsTotal,
+      financial_data_complete: orderFinancials.financialDataComplete,
+      financial_incomplete_reason: orderFinancials.financialIncompleteReason,
+      financial_payload: orderFinancials.financialPayload,
+      staff_member_id: orderStaff.staffMemberId,
+      staff_member_name: orderStaff.staffMemberName,
+      staff_member_email: orderStaff.staffMemberEmail,
+      staff_source: orderStaff.staffSource,
+      updated_at: new Date().toISOString(),
     });
 
     for (const lineItem of allLineItems) {
@@ -3199,6 +4032,15 @@ async function upsertOrderNodes({
         ? getStaffAttribution(lineItem.staffMember, "line_item_staff")
         : getStaffAttribution(null);
       const staffAttribution = lineStaff.staffMemberId ? lineStaff : orderStaff;
+      const lineFinancials = lineFinancialsByLineItemId.get(lineItem.id);
+      const existingCostAtSale = existingCostAtSaleByLineItemId.get(
+        lineItem.id,
+      );
+      const shouldCaptureCostAtSale = existingCostAtSale?.cost_at_sale == null;
+      const costAtSaleCapturedAt =
+        shouldCaptureCostAtSale && costInfo.unitCost !== null
+          ? new Date().toISOString()
+          : (existingCostAtSale?.cost_at_sale_captured_at ?? null);
 
       orderLineRows.push({
         shop_domain: shop,
@@ -3221,6 +4063,20 @@ async function upsertOrderNodes({
         cogs: costInfo.cogs,
         gross_profit: costInfo.grossProfit,
         cost_source: costInfo.costSource,
+        gross_sales: lineFinancials?.grossSales ?? null,
+        discounts: lineFinancials?.discounts ?? null,
+        returns: lineFinancials?.returns ?? null,
+        net_sales: lineFinancials?.netSales ?? null,
+        refunded_amount: lineFinancials?.refundedAmount ?? null,
+        taxes: lineFinancials?.taxes ?? null,
+        returned_quantity: lineFinancials?.returnedQuantity ?? null,
+        cost_at_sale: shouldCaptureCostAtSale
+          ? costInfo.unitCost
+          : existingCostAtSale.cost_at_sale,
+        cost_at_sale_source: shouldCaptureCostAtSale
+          ? costInfo.costSource
+          : existingCostAtSale.cost_at_sale_source,
+        cost_at_sale_captured_at: costAtSaleCapturedAt,
         staff_member_id: staffAttribution.staffMemberId,
         staff_member_name: staffAttribution.staffMemberName,
         staff_member_email: staffAttribution.staffMemberEmail,
@@ -3257,6 +4113,15 @@ async function upsertOrderNodes({
     rows: orderLineRows,
     onConflict: "shop_domain,shopify_line_item_id",
   });
+
+  for (const [orderId, transactions] of transactionRowsByOrderId.entries()) {
+    await upsertOrderTransactions({
+      supabase,
+      shop,
+      orderId,
+      transactions,
+    });
+  }
 
   return {
     ordersSynced: orderRows.length,
@@ -3304,6 +4169,9 @@ async function syncOrdersPage({
               name
               createdAt
               updatedAt
+              cancelledAt
+              cancelReason
+              currencyCode
               displayFinancialStatus
               ${
                 includeStaffAttribution
@@ -3313,20 +4181,92 @@ async function syncOrdersPage({
                 name
                 email
               }
-              transactions(first: 10) {
-                id
-                kind
-                status
-                user {
-                  id
-                  name
-                  email
-                }
-              }
               `
                   : ""
               }
+              transactions(first: 50) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
+                    ${getFinancialQueryTransactionFields(includeStaffAttribution)}
+                  }
+                }
+              }
+              refunds(first: 50) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                edges {
+                  node {
+                    ${getFinancialQueryRefundFields()}
+                  }
+                }
+              }
+              subtotalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              currentSubtotalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalDiscountsSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              currentTotalDiscountsSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalTaxSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              currentTotalTaxSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalShippingPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              currentShippingPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
               totalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              currentTotalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalRefundedSet {
                 shopMoney {
                   amount
                   currencyCode
@@ -3343,37 +4283,7 @@ async function syncOrdersPage({
                 }
                 edges {
                   node {
-                    id
-                    title
-                    quantity
-                    sku
-                    ${
-                      includeStaffAttribution
-                        ? `
-                    staffMember {
-                      id
-                      name
-                      email
-                    }
-                    `
-                        : ""
-                    }
-                    variant {
-                      id
-                      title
-                      sku
-                      product {
-                        id
-                        title
-                        vendor
-                      }
-                    }
-                    discountedUnitPriceSet {
-                      shopMoney {
-                        amount
-                        currencyCode
-                      }
-                    }
+                    ${getFinancialQueryLineItemFields(includeStaffAttribution)}
                   }
                 }
               }
@@ -3601,6 +4511,10 @@ async function fetchOrderByIdForSync({
             id
             name
             createdAt
+            updatedAt
+            cancelledAt
+            cancelReason
+            currencyCode
             displayFinancialStatus
             ${
               includeStaffAttribution
@@ -3610,20 +4524,92 @@ async function fetchOrderByIdForSync({
               name
               email
             }
-            transactions(first: 10) {
-              id
-              kind
-              status
-              user {
-                id
-                name
-                email
-              }
-            }
             `
                 : ""
             }
+            transactions(first: 50) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  ${getFinancialQueryTransactionFields(includeStaffAttribution)}
+                }
+              }
+            }
+            refunds(first: 50) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  ${getFinancialQueryRefundFields()}
+                }
+              }
+            }
+            subtotalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            currentSubtotalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            totalDiscountsSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            currentTotalDiscountsSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            totalTaxSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            currentTotalTaxSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            totalShippingPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            currentShippingPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
             totalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            currentTotalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            totalRefundedSet {
               shopMoney {
                 amount
                 currencyCode
@@ -3640,37 +4626,7 @@ async function fetchOrderByIdForSync({
               }
               edges {
                 node {
-                  id
-                  title
-                  quantity
-                  sku
-                  ${
-                    includeStaffAttribution
-                      ? `
-                  staffMember {
-                    id
-                    name
-                    email
-                  }
-                  `
-                      : ""
-                  }
-                  variant {
-                    id
-                    title
-                    sku
-                    product {
-                      id
-                      title
-                      vendor
-                    }
-                  }
-                  discountedUnitPriceSet {
-                    shopMoney {
-                      amount
-                      currencyCode
-                    }
-                  }
+                  ${getFinancialQueryLineItemFields(includeStaffAttribution)}
                 }
               }
             }
