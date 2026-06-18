@@ -245,7 +245,7 @@ type RefundNode = {
   createdAt?: string | null;
   totalRefundedSet?: MoneySet | null;
   refundLineItems?: ShopifyConnection<RefundLineItemNode> | null;
-  transactions?: OrderTransactionNode[] | null;
+  transactions?: ShopifyConnection<OrderTransactionNode> | null;
 };
 
 type StaffSource =
@@ -311,6 +311,7 @@ const PRODUCT_VARIANT_SYNC_PAGE_SIZE = 50;
 const ORDERS_PAGE_SIZE = 50;
 const LINE_ITEMS_PAGE_SIZE = 100;
 const UPSERT_BATCH_SIZE = 500;
+const MAX_REFUND_TRANSACTION_PAGES = 10;
 const MAX_REFUND_LINE_ITEM_PAGES = 20;
 
 export type ProductsSyncBatchProgress = {
@@ -366,6 +367,10 @@ function getShopMoneyCurrency(moneySet?: MoneySet | null) {
 
 function getConnectionNodes<T>(connection?: ShopifyConnection<T> | null) {
   return connection?.edges?.map((edge) => edge.node) ?? [];
+}
+
+function getArrayItems<T>(value?: T[] | null) {
+  return Array.isArray(value) ? value : [];
 }
 
 function hasNextPage<T>(connection?: ShopifyConnection<T> | null) {
@@ -498,8 +503,16 @@ function getFinancialQueryRefundFields() {
         }
       }
     }
-    transactions {
-      ${getFinancialQueryTransactionFields()}
+    transactions(first: 50) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      edges {
+        node {
+          ${getFinancialQueryTransactionFields()}
+        }
+      }
     }
   `;
 }
@@ -941,6 +954,8 @@ function getOrderFinancials({
   allLineItems,
   refunds,
   transactions,
+  orderTransactionsReturned,
+  orderRefundsReturned,
   financialDataComplete,
   financialIncompleteReason,
   truncatedFields,
@@ -949,6 +964,8 @@ function getOrderFinancials({
   allLineItems: OrderLineItemNode[];
   refunds: RefundNode[];
   transactions: OrderTransactionNode[];
+  orderTransactionsReturned: number;
+  orderRefundsReturned: number;
   financialDataComplete: boolean;
   financialIncompleteReason: string | null;
   truncatedFields: string[];
@@ -1000,6 +1017,10 @@ function getOrderFinancials({
       financialPayload: {
         truncated: !financialDataComplete,
         truncatedFields,
+        orderTransactionsLimit: 50,
+        orderRefundsLimit: 50,
+        orderTransactionsReturned,
+        orderRefundsReturned,
         sourceTotals: {
           subtotalPriceSet: order.subtotalPriceSet ?? null,
           currentSubtotalPriceSet: order.currentSubtotalPriceSet ?? null,
@@ -3635,6 +3656,51 @@ async function fetchMoreRefundLineItems({
     null) as ShopifyConnection<RefundLineItemNode> | null;
 }
 
+async function fetchMoreRefundTransactions({
+  admin,
+  refundId,
+  cursor,
+}: {
+  admin: ShopifyAdminClient;
+  refundId: string;
+  cursor: string | null;
+}) {
+  const data = await executeShopifyGraphql({
+    admin,
+    query: `#graphql
+      query getMoreRefundTransactions($refundId: ID!, $cursor: String) {
+        node(id: $refundId) {
+          ... on Refund {
+            transactions(first: 50, after: $cursor) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              edges {
+                node {
+                  ${getFinancialQueryTransactionFields()}
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    queryName: "getMoreRefundTransactions",
+    variables: {
+      refundId,
+      cursor,
+    },
+  });
+
+  return ((
+    data.data as {
+      node?: { transactions?: ShopifyConnection<OrderTransactionNode> };
+    }
+  )?.node?.transactions ??
+    null) as ShopifyConnection<OrderTransactionNode> | null;
+}
+
 async function getCompleteFinancialDetails({
   admin,
   order,
@@ -3645,8 +3711,9 @@ async function getCompleteFinancialDetails({
   const truncatedFields: string[] = [];
   let financialDataComplete = true;
   let financialIncompleteReason: string | null = null;
-  const transactions = [...(order.transactions ?? [])];
-  const refunds = [...(order.refunds ?? [])];
+  const orderTransactions = getArrayItems(order.transactions);
+  const refunds = getArrayItems(order.refunds);
+  const transactions = [...orderTransactions];
 
   try {
     for (const refund of refunds) {
@@ -3675,7 +3742,37 @@ async function getCompleteFinancialDetails({
         refundLineCursor = getEndCursor(refundLineConnection);
         refundLinePages += 1;
       }
-      transactions.push(...(refund.transactions ?? []));
+
+      let refundTransactionConnection = refund.transactions ?? null;
+      let refundTransactionCursor = getEndCursor(refundTransactionConnection);
+      let refundTransactionPages = 1;
+
+      while (
+        hasNextPage(refundTransactionConnection) &&
+        refundTransactionCursor
+      ) {
+        if (refundTransactionPages >= MAX_REFUND_TRANSACTION_PAGES) {
+          truncatedFields.push(`refundTransactions:${refund.id}`);
+          break;
+        }
+
+        refundTransactionConnection = await fetchMoreRefundTransactions({
+          admin,
+          refundId: refund.id,
+          cursor: refundTransactionCursor,
+        });
+        refund.transactions = {
+          pageInfo: refundTransactionConnection?.pageInfo ?? null,
+          edges: [
+            ...(refund.transactions?.edges ?? []),
+            ...(refundTransactionConnection?.edges ?? []),
+          ],
+        };
+        refundTransactionCursor = getEndCursor(refundTransactionConnection);
+        refundTransactionPages += 1;
+      }
+
+      transactions.push(...getConnectionNodes(refund.transactions));
     }
   } catch (error) {
     financialDataComplete = false;
@@ -3696,6 +3793,8 @@ async function getCompleteFinancialDetails({
       ).values(),
     ),
     refunds,
+    orderTransactionsReturned: orderTransactions.length,
+    orderRefundsReturned: refunds.length,
     financialDataComplete,
     financialIncompleteReason,
     truncatedFields,
@@ -3753,6 +3852,8 @@ async function upsertOrderNodes({
     const {
       transactions,
       refunds,
+      orderTransactionsReturned,
+      orderRefundsReturned,
       financialDataComplete,
       financialIncompleteReason,
       truncatedFields,
@@ -3762,6 +3863,8 @@ async function upsertOrderNodes({
       allLineItems,
       refunds,
       transactions,
+      orderTransactionsReturned,
+      orderRefundsReturned,
       financialDataComplete,
       financialIncompleteReason,
       truncatedFields,
