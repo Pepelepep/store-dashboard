@@ -35,6 +35,10 @@ type PermissionRow = {
   can_manage: boolean | null;
 };
 
+type StaffMemberEmailRow = {
+  email: string | null;
+};
+
 function parseCsvEnv(value: string | undefined) {
   return new Set(
     (value ?? "")
@@ -65,6 +69,10 @@ function decodeJwtPayload(token: string | null) {
   }
 }
 
+function normalizeEmail(email: string | null | undefined) {
+  return email?.trim().toLowerCase() || null;
+}
+
 export function getCurrentUserIdentity({
   request,
   session,
@@ -76,7 +84,7 @@ export function getCurrentUserIdentity({
   const idTokenPayload = decodeJwtPayload(url.searchParams.get("id_token"));
   const associatedUser = session.onlineAccessInfo?.associated_user;
 
-  const email = associatedUser?.email?.trim().toLowerCase() || null;
+  const email = normalizeEmail(associatedUser?.email);
   const shopifyUserId =
     associatedUser?.id !== undefined && associatedUser?.id !== null
       ? String(associatedUser.id)
@@ -92,8 +100,33 @@ export function getCurrentUserIdentity({
     shop: session.shop,
     email,
     shopifyUserId,
-    displayName: nameParts.join(" ") || email || shopifyUserId || "Unknown user",
+    displayName:
+      nameParts.join(" ") || email || shopifyUserId || "Unknown user",
   };
+}
+
+async function getStaffMemberEmail({
+  identity,
+  session,
+  supabase,
+}: {
+  identity: CurrentUserIdentity;
+  session: ShopifySessionLike;
+  supabase: SupabaseClient;
+}) {
+  if (identity.email || !identity.shopifyUserId) return null;
+
+  const { data, error } = await supabase
+    .from("staff_members")
+    .select("email")
+    .eq("shop_domain", session.shop)
+    .eq("shopify_staff_id", identity.shopifyUserId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (error) throw new Response(error.message, { status: 500 });
+
+  return normalizeEmail((data as StaffMemberEmailRow | null)?.email);
 }
 
 export async function getPermissionContext({
@@ -106,6 +139,18 @@ export async function getPermissionContext({
   supabase: SupabaseClient;
 }): Promise<PermissionContext> {
   const identity = getCurrentUserIdentity({ request, session });
+  const staffMemberEmail = await getStaffMemberEmail({
+    identity,
+    session,
+    supabase,
+  });
+  if (staffMemberEmail) {
+    identity.email = staffMemberEmail;
+    if (identity.displayName === identity.shopifyUserId) {
+      identity.displayName = staffMemberEmail;
+    }
+  }
+
   const adminEmails = parseCsvEnv(process.env.ADMIN_EMAILS);
   const adminShopifyUserIds = parseCsvEnv(process.env.ADMIN_SHOPIFY_USER_IDS);
 
@@ -114,7 +159,9 @@ export async function getPermissionContext({
   if (identity.email || identity.shopifyUserId) {
     let query = supabase
       .from("user_location_access")
-      .select("user_email, shopify_user_id, shopify_location_id, role, can_view, can_manage")
+      .select(
+        "user_email, shopify_user_id, shopify_location_id, role, can_view, can_manage",
+      )
       .eq("shop_domain", session.shop);
 
     if (identity.email) {
@@ -140,7 +187,12 @@ export async function getPermissionContext({
   const allowedLocationIds = new Set<string>();
   for (const row of rows) {
     if (!row.shopify_location_id || row.shopify_location_id === "*") continue;
-    if (row.can_view || row.can_manage || row.role === "manager" || row.role === "viewer") {
+    if (
+      row.can_view ||
+      row.can_manage ||
+      row.role === "manager" ||
+      row.role === "viewer"
+    ) {
       allowedLocationIds.add(row.shopify_location_id);
     }
   }
