@@ -1,6 +1,7 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
 import type { SyncBatchResult, SyncSource } from "./shopify-sync.server";
 import {
+  syncFinancialBackfill30dBatch,
   syncInventoryBatch,
   syncLocations,
   syncOrdersBatch,
@@ -25,6 +26,7 @@ export type SyncJobType =
   | "inventory"
   | "orders"
   | "orders_reconciliation_48h"
+  | "financial_backfill_30d"
   | "full";
 
 export type SyncJobStatus =
@@ -54,6 +56,8 @@ const fullSyncSteps = ["locations", "products", "inventory", "orders"];
 const STALE_ACTIVE_JOB_MS = 30 * 60 * 1000;
 const ORDERS_RECONCILIATION_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ORDERS_RECONCILIATION_WINDOW_MS = 48 * 60 * 60 * 1000;
+const FINANCIAL_BACKFILL_RECENT_SUCCESS_MS = 24 * 60 * 60 * 1000;
+const FINANCIAL_BACKFILL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getInitialStep(jobType: SyncJobType) {
   return jobType === "full" ? fullSyncSteps[0] : jobType;
@@ -113,6 +117,7 @@ function getSyncJobSource(job: SyncJobRow): SyncSource {
   return source === "cron" ||
     source === "webhook" ||
     source === "local_manual_refresh" ||
+    source === "manual_internal" ||
     source === "manual_admin_sync"
     ? source
     : "manual_admin_sync";
@@ -125,6 +130,21 @@ function getOrdersReconciliationWindow(now = new Date()) {
     ).toISOString(),
     windowEnd: now.toISOString(),
   };
+}
+
+function getFinancialBackfillWindow(now = new Date()) {
+  return {
+    windowStart: new Date(
+      now.getTime() - FINANCIAL_BACKFILL_WINDOW_MS,
+    ).toISOString(),
+    windowEnd: now.toISOString(),
+  };
+}
+
+function getProgressForStep(job: SyncJobRow, step: string) {
+  return (
+    ((job.progress ?? {})[step] as Record<string, unknown> | undefined) ?? {}
+  );
 }
 
 function isStaleActiveJob(job: SyncJobRow) {
@@ -214,10 +234,27 @@ async function getActiveBlockingJob({
 }) {
   const blockingTypes =
     jobType === "full"
-      ? [...fullSyncSteps, "full", "orders_reconciliation_48h"]
+      ? [
+          ...fullSyncSteps,
+          "full",
+          "orders_reconciliation_48h",
+          "financial_backfill_30d",
+        ]
       : jobType === "orders_reconciliation_48h"
-        ? ["orders_reconciliation_48h", "orders", "full"]
-        : [jobType, "full"];
+        ? [
+            "orders_reconciliation_48h",
+            "orders",
+            "full",
+            "financial_backfill_30d",
+          ]
+        : jobType === "financial_backfill_30d"
+          ? [
+              "financial_backfill_30d",
+              "orders_reconciliation_48h",
+              "orders",
+              "full",
+            ]
+          : [jobType, "full"];
 
   await cancelStaleActiveJobs({
     supabase,
@@ -414,6 +451,141 @@ export async function getRunnableOrdersReconciliation48hJobs({
   return (data ?? []) as SyncJobRow[];
 }
 
+export async function enqueueFinancialBackfill30dJob({
+  supabase,
+  shop,
+  force = false,
+  now = new Date(),
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  force?: boolean;
+  now?: Date;
+}) {
+  const activeJob = await getActiveBlockingJob({
+    supabase,
+    shop,
+    jobType: "financial_backfill_30d",
+  });
+
+  if (activeJob) {
+    return {
+      job: activeJob,
+      enqueued: false,
+      skippedReason: "active_job",
+    };
+  }
+
+  if (!force) {
+    const recentSince = new Date(
+      now.getTime() - FINANCIAL_BACKFILL_RECENT_SUCCESS_MS,
+    ).toISOString();
+    const { data: recentSuccessfulJobs, error: recentSuccessfulError } =
+      await supabase
+        .from("sync_jobs")
+        .select("*")
+        .eq("shop_domain", shop)
+        .eq("job_type", "financial_backfill_30d")
+        .eq("status", "success")
+        .gte("finished_at", recentSince)
+        .order("finished_at", { ascending: false })
+        .limit(1);
+
+    if (recentSuccessfulError) {
+      throw new Error(recentSuccessfulError.message);
+    }
+
+    const recentSuccessfulJob = ((recentSuccessfulJobs ?? [])[0] ??
+      null) as SyncJobRow | null;
+
+    if (recentSuccessfulJob) {
+      return {
+        job: recentSuccessfulJob,
+        enqueued: false,
+        skippedReason: "recent_success",
+      };
+    }
+
+    const { data: recentSuccessfulRuns, error: recentSuccessfulRunsError } =
+      await supabase
+        .from("sync_runs")
+        .select("id")
+        .eq("shop_domain", shop)
+        .eq("sync_type", "financial_backfill_30d")
+        .eq("status", "success")
+        .gte("finished_at", recentSince)
+        .order("finished_at", { ascending: false })
+        .limit(1);
+
+    if (recentSuccessfulRunsError) {
+      throw new Error(recentSuccessfulRunsError.message);
+    }
+
+    if ((recentSuccessfulRuns ?? []).length > 0) {
+      return {
+        job: null,
+        enqueued: false,
+        skippedReason: "recent_success",
+      };
+    }
+  }
+
+  const window = getFinancialBackfillWindow(now);
+  const { data, error } = await supabase
+    .from("sync_jobs")
+    .insert({
+      shop_domain: shop,
+      job_type: "financial_backfill_30d",
+      status: "pending",
+      current_step: "financial_backfill_30d",
+      progress: {
+        financial_backfill_30d: window,
+      },
+      counts: {},
+      details: {
+        source: "manual_internal",
+        window,
+      },
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return {
+    job: data as SyncJobRow,
+    enqueued: true,
+    skippedReason: null,
+  };
+}
+
+export async function getRunnableFinancialBackfill30dJobs({
+  supabase,
+  shop,
+  limit,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  limit: number;
+}) {
+  const { data, error } = await supabase
+    .from("sync_jobs")
+    .select("*")
+    .eq("shop_domain", shop)
+    .eq("job_type", "financial_backfill_30d")
+    .in("status", ["pending", "running"])
+    .order("updated_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []) as SyncJobRow[];
+}
+
 async function markStepCompleted({
   supabase,
   shop,
@@ -518,6 +690,23 @@ async function runStepBatch({
       supabase,
       progress:
         (progress?.orders_reconciliation_48h as
+          | {
+              cursor?: string | null;
+              windowStart?: string | null;
+              windowEnd?: string | null;
+              staffAttributionAvailable?: boolean;
+            }
+          | undefined) ?? null,
+    });
+  }
+
+  if (step === "financial_backfill_30d") {
+    return syncFinancialBackfill30dBatch({
+      admin,
+      shop,
+      supabase,
+      progress:
+        (progress?.financial_backfill_30d as
           | {
               cursor?: string | null;
               windowStart?: string | null;
@@ -670,6 +859,7 @@ export async function processManualSyncJobBatch({
         progress: nextProgress,
         counts: nextCounts,
         details: {
+          ...(claimedJob.details ?? {}),
           lastBatch: {
             step,
             done: batchResult.done,
@@ -709,6 +899,7 @@ export async function processManualSyncJobBatch({
         jobId: claimedJob.id,
         batchJobType: claimedJob.job_type,
         failedStep: step,
+        ...getProgressForStep(claimedJob, step),
         errorDetails,
       },
     });
@@ -720,6 +911,7 @@ export async function processManualSyncJobBatch({
         current_step: step,
         error_message: errorMessage,
         details: {
+          ...(claimedJob.details ?? {}),
           failedStep: step,
           errorDetails,
         },

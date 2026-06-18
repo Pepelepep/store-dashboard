@@ -301,6 +301,7 @@ type ExistingOrderLineCostAtSaleRow = {
 export type SyncSource =
   | "manual_admin_sync"
   | "local_manual_refresh"
+  | "manual_internal"
   | "webhook"
   | "cron";
 
@@ -330,6 +331,13 @@ export type OrdersSyncBatchProgress = {
 };
 
 export type OrdersReconciliation48hBatchProgress = {
+  cursor?: string | null;
+  windowStart?: string | null;
+  windowEnd?: string | null;
+  staffAttributionAvailable?: boolean;
+};
+
+export type FinancialBackfill30dBatchProgress = {
   cursor?: string | null;
   windowStart?: string | null;
   windowEnd?: string | null;
@@ -4018,6 +4026,10 @@ async function upsertOrderNodes({
   return {
     ordersSynced: orderRows.length,
     orderLinesSynced: orderLineRows.length,
+    transactionsSynced: Array.from(transactionRowsByOrderId.values()).reduce(
+      (sum, transactions) => sum + transactions.length,
+      0,
+    ),
   };
 }
 
@@ -4201,6 +4213,7 @@ async function syncOrdersPage({
   return {
     ordersSynced: counts.ordersSynced,
     orderLinesSynced: counts.orderLinesSynced,
+    transactionsSynced: counts.transactionsSynced,
     hasNextPage: Boolean(ordersConnection?.pageInfo?.hasNextPage),
     cursor: ordersConnection?.pageInfo?.endCursor ?? null,
   };
@@ -4273,11 +4286,22 @@ export async function syncOrdersBatch({
     counts: {
       ordersSynced: pageResult.ordersSynced,
       orderLinesSynced: pageResult.orderLinesSynced,
+      transactionsSynced: pageResult.transactionsSynced,
       pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
       orderLinesCogsRecomputed,
       staffAttributionAvailable,
       staffAttributionError,
     },
+  };
+}
+
+function getFinancialBackfill30dWindow() {
+  const end = new Date();
+  const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  return {
+    windowStart: start.toISOString(),
+    windowEnd: end.toISOString(),
   };
 }
 
@@ -4359,6 +4383,84 @@ export async function syncOrdersReconciliation48hBatch({
     counts: {
       ordersSynced: pageResult.ordersSynced,
       orderLinesSynced: pageResult.orderLinesSynced,
+      transactionsSynced: pageResult.transactionsSynced,
+      pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
+      orderLinesCogsRecomputed: 0,
+      staffAttributionAvailable,
+      staffAttributionError,
+      windowStart,
+      windowEnd,
+    },
+  };
+}
+
+export async function syncFinancialBackfill30dBatch({
+  admin,
+  shop,
+  supabase,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  progress?: FinancialBackfill30dBatchProgress | null;
+}): Promise<SyncBatchResult> {
+  const fallbackWindow = getFinancialBackfill30dWindow();
+  const windowStart = progress?.windowStart ?? fallbackWindow.windowStart;
+  const windowEnd = progress?.windowEnd ?? fallbackWindow.windowEnd;
+  const orderQuery = buildOrderQuery({
+    startDate: windowStart,
+    endDate: windowEnd,
+    dateField: "created_at",
+  });
+  const cursor = progress?.cursor ?? null;
+  let staffAttributionAvailable = progress?.staffAttributionAvailable !== false;
+  let staffAttributionError: string | null = null;
+  let pageResult: Awaited<ReturnType<typeof syncOrdersPage>>;
+
+  try {
+    pageResult = await syncOrdersPage({
+      admin,
+      shop,
+      supabase,
+      cursor,
+      orderQuery,
+      sortKey: "CREATED_AT",
+      includeStaffAttribution: staffAttributionAvailable,
+    });
+  } catch (error) {
+    if (!staffAttributionAvailable) {
+      throw error;
+    }
+
+    staffAttributionAvailable = false;
+    staffAttributionError =
+      error instanceof Error ? error.message : String(error);
+    pageResult = await syncOrdersPage({
+      admin,
+      shop,
+      supabase,
+      cursor,
+      orderQuery,
+      sortKey: "CREATED_AT",
+      includeStaffAttribution: false,
+    });
+  }
+
+  const isDone = !pageResult.hasNextPage || pageResult.ordersSynced === 0;
+
+  return {
+    done: isDone,
+    progress: {
+      cursor: pageResult.hasNextPage ? pageResult.cursor : null,
+      windowStart,
+      windowEnd,
+      staffAttributionAvailable,
+    },
+    counts: {
+      ordersSynced: pageResult.ordersSynced,
+      orderLinesSynced: pageResult.orderLinesSynced,
+      transactionsSynced: pageResult.transactionsSynced,
       pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
       orderLinesCogsRecomputed: 0,
       staffAttributionAvailable,
