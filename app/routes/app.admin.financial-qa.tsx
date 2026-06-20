@@ -4,6 +4,18 @@ import { Form, useLoaderData } from "react-router";
 import { HelperText } from "../components/ui/HelperText";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import {
+  daysBetween,
+  formatStoreDateTime,
+  getLineNetSales,
+  getTodayStoreDate,
+  nextDate,
+  storeDateToUtcIso,
+} from "../lib/dashboard/dashboard-metrics";
+import type {
+  LocationRow,
+  OrderLineDbRow,
+} from "../lib/dashboard/dashboard-types";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { authenticate } from "../shopify.server";
 
@@ -29,7 +41,9 @@ type OrderFinancialRow = {
 
 type QaOrderRow = OrderFinancialRow & {
   legacyRevenue: number;
-  legacyNewDelta: number | null;
+  lineLevelNetSales: number;
+  orderLineDelta: number | null;
+  legacyLineDelta: number;
   flags: string[];
 };
 
@@ -47,13 +61,22 @@ type Summary = {
   totalSales: number;
   transactionsTotal: number;
   legacyRevenue: number;
-  legacyNewDelta: number;
+  orderLevelNetSales: number;
+  lineLevelNetSales: number;
+  orderLineDelta: number;
+  legacyLineDelta: number;
 };
 
 type LoaderData = {
   shop: string;
   startDate: string;
   endDate: string;
+  selectedDays: number;
+  selectedLocationId: string;
+  locations: Array<{
+    shopify_location_id: string;
+    name: string;
+  }>;
   filters: {
     incompleteOnly: boolean;
     refundsOrReturnsOnly: boolean;
@@ -65,6 +88,7 @@ type LoaderData = {
 };
 
 const PAGE_SIZE = 1000;
+const ALL_LOCATIONS_VALUE = "__all__";
 const MONEY_FIELDS: Array<keyof OrderFinancialRow> = [
   "gross_sales",
   "discounts",
@@ -77,29 +101,13 @@ const MONEY_FIELDS: Array<keyof OrderFinancialRow> = [
   "transactions_total",
 ];
 
-function toDateInputValue(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
 function getDefaultDateRange() {
-  const end = new Date();
-  const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const today = getTodayStoreDate();
 
   return {
-    startDate: toDateInputValue(start),
-    endDate: toDateInputValue(end),
+    startDate: today,
+    endDate: today,
   };
-}
-
-function nextDate(date: string) {
-  const value = new Date(`${date}T00:00:00.000Z`);
-  value.setUTCDate(value.getUTCDate() + 1);
-
-  return toDateInputValue(value);
-}
-
-function toUtcIso(date: string) {
-  return `${date}T00:00:00.000Z`;
 }
 
 function numberValue(value: number | null | undefined) {
@@ -110,19 +118,37 @@ function hasMissingFinancials(order: OrderFinancialRow) {
   return MONEY_FIELDS.some((field) => order[field] === null);
 }
 
-function getLegacyNewDelta({
-  legacyRevenue,
-  netSales,
+function getOrderLineDelta({
+  orderLevelNetSales,
+  lineLevelNetSales,
 }: {
-  legacyRevenue: number;
-  netSales: number | null;
+  orderLevelNetSales: number | null;
+  lineLevelNetSales: number;
 }) {
-  if (netSales === null) return null;
+  if (orderLevelNetSales === null) return null;
 
-  return legacyRevenue - Number(netSales);
+  return Number(orderLevelNetSales) - lineLevelNetSales;
 }
 
-function getFlags(order: OrderFinancialRow, legacyNewDelta: number | null) {
+function getLegacyLineDelta({
+  legacyRevenue,
+  lineLevelNetSales,
+}: {
+  legacyRevenue: number;
+  lineLevelNetSales: number;
+}) {
+  return legacyRevenue - lineLevelNetSales;
+}
+
+function getFlags({
+  order,
+  orderLineDelta,
+  legacyLineDelta,
+}: {
+  order: OrderFinancialRow;
+  orderLineDelta: number | null;
+  legacyLineDelta: number;
+}) {
   const flags: string[] = [];
 
   if (hasMissingFinancials(order)) flags.push("missing_financials");
@@ -131,33 +157,26 @@ function getFlags(order: OrderFinancialRow, legacyNewDelta: number | null) {
   }
   if (numberValue(order.refunds) > 0) flags.push("has_refund");
   if (numberValue(order.returns) > 0) flags.push("has_return");
-  if (legacyNewDelta !== null && Math.abs(legacyNewDelta) > 0.01) {
-    flags.push("legacy_new_delta");
+  if (orderLineDelta !== null && Math.abs(orderLineDelta) > 0.01) {
+    flags.push("order_line_delta");
+  }
+  if (Math.abs(legacyLineDelta) > 0.01) {
+    flags.push("legacy_line_delta");
   }
 
   return flags;
 }
 
-function chunkArray<T>(items: T[], size: number) {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
 async function fetchAllOrders({
   supabase,
   shop,
-  startDate,
-  endDate,
+  startDateUtc,
+  endExclusiveUtc,
 }: {
   supabase: SupabaseAdminClient;
   shop: string;
-  startDate: string;
-  endDate: string;
+  startDateUtc: string;
+  endExclusiveUtc: string;
 }) {
   const rows: OrderFinancialRow[] = [];
   const errors: string[] = [];
@@ -171,8 +190,8 @@ async function fetchAllOrders({
         "shopify_order_id, order_name, created_at_shopify, financial_status, gross_sales, discounts, returns, net_sales, refunds, taxes, shipping, total_sales, transactions_total, financial_data_complete, financial_incomplete_reason",
       )
       .eq("shop_domain", shop)
-      .gte("created_at_shopify", toUtcIso(startDate))
-      .lt("created_at_shopify", toUtcIso(nextDate(endDate)))
+      .gte("created_at_shopify", startDateUtc)
+      .lt("created_at_shopify", endExclusiveUtc)
       .order("created_at_shopify", { ascending: false })
       .range(from, to);
 
@@ -192,43 +211,77 @@ async function fetchAllOrders({
   return { rows, errors };
 }
 
-async function getLegacyRevenueByOrder({
+async function fetchOrderLines({
   supabase,
   shop,
-  orderIds,
+  startDateUtc,
+  endExclusiveUtc,
+  selectedLocationId,
 }: {
   supabase: SupabaseAdminClient;
   shop: string;
-  orderIds: string[];
+  startDateUtc: string;
+  endExclusiveUtc: string;
+  selectedLocationId: string;
 }) {
-  const revenueByOrder = new Map<string, number>();
+  const rows: OrderLineDbRow[] = [];
   const errors: string[] = [];
+  let from = 0;
 
-  for (const batch of chunkArray(orderIds, 500)) {
-    const { data, error } = await supabase
+  for (;;) {
+    const to = from + PAGE_SIZE - 1;
+    let query = supabase
       .from("order_lines")
-      .select("shopify_order_id, revenue")
+      .select("*")
       .eq("shop_domain", shop)
-      .in("shopify_order_id", batch);
+      .gte("created_at_shopify", startDateUtc)
+      .lt("created_at_shopify", endExclusiveUtc)
+      .order("created_at_shopify", { ascending: false })
+      .range(from, to);
+
+    if (selectedLocationId !== ALL_LOCATIONS_VALUE) {
+      query = query.eq("retail_location_id", selectedLocationId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       errors.push(error.message);
-      continue;
+      break;
     }
 
-    for (const row of (data ?? []) as Array<{
-      shopify_order_id: string;
-      revenue: number | null;
-    }>) {
-      revenueByOrder.set(
-        row.shopify_order_id,
-        (revenueByOrder.get(row.shopify_order_id) ?? 0) +
-          numberValue(row.revenue),
-      );
-    }
+    const page = (data ?? []) as unknown as OrderLineDbRow[];
+    rows.push(...page);
+
+    if (page.length < PAGE_SIZE) break;
+
+    from += PAGE_SIZE;
   }
 
-  return { revenueByOrder, errors };
+  return { rows, errors };
+}
+
+function getLineSummariesByOrder(orderLines: OrderLineDbRow[]) {
+  const summaries = new Map<
+    string,
+    {
+      legacyRevenue: number;
+      lineLevelNetSales: number;
+    }
+  >();
+
+  for (const row of orderLines) {
+    const current = summaries.get(row.shopify_order_id) ?? {
+      legacyRevenue: 0,
+      lineLevelNetSales: 0,
+    };
+
+    current.legacyRevenue += numberValue(row.revenue);
+    current.lineLevelNetSales += getLineNetSales(row);
+    summaries.set(row.shopify_order_id, current);
+  }
+
+  return summaries;
 }
 
 function getSummary(orders: QaOrderRow[]): Summary {
@@ -252,7 +305,10 @@ function getSummary(orders: QaOrderRow[]): Summary {
       summary.totalSales += numberValue(order.total_sales);
       summary.transactionsTotal += numberValue(order.transactions_total);
       summary.legacyRevenue += order.legacyRevenue;
-      summary.legacyNewDelta += order.legacyNewDelta ?? 0;
+      summary.orderLevelNetSales += numberValue(order.net_sales);
+      summary.lineLevelNetSales += order.lineLevelNetSales;
+      summary.orderLineDelta += order.orderLineDelta ?? 0;
+      summary.legacyLineDelta += order.legacyLineDelta;
 
       return summary;
     },
@@ -270,7 +326,10 @@ function getSummary(orders: QaOrderRow[]): Summary {
       totalSales: 0,
       transactionsTotal: 0,
       legacyRevenue: 0,
-      legacyNewDelta: 0,
+      orderLevelNetSales: 0,
+      lineLevelNetSales: 0,
+      orderLineDelta: 0,
+      legacyLineDelta: 0,
     },
   );
 }
@@ -283,13 +342,7 @@ function formatCurrency(value: number | null | undefined) {
 }
 
 function formatDateTime(value: string) {
-  return new Intl.DateTimeFormat("fr-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
+  return formatStoreDateTime(value);
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -301,6 +354,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const defaults = getDefaultDateRange();
   const startDate = url.searchParams.get("startDate") || defaults.startDate;
   const endDate = url.searchParams.get("endDate") || defaults.endDate;
+  const endExclusive = nextDate(endDate);
+  const startDateUtc = storeDateToUtcIso(startDate);
+  const endExclusiveUtc = storeDateToUtcIso(endExclusive);
+  const selectedDays = daysBetween(startDate, endExclusive);
   const filters = {
     incompleteOnly: url.searchParams.get("incomplete") === "1",
     refundsOrReturnsOnly: url.searchParams.get("refundsOrReturns") === "1",
@@ -308,37 +365,112 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
   const errors: string[] = [];
 
+  const { data: locationsData, error: locationsError } = await supabase
+    .from("locations")
+    .select("shopify_location_id, name, is_active")
+    .eq("shop_domain", session.shop)
+    .eq("is_active", true)
+    .order("name", { ascending: true });
+
+  if (locationsError) errors.push(locationsError.message);
+
+  const locations = (locationsData ?? []) as LocationRow[];
+  const requestedLocationId = url.searchParams.get("locationId");
+  const selectedLocationId =
+    requestedLocationId === ALL_LOCATIONS_VALUE
+      ? ALL_LOCATIONS_VALUE
+      : (locations.find(
+          (location) => location.shopify_location_id === requestedLocationId,
+        )?.shopify_location_id ??
+        locations[0]?.shopify_location_id ??
+        ALL_LOCATIONS_VALUE);
+
   const ordersResult = await fetchAllOrders({
     supabase,
     shop: session.shop,
-    startDate,
-    endDate,
+    startDateUtc,
+    endExclusiveUtc,
   });
   errors.push(...ordersResult.errors);
 
-  const legacyRevenueResult = await getLegacyRevenueByOrder({
+  const orderLinesResult = await fetchOrderLines({
     supabase,
     shop: session.shop,
-    orderIds: ordersResult.rows.map((order) => order.shopify_order_id),
+    startDateUtc,
+    endExclusiveUtc,
+    selectedLocationId,
   });
-  errors.push(...legacyRevenueResult.errors);
+  errors.push(...orderLinesResult.errors);
 
-  const qaRows = ordersResult.rows.map((order) => {
-    const legacyRevenue =
-      legacyRevenueResult.revenueByOrder.get(order.shopify_order_id) ?? 0;
-    const legacyNewDelta = getLegacyNewDelta({
-      legacyRevenue,
-      netSales: order.net_sales,
+  const lineSummariesByOrder = getLineSummariesByOrder(orderLinesResult.rows);
+  const orderRows =
+    selectedLocationId === ALL_LOCATIONS_VALUE
+      ? ordersResult.rows
+      : ordersResult.rows.filter((order) =>
+          lineSummariesByOrder.has(order.shopify_order_id),
+        );
+
+  const qaRows = orderRows.map((order) => {
+    const lineSummary = lineSummariesByOrder.get(order.shopify_order_id) ?? {
+      legacyRevenue: 0,
+      lineLevelNetSales: 0,
+    };
+    const orderLineDelta = getOrderLineDelta({
+      orderLevelNetSales: order.net_sales,
+      lineLevelNetSales: lineSummary.lineLevelNetSales,
     });
-    const flags = getFlags(order, legacyNewDelta);
+    const legacyLineDelta = getLegacyLineDelta({
+      legacyRevenue: lineSummary.legacyRevenue,
+      lineLevelNetSales: lineSummary.lineLevelNetSales,
+    });
+    const flags = getFlags({
+      order,
+      orderLineDelta,
+      legacyLineDelta,
+    });
 
     return {
       ...order,
-      legacyRevenue,
-      legacyNewDelta,
+      legacyRevenue: lineSummary.legacyRevenue,
+      lineLevelNetSales: lineSummary.lineLevelNetSales,
+      orderLineDelta,
+      legacyLineDelta,
       flags,
     };
   });
+
+  for (const [shopifyOrderId, lineSummary] of lineSummariesByOrder) {
+    if (qaRows.some((order) => order.shopify_order_id === shopifyOrderId)) {
+      continue;
+    }
+
+    const legacyLineDelta = getLegacyLineDelta({
+      legacyRevenue: lineSummary.legacyRevenue,
+      lineLevelNetSales: lineSummary.lineLevelNetSales,
+    });
+    qaRows.push({
+      shopify_order_id: shopifyOrderId,
+      order_name: shopifyOrderId,
+      created_at_shopify: startDateUtc,
+      financial_status: null,
+      gross_sales: null,
+      discounts: null,
+      returns: null,
+      net_sales: null,
+      refunds: null,
+      taxes: null,
+      shipping: null,
+      total_sales: null,
+      transactions_total: null,
+      financial_data_complete: null,
+      financial_incomplete_reason: "Missing order-level financial row",
+      legacyRevenue: lineSummary.legacyRevenue,
+      lineLevelNetSales: lineSummary.lineLevelNetSales,
+      orderLineDelta: null,
+      legacyLineDelta,
+      flags: ["missing_financials"],
+    });
+  }
 
   const filteredOrders = qaRows.filter((order) => {
     if (
@@ -356,7 +488,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       return false;
     }
 
-    if (filters.deltaOnly && !order.flags.includes("legacy_new_delta")) {
+    if (
+      filters.deltaOnly &&
+      !order.flags.includes("order_line_delta") &&
+      !order.flags.includes("legacy_line_delta")
+    ) {
       return false;
     }
 
@@ -367,6 +503,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     startDate,
     endDate,
+    selectedDays,
+    selectedLocationId,
+    locations: locations.map((location) => ({
+      shopify_location_id: location.shopify_location_id,
+      name: location.name,
+    })),
     filters,
     summary: getSummary(filteredOrders),
     orders: filteredOrders,
@@ -407,7 +549,7 @@ function FlagBadge({ flag }: { flag: string }) {
   const variant =
     flag === "missing_financials" || flag === "incomplete_financial_data"
       ? "error"
-      : flag === "legacy_new_delta"
+      : flag === "order_line_delta" || flag === "legacy_line_delta"
         ? "warning"
         : "info";
 
@@ -419,8 +561,24 @@ function FlagBadge({ flag }: { flag: string }) {
 }
 
 export default function FinancialQaPage() {
-  const { shop, startDate, endDate, filters, summary, orders, errors } =
-    useLoaderData<typeof loader>();
+  const {
+    shop,
+    startDate,
+    endDate,
+    selectedDays,
+    selectedLocationId,
+    locations,
+    filters,
+    summary,
+    orders,
+    errors,
+  } = useLoaderData<typeof loader>();
+  const selectedLocationName =
+    selectedLocationId === ALL_LOCATIONS_VALUE
+      ? "All locations"
+      : (locations.find(
+          (location) => location.shopify_location_id === selectedLocationId,
+        )?.name ?? "Unknown location");
 
   return (
     <main
@@ -436,7 +594,8 @@ export default function FinancialQaPage() {
         <header style={{ marginBottom: 24 }}>
           <h1 style={{ margin: 0, fontSize: 32 }}>Financial QA</h1>
           <HelperText>
-            {shop} · Validate order financial fields before dashboard migration.
+            {shop} · Financial QA compares order-level and line-level financial
+            totals. Dashboard V2 uses line-level Net Sales.
           </HelperText>
         </header>
 
@@ -454,12 +613,26 @@ export default function FinancialQaPage() {
             style={{ display: "flex", gap: 16, flexWrap: "wrap" }}
           >
             <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              Start
+              Sale Date Start
               <input name="startDate" type="date" defaultValue={startDate} />
             </label>
             <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              End
+              Sale Date End
               <input name="endDate" type="date" defaultValue={endDate} />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+              Location
+              <select name="locationId" defaultValue={selectedLocationId}>
+                <option value={ALL_LOCATIONS_VALUE}>All locations</option>
+                {locations.map((location) => (
+                  <option
+                    key={location.shopify_location_id}
+                    value={location.shopify_location_id}
+                  >
+                    {location.name}
+                  </option>
+                ))}
+              </select>
             </label>
             <label style={{ display: "flex", gap: 8, alignItems: "end" }}>
               <input
@@ -486,7 +659,7 @@ export default function FinancialQaPage() {
                 value="1"
                 defaultChecked={filters.deltaOnly}
               />
-              Legacy delta
+              Delta only
             </label>
             <button
               type="submit"
@@ -503,6 +676,11 @@ export default function FinancialQaPage() {
               Apply
             </button>
           </Form>
+          <HelperText>
+            Sale Date range uses store timezone. End date is inclusive in the
+            UI. Current comparison: {selectedLocationName}, {selectedDays}{" "}
+            {selectedDays > 1 ? "days" : "day"}.
+          </HelperText>
         </section>
 
         {errors.length > 0 ? (
@@ -551,8 +729,19 @@ export default function FinancialQaPage() {
             value={formatCurrency(summary.returns)}
           />
           <SummaryCard
-            label="Net sales"
-            value={formatCurrency(summary.netSales)}
+            label="Order-level Net Sales"
+            value={formatCurrency(summary.orderLevelNetSales)}
+          />
+          <SummaryCard
+            label="Line-level Net Sales"
+            value={formatCurrency(summary.lineLevelNetSales)}
+          />
+          <SummaryCard
+            label="Order - Line Delta"
+            value={formatCurrency(summary.orderLineDelta)}
+            tone={
+              Math.abs(summary.orderLineDelta) > 0.01 ? "warning" : "neutral"
+            }
           />
           <SummaryCard
             label="Refunds"
@@ -576,10 +765,10 @@ export default function FinancialQaPage() {
             value={formatCurrency(summary.legacyRevenue)}
           />
           <SummaryCard
-            label="Legacy - net sales"
-            value={formatCurrency(summary.legacyNewDelta)}
+            label="Legacy - Line Net Sales"
+            value={formatCurrency(summary.legacyLineDelta)}
             tone={
-              Math.abs(summary.legacyNewDelta) > 0.01 ? "warning" : "neutral"
+              Math.abs(summary.legacyLineDelta) > 0.01 ? "warning" : "neutral"
             }
           />
         </section>
@@ -596,7 +785,7 @@ export default function FinancialQaPage() {
             <table
               style={{
                 borderCollapse: "collapse",
-                minWidth: 1800,
+                minWidth: 2200,
                 width: "100%",
               }}
             >
@@ -609,14 +798,16 @@ export default function FinancialQaPage() {
                     "Gross",
                     "Discounts",
                     "Returns",
-                    "Net",
+                    "Order Net",
+                    "Line Net",
+                    "Order - Line",
                     "Refunds",
                     "Taxes",
                     "Shipping",
                     "Total",
                     "Transactions",
                     "Legacy revenue",
-                    "Delta",
+                    "Legacy - Line",
                     "Complete",
                     "Reason",
                     "Flags",
@@ -672,6 +863,18 @@ export default function FinancialQaPage() {
                     <td
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
                     >
+                      {formatCurrency(order.lineLevelNetSales)}
+                    </td>
+                    <td
+                      style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
+                    >
+                      {order.orderLineDelta === null
+                        ? "-"
+                        : formatCurrency(order.orderLineDelta)}
+                    </td>
+                    <td
+                      style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
+                    >
                       {formatCurrency(order.refunds)}
                     </td>
                     <td
@@ -702,9 +905,7 @@ export default function FinancialQaPage() {
                     <td
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
                     >
-                      {order.legacyNewDelta === null
-                        ? "-"
-                        : formatCurrency(order.legacyNewDelta)}
+                      {formatCurrency(order.legacyLineDelta)}
                     </td>
                     <td
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
@@ -738,7 +939,7 @@ export default function FinancialQaPage() {
                 {orders.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={17}
+                      colSpan={19}
                       style={{ padding: 18, textAlign: "center" }}
                     >
                       No orders match the selected QA filters.
