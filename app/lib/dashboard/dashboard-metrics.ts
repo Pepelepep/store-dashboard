@@ -28,7 +28,20 @@ export function toDashboardNumber(value: number | null | undefined) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function hasAnyV2SalesField(row: OrderLineDbRow | DashboardSalesOrderLineRow) {
+type FinancialMetricLine = {
+  quantity: number;
+  revenue: number;
+  cogs: number | null;
+  gross_sales?: number | null;
+  discounts?: number | null;
+  returns?: number | null;
+  net_sales?: number | null;
+  refunded_amount?: number | null;
+  returned_quantity?: number | null;
+  cost_at_sale?: number | null;
+};
+
+function hasAnyV2SalesField(row: FinancialMetricLine) {
   return (
     row.gross_sales != null ||
     row.discounts != null ||
@@ -37,29 +50,21 @@ function hasAnyV2SalesField(row: OrderLineDbRow | DashboardSalesOrderLineRow) {
   );
 }
 
-export function getLineGrossSales(
-  row: OrderLineDbRow | DashboardSalesOrderLineRow,
-) {
+export function getLineGrossSales(row: FinancialMetricLine) {
   return row.gross_sales === null || row.gross_sales === undefined
     ? toDashboardNumber(row.revenue)
     : toDashboardNumber(row.gross_sales);
 }
 
-export function getLineDiscounts(
-  row: OrderLineDbRow | DashboardSalesOrderLineRow,
-) {
+export function getLineDiscounts(row: FinancialMetricLine) {
   return toDashboardNumber(row.discounts);
 }
 
-export function getLineReturns(
-  row: OrderLineDbRow | DashboardSalesOrderLineRow,
-) {
+export function getLineReturns(row: FinancialMetricLine) {
   return toDashboardNumber(row.returns);
 }
 
-export function getLineNetSales(
-  row: OrderLineDbRow | DashboardSalesOrderLineRow,
-) {
+export function getLineNetSales(row: FinancialMetricLine) {
   if (row.net_sales !== null && row.net_sales !== undefined) {
     return toDashboardNumber(row.net_sales);
   }
@@ -71,21 +76,15 @@ export function getLineNetSales(
   return toDashboardNumber(row.revenue);
 }
 
-export function getLineRefundedAmount(
-  row: OrderLineDbRow | DashboardSalesOrderLineRow,
-) {
+export function getLineRefundedAmount(row: FinancialMetricLine) {
   return toDashboardNumber(row.refunded_amount);
 }
 
-export function getLineReturnedQuantity(
-  row: OrderLineDbRow | DashboardSalesOrderLineRow,
-) {
+export function getLineReturnedQuantity(row: FinancialMetricLine) {
   return toDashboardNumber(row.returned_quantity);
 }
 
-export function getLineCogsV2(
-  row: OrderLineDbRow | DashboardSalesOrderLineRow,
-) {
+export function getLineCogsV2(row: FinancialMetricLine) {
   if (row.cost_at_sale !== null && row.cost_at_sale !== undefined) {
     return (
       toDashboardNumber(row.cost_at_sale) * toDashboardNumber(row.quantity)

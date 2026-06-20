@@ -11,10 +11,17 @@ import {
   formatCurrency,
   formatNumber,
   formatPercent,
+  getLineCogsV2,
+  getLineDiscounts,
+  getLineGrossSales,
+  getLineNetSales,
+  getLineReturnedQuantity,
+  getLineReturns,
   getStaffDisplayLabel,
   getStaffFilterValue,
   getTodayStoreDate,
   getVendorFilterValue,
+  normalizeFinancialMetricsVersion,
   nextDate,
   STORE_TIME_ZONE,
   storeDateToUtcIso,
@@ -22,6 +29,7 @@ import {
 } from "../lib/dashboard/dashboard-metrics";
 import type {
   DashboardFilterOption,
+  FinancialMetricsVersion,
   FixedExpenseDbRow,
   LocationRow,
   OrderLineDbRow,
@@ -32,6 +40,12 @@ type LocationMetricRow = {
   locationId: string;
   locationName: string;
   revenue: number;
+  grossSales?: number;
+  discounts?: number;
+  returns?: number;
+  returnedUnits?: number;
+  netSales?: number;
+  refunds?: number;
   ordersCount: number;
   unitsSold: number;
   cogs: number;
@@ -72,6 +86,12 @@ type LocationsSalesRow = Pick<
   | "quantity"
   | "revenue"
   | "cogs"
+  | "gross_sales"
+  | "discounts"
+  | "returns"
+  | "net_sales"
+  | "returned_quantity"
+  | "cost_at_sale"
 >;
 
 type ActiveLocationDrilldowns = {
@@ -108,11 +128,13 @@ type LoaderData = {
   selectedDays: number;
   period: Period;
   kpis: Omit<LocationMetricRow, "locationId" | "locationName">;
+  financialMetricsVersion: FinancialMetricsVersion;
   locationRows: LocationMetricRow[];
   trendRows: TrendRow[];
   revenueByVendor: RevenueBreakdownRow[];
   revenueByStaff: RevenueBreakdownRow[];
   salesRows: LocationsSalesRow[];
+  refundTransactions: OrderTransactionDbRow[];
   hasGlobalExpenses: boolean;
   errors: string[];
   debugInfo?: Record<string, string | number | boolean | null | string[]>;
@@ -121,6 +143,15 @@ type LoaderData = {
 const ORDER_LINES_PAGE_SIZE = 1000;
 const LOCATION_ORDER_LINES_SELECT =
   "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, staff_member_id, staff_member_name, staff_member_email";
+
+type OrderTransactionDbRow = {
+  shopify_order_id: string;
+  shopify_transaction_id: string;
+  kind: string | null;
+  status: string | null;
+  amount: number | null;
+  processed_at: string | null;
+};
 
 function getTrendLabelStep(rowCount: number) {
   if (rowCount > 120) return 30;
@@ -140,6 +171,7 @@ async function fetchLocationOrderLines({
   endExclusiveUtc,
   selectedLocationIds,
   shouldFilterByLocation,
+  financialMetricsVersion,
 }: {
   supabase: ReturnType<typeof getSupabaseAdminClient>;
   shop: string;
@@ -147,13 +179,16 @@ async function fetchLocationOrderLines({
   endExclusiveUtc: string;
   selectedLocationIds: string[];
   shouldFilterByLocation: boolean;
+  financialMetricsVersion: FinancialMetricsVersion;
 }) {
   const rows: OrderLineDbRow[] = [];
+  const selectColumns =
+    financialMetricsVersion === "v2" ? "*" : LOCATION_ORDER_LINES_SELECT;
 
   for (let from = 0; ; from += ORDER_LINES_PAGE_SIZE) {
     let query = supabase
       .from("order_lines")
-      .select(LOCATION_ORDER_LINES_SELECT)
+      .select(selectColumns)
       .eq("shop_domain", shop)
       .gte("created_at_shopify", startDateUtc)
       .lt("created_at_shopify", endExclusiveUtc);
@@ -168,13 +203,121 @@ async function fetchLocationOrderLines({
 
     if (error) return { data: [], error };
 
-    const pageRows = (data ?? []) as OrderLineDbRow[];
+    const pageRows = (data ?? []) as unknown as OrderLineDbRow[];
     rows.push(...pageRows);
 
     if (pageRows.length < ORDER_LINES_PAGE_SIZE) {
       return { data: rows, error: null };
     }
   }
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+}
+
+function isSuccessfulRefundTransaction(row: OrderTransactionDbRow) {
+  const kind = row.kind?.toUpperCase();
+  const status = row.status?.toUpperCase();
+
+  return kind === "REFUND" && (!status || status === "SUCCESS");
+}
+
+async function fetchRefundTransactionsForOrders({
+  supabase,
+  shop,
+  orderIds,
+  startDateUtc,
+  endExclusiveUtc,
+}: {
+  supabase: ReturnType<typeof getSupabaseAdminClient>;
+  shop: string;
+  orderIds: string[];
+  startDateUtc: string;
+  endExclusiveUtc: string;
+}) {
+  const rows: OrderTransactionDbRow[] = [];
+  const errors: string[] = [];
+
+  for (const batch of chunkArray(orderIds, 500)) {
+    const { data, error } = await supabase
+      .from("order_transactions")
+      .select(
+        "shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
+      )
+      .eq("shop_domain", shop)
+      .gte("processed_at", startDateUtc)
+      .lt("processed_at", endExclusiveUtc)
+      .in("shopify_order_id", batch);
+
+    if (error) {
+      errors.push(error.message);
+      continue;
+    }
+
+    rows.push(
+      ...((data ?? []) as OrderTransactionDbRow[]).filter(
+        isSuccessfulRefundTransaction,
+      ),
+    );
+  }
+
+  return { rows, errors };
+}
+
+function allocateRefundsByLocation({
+  orderLines,
+  refundTransactions,
+}: {
+  orderLines: LocationsSalesRow[];
+  refundTransactions: OrderTransactionDbRow[];
+}) {
+  const orderLocationWeights = new Map<string, Map<string, number>>();
+
+  for (const row of orderLines) {
+    if (!row.shopify_order_id || !row.retail_location_id) continue;
+
+    const locations =
+      orderLocationWeights.get(row.shopify_order_id) ??
+      new Map<string, number>();
+    locations.set(
+      row.retail_location_id,
+      (locations.get(row.retail_location_id) ?? 0) + getLineNetSales(row),
+    );
+    orderLocationWeights.set(row.shopify_order_id, locations);
+  }
+
+  const refundsByLocation = new Map<string, number>();
+
+  for (const transaction of refundTransactions) {
+    const locations = orderLocationWeights.get(transaction.shopify_order_id);
+    if (!locations || locations.size === 0) continue;
+
+    const amount = Number(transaction.amount ?? 0);
+    const totalWeight = Array.from(locations.values()).reduce(
+      (sum, value) => sum + Math.max(0, value),
+      0,
+    );
+
+    for (const [locationId, weight] of locations) {
+      const allocation =
+        totalWeight > 0
+          ? amount * (Math.max(0, weight) / totalWeight)
+          : amount / locations.size;
+      refundsByLocation.set(
+        locationId,
+        (refundsByLocation.get(locationId) ?? 0) + allocation,
+      );
+    }
+  }
+
+  return refundsByLocation;
 }
 
 function summarizeOrderLinesForDebug(orderLines: OrderLineDbRow[]) {
@@ -311,74 +454,6 @@ function filterOrderLines({
   });
 }
 
-type BucketKind = "day" | "month" | "year";
-
-function getBucketKind(rangeDays: number): BucketKind {
-  if (rangeDays <= 45) return "day";
-  if (rangeDays <= 548) return "month";
-  return "year";
-}
-
-function getBucketKey(value: string, bucketKind: BucketKind) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: STORE_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const values = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-  const dateKey = `${values.year}-${values.month}-${values.day}`;
-
-  if (bucketKind === "day") return dateKey;
-  if (bucketKind === "month") return dateKey.slice(0, 7);
-  return dateKey.slice(0, 4);
-}
-
-function buildBucketKeys({
-  startDate,
-  endDate,
-  selectedDays,
-}: {
-  startDate: string;
-  endDate: string;
-  selectedDays: number;
-}) {
-  const bucketKind = getBucketKind(selectedDays);
-  const keys: string[] = [];
-  const seen = new Set<string>();
-  const endExclusiveDate = addDays(parseDateOnlyUtc(endDate), 1);
-
-  for (
-    let current = parseDateOnlyUtc(startDate);
-    current < endExclusiveDate;
-    current = addDays(current, 1)
-  ) {
-    const key =
-      bucketKind === "day"
-        ? formatDateOnlyUtc(current)
-        : bucketKind === "month"
-          ? getMonthKey(current)
-          : getYearKey(current);
-
-    if (!seen.has(key)) {
-      keys.push(key);
-      seen.add(key);
-    }
-  }
-
-  return { bucketKind, keys };
-}
-
 function computeLocationExpenses({
   expenses,
   selectedDays,
@@ -491,21 +566,48 @@ function computeMetrics({
   locations,
   orderLines,
   expensesByLocation,
+  financialMetricsVersion,
+  refundsByLocation = new Map<string, number>(),
 }: {
   locations: LocationRow[];
   orderLines: LocationsSalesRow[];
   expensesByLocation: Map<string, number>;
+  financialMetricsVersion: FinancialMetricsVersion;
+  refundsByLocation?: Map<string, number>;
 }) {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const rows = locations.map((location): LocationMetricRow => {
     const rowsForLocation = orderLines.filter(
       (row) => row.retail_location_id === location.shopify_location_id,
     );
-    const revenue = rowsForLocation.reduce(
-      (sum, row) => sum + Number(row.revenue ?? 0),
-      0,
-    );
+    const grossSales = isFinancialMetricsV2
+      ? rowsForLocation.reduce((sum, row) => sum + getLineGrossSales(row), 0)
+      : undefined;
+    const discounts = isFinancialMetricsV2
+      ? rowsForLocation.reduce((sum, row) => sum + getLineDiscounts(row), 0)
+      : undefined;
+    const returns = isFinancialMetricsV2
+      ? rowsForLocation.reduce((sum, row) => sum + getLineReturns(row), 0)
+      : undefined;
+    const returnedUnits = isFinancialMetricsV2
+      ? rowsForLocation.reduce(
+          (sum, row) => sum + getLineReturnedQuantity(row),
+          0,
+        )
+      : undefined;
+    const netSales = isFinancialMetricsV2
+      ? rowsForLocation.reduce((sum, row) => sum + getLineNetSales(row), 0)
+      : undefined;
+    const revenue = isFinancialMetricsV2
+      ? (netSales ?? 0)
+      : rowsForLocation.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+    const refunds = isFinancialMetricsV2
+      ? (refundsByLocation.get(location.shopify_location_id) ?? 0)
+      : undefined;
     const cogs = rowsForLocation.reduce(
-      (sum, row) => sum + Number(row.cogs ?? 0),
+      (sum, row) =>
+        sum +
+        (isFinancialMetricsV2 ? getLineCogsV2(row) : Number(row.cogs ?? 0)),
       0,
     );
     const grossProfit = revenue - cogs;
@@ -523,6 +625,12 @@ function computeMetrics({
       locationId: location.shopify_location_id,
       locationName: location.name,
       revenue,
+      grossSales,
+      discounts,
+      returns,
+      returnedUnits,
+      netSales,
+      refunds,
       ordersCount,
       unitsSold,
       cogs,
@@ -539,6 +647,12 @@ function computeMetrics({
   const totals = rows.reduce(
     (sum, row) => ({
       revenue: sum.revenue + row.revenue,
+      grossSales: sum.grossSales + (row.grossSales ?? 0),
+      discounts: sum.discounts + (row.discounts ?? 0),
+      returns: sum.returns + (row.returns ?? 0),
+      returnedUnits: sum.returnedUnits + (row.returnedUnits ?? 0),
+      netSales: sum.netSales + (row.netSales ?? 0),
+      refunds: sum.refunds + (row.refunds ?? 0),
       ordersCount: sum.ordersCount + row.ordersCount,
       unitsSold: sum.unitsSold + row.unitsSold,
       cogs: sum.cogs + row.cogs,
@@ -550,6 +664,12 @@ function computeMetrics({
     }),
     {
       revenue: 0,
+      grossSales: 0,
+      discounts: 0,
+      returns: 0,
+      returnedUnits: 0,
+      netSales: 0,
+      refunds: 0,
       ordersCount: 0,
       unitsSold: 0,
       cogs: 0,
@@ -576,16 +696,42 @@ function computeMetrics({
 function computeGlobalKpis({
   orderLines,
   expensesByLocation,
+  financialMetricsVersion,
+  refundsByLocation = new Map<string, number>(),
 }: {
   orderLines: LocationsSalesRow[];
   expensesByLocation: Map<string, number>;
+  financialMetricsVersion: FinancialMetricsVersion;
+  refundsByLocation?: Map<string, number>;
 }): Omit<LocationMetricRow, "locationId" | "locationName"> {
-  const revenue = orderLines.reduce(
-    (sum, row) => sum + Number(row.revenue ?? 0),
-    0,
-  );
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const grossSales = isFinancialMetricsV2
+    ? orderLines.reduce((sum, row) => sum + getLineGrossSales(row), 0)
+    : undefined;
+  const discounts = isFinancialMetricsV2
+    ? orderLines.reduce((sum, row) => sum + getLineDiscounts(row), 0)
+    : undefined;
+  const returns = isFinancialMetricsV2
+    ? orderLines.reduce((sum, row) => sum + getLineReturns(row), 0)
+    : undefined;
+  const returnedUnits = isFinancialMetricsV2
+    ? orderLines.reduce((sum, row) => sum + getLineReturnedQuantity(row), 0)
+    : undefined;
+  const netSales = isFinancialMetricsV2
+    ? orderLines.reduce((sum, row) => sum + getLineNetSales(row), 0)
+    : undefined;
+  const revenue = isFinancialMetricsV2
+    ? (netSales ?? 0)
+    : orderLines.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+  const refunds = isFinancialMetricsV2
+    ? Array.from(refundsByLocation.values()).reduce(
+        (sum, value) => sum + value,
+        0,
+      )
+    : undefined;
   const cogs = orderLines.reduce(
-    (sum, row) => sum + Number(row.cogs ?? 0),
+    (sum, row) =>
+      sum + (isFinancialMetricsV2 ? getLineCogsV2(row) : Number(row.cogs ?? 0)),
     0,
   );
   const grossProfit = revenue - cogs;
@@ -604,6 +750,12 @@ function computeGlobalKpis({
 
   return {
     revenue,
+    grossSales,
+    discounts,
+    returns,
+    returnedUnits,
+    netSales,
+    refunds,
     ordersCount,
     unitsSold,
     cogs,
@@ -904,10 +1056,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .filter(Boolean),
   );
   const selectedDays = daysBetween(startDate, nextDate(endDate));
-  const period = getSelectedPeriod(url.searchParams.get("period"), selectedDays);
+  const period = getSelectedPeriod(
+    url.searchParams.get("period"),
+    selectedDays,
+  );
   const startDateUtc = storeDateToUtcIso(startDate);
   const endExclusiveUtc = storeDateToUtcIso(nextDate(endDate));
   const errors: string[] = [];
+  const financialMetricsVersion = normalizeFinancialMetricsVersion(
+    process.env.FINANCIAL_METRICS_VERSION,
+  );
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
 
   const { data: locationsData, error: locationsError } = await supabase
     .from("locations")
@@ -960,6 +1119,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           endExclusiveUtc,
           selectedLocationIds,
           shouldFilterByLocation: shouldFilterOrderLinesByLocation,
+          financialMetricsVersion,
         })
       : Promise.resolve({ data: [], error: null }),
     supabase
@@ -983,45 +1143,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedStaff,
     selectedVendor,
   });
-  const locationSpecificExpenses = expenses.filter(
-    (expense) =>
-      expense.shopify_location_id &&
-      selectedLocationIds.includes(expense.shopify_location_id),
-  );
-  const hasGlobalExpenses = expenses.some((expense) => !expense.shopify_location_id);
-  const expensesByLocation = computeLocationExpenses({
-    expenses: locationSpecificExpenses,
-    selectedDays,
-    startDate,
-    endDate,
-  });
-  const metrics = computeMetrics({
-    locations: safeSelectedLocations,
-    orderLines: filteredOrderLines,
-    expensesByLocation,
-  });
-  const kpis = computeGlobalKpis({
-    orderLines: filteredOrderLines,
-    expensesByLocation,
-  });
-  const trend = computeTrendRows({
-    orderLines: filteredOrderLines,
-    startDate,
-    endDate,
-    period,
-  });
-  const revenueByVendor = computeRevenueBreakdown({
-    orderLines: filteredOrderLines,
-    limit: 8,
-    getLabel: getVendorDrilldownValue,
-    getValue: getVendorDrilldownValue,
-  });
-  const revenueByStaff = computeRevenueBreakdown({
-    orderLines: filteredOrderLines,
-    limit: 8,
-    getLabel: getStaffDrilldownLabel,
-    getValue: getStaffDrilldownValue,
-  });
   const salesRows: LocationsSalesRow[] = filteredOrderLines.map((row) => ({
     created_at_shopify: row.created_at_shopify,
     retail_location_id: row.retail_location_id,
@@ -1032,9 +1153,92 @@ export async function loader({ request }: LoaderFunctionArgs) {
     staff_member_email: row.staff_member_email,
     shopify_order_id: row.shopify_order_id,
     quantity: Number(row.quantity ?? 0),
-    revenue: Number(row.revenue ?? 0),
-    cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
+    revenue: isFinancialMetricsV2
+      ? getLineNetSales(row)
+      : Number(row.revenue ?? 0),
+    cogs: isFinancialMetricsV2
+      ? getLineCogsV2(row)
+      : row.cogs === null
+        ? null
+        : Number(row.cogs ?? 0),
+    gross_sales: isFinancialMetricsV2 ? getLineGrossSales(row) : undefined,
+    discounts: isFinancialMetricsV2 ? getLineDiscounts(row) : undefined,
+    returns: isFinancialMetricsV2 ? getLineReturns(row) : undefined,
+    net_sales: isFinancialMetricsV2 ? getLineNetSales(row) : undefined,
+    returned_quantity: isFinancialMetricsV2
+      ? getLineReturnedQuantity(row)
+      : undefined,
+    cost_at_sale: isFinancialMetricsV2 ? row.cost_at_sale : undefined,
   }));
+  const orderIdsForRefunds = Array.from(
+    new Set(
+      salesRows
+        .map((row) => row.shopify_order_id)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const refundTransactionsResult =
+    isFinancialMetricsV2 && orderIdsForRefunds.length > 0
+      ? await fetchRefundTransactionsForOrders({
+          supabase,
+          shop: session.shop,
+          orderIds: orderIdsForRefunds,
+          startDateUtc,
+          endExclusiveUtc,
+        })
+      : { rows: [], errors: [] };
+  errors.push(...refundTransactionsResult.errors);
+  const refundsByLocation = isFinancialMetricsV2
+    ? allocateRefundsByLocation({
+        orderLines: salesRows,
+        refundTransactions: refundTransactionsResult.rows,
+      })
+    : new Map<string, number>();
+  const locationSpecificExpenses = expenses.filter(
+    (expense) =>
+      expense.shopify_location_id &&
+      selectedLocationIds.includes(expense.shopify_location_id),
+  );
+  const hasGlobalExpenses = expenses.some(
+    (expense) => !expense.shopify_location_id,
+  );
+  const expensesByLocation = computeLocationExpenses({
+    expenses: locationSpecificExpenses,
+    selectedDays,
+    startDate,
+    endDate,
+  });
+  const metrics = computeMetrics({
+    locations: safeSelectedLocations,
+    orderLines: salesRows,
+    expensesByLocation,
+    financialMetricsVersion,
+    refundsByLocation,
+  });
+  const kpis = computeGlobalKpis({
+    orderLines: salesRows,
+    expensesByLocation,
+    financialMetricsVersion,
+    refundsByLocation,
+  });
+  const trend = computeTrendRows({
+    orderLines: salesRows,
+    startDate,
+    endDate,
+    period,
+  });
+  const revenueByVendor = computeRevenueBreakdown({
+    orderLines: salesRows,
+    limit: 8,
+    getLabel: getVendorDrilldownValue,
+    getValue: getVendorDrilldownValue,
+  });
+  const revenueByStaff = computeRevenueBreakdown({
+    orderLines: salesRows,
+    limit: 8,
+    getLabel: getStaffDrilldownLabel,
+    getValue: getStaffDrilldownValue,
+  });
   const rawDebugSummary = shouldShowDebugInfo
     ? summarizeOrderLinesForDebug(orderLines)
     : null;
@@ -1096,34 +1300,75 @@ export async function loader({ request }: LoaderFunctionArgs) {
     preservedSearchParams,
     selectedDays,
     period,
+    financialMetricsVersion,
     kpis,
     locationRows: metrics.rows,
     trendRows: trend.rows,
     revenueByVendor,
     revenueByStaff,
     salesRows,
+    refundTransactions: refundTransactionsResult.rows,
     hasGlobalExpenses,
     errors,
     debugInfo,
   } satisfies LoaderData;
 }
 
-function KpiGrid({ kpis }: { kpis: LoaderData["kpis"] }) {
-  const items = [
-    { label: "Revenue", value: formatCurrency(kpis.revenue) },
-    { label: "Orders", value: formatNumber(kpis.ordersCount) },
-    { label: "Units sold", value: formatNumber(kpis.unitsSold) },
-    { label: "COGS", value: formatCurrency(kpis.cogs) },
-    { label: "Gross profit", value: formatCurrency(kpis.grossProfit) },
-    { label: "Gross margin", value: formatPercent(kpis.grossMarginPct) },
-    { label: "Expenses", value: formatCurrency(kpis.expenses) },
-    { label: "Net profit", value: formatCurrency(kpis.netProfit) },
-    {
-      label: "AOV",
-      value: formatCurrency(kpis.averageOrderValue),
-      title: "Average Order Value = Revenue / Orders",
-    },
-  ];
+function KpiGrid({
+  kpis,
+  financialMetricsVersion,
+}: {
+  kpis: LoaderData["kpis"];
+  financialMetricsVersion: FinancialMetricsVersion;
+}) {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const items = isFinancialMetricsV2
+    ? [
+        {
+          label: "Net Sales",
+          value: formatCurrency(kpis.revenue),
+          title: "Line-level Net Sales for selected locations.",
+        },
+        { label: "Gross profit", value: formatCurrency(kpis.grossProfit) },
+        {
+          label: "Gross margin",
+          value: formatPercent(kpis.grossMarginPct),
+          title: "Gross Margin is based on Net Sales.",
+        },
+        {
+          label: "Refunds",
+          value: formatCurrency(kpis.refunds ?? 0),
+          title:
+            "Refunds are order-level cash movements allocated to locations from matching order lines.",
+        },
+        {
+          label: "Returns",
+          value: `${formatCurrency(kpis.returns ?? 0)} · ${formatNumber(
+            kpis.returnedUnits ?? 0,
+          )} units`,
+        },
+        {
+          label: "AOV (Net)",
+          value: formatCurrency(kpis.averageOrderValue),
+          title: "AOV (Net) = Net Sales / Orders",
+        },
+        { label: "Orders", value: formatNumber(kpis.ordersCount) },
+      ]
+    : [
+        { label: "Revenue", value: formatCurrency(kpis.revenue) },
+        { label: "Orders", value: formatNumber(kpis.ordersCount) },
+        { label: "Units sold", value: formatNumber(kpis.unitsSold) },
+        { label: "COGS", value: formatCurrency(kpis.cogs) },
+        { label: "Gross profit", value: formatCurrency(kpis.grossProfit) },
+        { label: "Gross margin", value: formatPercent(kpis.grossMarginPct) },
+        { label: "Expenses", value: formatCurrency(kpis.expenses) },
+        { label: "Net profit", value: formatCurrency(kpis.netProfit) },
+        {
+          label: "AOV",
+          value: formatCurrency(kpis.averageOrderValue),
+          title: "Average Order Value = Revenue / Orders",
+        },
+      ];
 
   return (
     <section
@@ -1185,23 +1430,28 @@ function LegendItem({ color, label }: { color: string; label: string }) {
 function TrendChart({
   rows,
   period,
+  financialMetricsVersion,
   onFilterChange,
   selectedPeriod,
   onSelectPeriod,
 }: {
   rows: TrendRow[];
   period: Period;
+  financialMetricsVersion: FinancialMetricsVersion;
   onFilterChange: () => void;
   selectedPeriod?: string | null;
   onSelectPeriod?: (row: TrendRow) => void;
 }) {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
   const [hoveredPeriod, setHoveredPeriod] = useState<string | null>(null);
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
   const maxOrders = Math.max(...rows.map((row) => row.ordersCount), 0);
   const hasSales = rows.some((row) => row.revenue > 0 || row.ordersCount > 0);
   const revenueMaxHeight = 150;
   const ordersMaxHeight = 84;
-  const barGap = rows.length > 90 ? 0 : rows.length > 60 ? 1 : rows.length > 32 ? 2 : 4;
+  const barGap =
+    rows.length > 90 ? 0 : rows.length > 60 ? 1 : rows.length > 32 ? 2 : 4;
 
   return (
     <section
@@ -1223,9 +1473,11 @@ function TrendChart({
         }}
       >
         <div>
-          <h2 style={{ fontSize: 18, margin: 0 }}>Sales trend by period</h2>
+          <h2 style={{ fontSize: 18, margin: 0 }}>
+            {isFinancialMetricsV2 ? "Net Sales Trend" : "Sales trend by period"}
+          </h2>
           <p style={{ color: "#616161", margin: "4px 0 0" }}>
-            Revenue and orders grouped by {period}.
+            {revenueLabel} and orders grouped by {period}.
           </p>
         </div>
         <label
@@ -1262,7 +1514,7 @@ function TrendChart({
       {hasSales ? (
         <div style={{ display: "grid", gap: 14 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-            <LegendItem color="#2563eb" label="Revenue" />
+            <LegendItem color="#2563eb" label={revenueLabel} />
             <LegendItem color="#14b8a6" label="Orders" />
           </div>
           <div
@@ -1299,7 +1551,7 @@ function TrendChart({
                   key={row.period}
                   title={[
                     `Period: ${row.period}`,
-                    `Revenue: ${formatCurrency(row.revenue)}`,
+                    `${revenueLabel}: ${formatCurrency(row.revenue)}`,
                     `Orders: ${formatNumber(row.ordersCount)}`,
                     `Units: ${formatNumber(row.unitsSold)}`,
                   ].join("\n")}
@@ -1401,8 +1653,7 @@ function TrendChart({
                   >
                     <div
                       style={{
-                        background:
-                          row.ordersCount > 0 ? "#14b8a6" : "#e5e7eb",
+                        background: row.ordersCount > 0 ? "#14b8a6" : "#e5e7eb",
                         borderRadius: "2px 2px 6px 6px",
                         height: ordersHeight,
                         maxWidth: 26,
@@ -1446,20 +1697,23 @@ function TrendChart({
 
 function LocationTable({
   rows,
+  financialMetricsVersion,
   selectedLocation,
   onSelectLocation,
 }: {
   rows: LocationMetricRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   selectedLocation?: string | null;
   onSelectLocation?: (row: LocationMetricRow) => void;
 }) {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const [sort, setSort] = useState<{ key: SortKey; direction: "asc" | "desc" }>(
     {
       key: "revenue",
       direction: "desc",
     },
   );
-  const headers: Array<{
+  const legacyHeaders: Array<{
     label: string;
     key: SortKey;
     title?: string;
@@ -1478,6 +1732,23 @@ function LocationTable({
       key: "aov",
       title: "Average Order Value = Revenue / Orders",
     },
+  ];
+  const v2Headers = [
+    "Location",
+    "Gross Sales",
+    "Discounts",
+    "Returns",
+    "Returned Units",
+    "Net Sales",
+    "Refunds",
+    "Orders",
+    "Units Sold",
+    "COGS",
+    "Gross Profit",
+    "Gross Margin",
+    "Expenses",
+    "Net Profit",
+    "AOV (Net)",
   ];
   const sortedRows = useMemo(() => {
     const getValue = (row: LocationMetricRow) => {
@@ -1527,14 +1798,20 @@ function LocationTable({
         padding: 18,
       }}
     >
-      <h2 style={{ fontSize: 18, margin: "0 0 14px" }}>
-        Location comparison
-      </h2>
-      <div style={{ border: "1px solid #f0f0f0", borderRadius: 12, overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 14, width: "100%" }}>
+      <h2 style={{ fontSize: 18, margin: "0 0 14px" }}>Location comparison</h2>
+      <div
+        style={{
+          border: "1px solid #f0f0f0",
+          borderRadius: 12,
+          overflowX: "auto",
+        }}
+      >
+        <table
+          style={{ borderCollapse: "collapse", fontSize: 14, width: "100%" }}
+        >
           <thead>
             <tr>
-              {headers.map((header) => (
+              {(isFinancialMetricsV2 ? [] : legacyHeaders).map((header) => (
                 <th
                   key={header.key}
                   title={header.title}
@@ -1575,6 +1852,33 @@ function LocationTable({
                   </button>
                 </th>
               ))}
+              {isFinancialMetricsV2
+                ? v2Headers.map((header) => (
+                    <th
+                      key={header}
+                      title={
+                        header === "Refunds"
+                          ? "Refunds are order-level cash movements allocated to locations from matching order lines."
+                          : header === "Gross Margin"
+                            ? "Gross Margin is based on Net Sales."
+                            : undefined
+                      }
+                      style={{
+                        background: "white",
+                        borderBottom: "1px solid #dcdcdc",
+                        color: "#616161",
+                        fontWeight: 800,
+                        padding: "12px 10px",
+                        position: "sticky",
+                        textAlign: "left",
+                        top: 0,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {header}
+                    </th>
+                  ))
+                : null}
             </tr>
           </thead>
           <tbody>
@@ -1583,72 +1887,280 @@ function LocationTable({
                 const isSelected = selectedLocation === row.locationId;
                 const isHovered = hoveredLocation === row.locationId;
 
-                return (
-                <tr
-                  key={row.locationId}
-                  title="Filter charts by this location"
-                  role={onSelectLocation ? "button" : undefined}
-                  tabIndex={onSelectLocation ? 0 : undefined}
-                  onClick={() => onSelectLocation?.(row)}
-                  onKeyDown={(event) => {
-                    if (!onSelectLocation) return;
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSelectLocation(row);
-                    }
-                  }}
-                  onMouseEnter={() => setHoveredLocation(row.locationId)}
-                  onMouseLeave={() => setHoveredLocation(null)}
-                  style={{
-                    background: isSelected
-                      ? "#eff6ff"
-                      : isHovered && onSelectLocation
-                        ? "#fafafa"
-                        : undefined,
-                    cursor: onSelectLocation ? "pointer" : undefined,
-                  }}
-                >
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    <div style={{ display: "grid", gap: 4 }}>
-                      <strong>{row.locationName}</strong>
-                      {row.netProfit < 0 ? (
-                        <StatusBadge variant="warning">Negative net profit</StatusBadge>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatCurrency(row.revenue)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatNumber(row.ordersCount)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatNumber(row.unitsSold)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatCurrency(row.cogs)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatCurrency(row.grossProfit)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatPercent(row.grossMarginPct)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatCurrency(row.expenses)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatCurrency(row.netProfit)}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #f0f0f0", padding: "12px 10px" }}>
-                    {formatCurrency(row.averageOrderValue)}
-                  </td>
-                </tr>
+                return isFinancialMetricsV2 ? (
+                  <tr
+                    key={row.locationId}
+                    title="Filter charts by this location"
+                    role={onSelectLocation ? "button" : undefined}
+                    tabIndex={onSelectLocation ? 0 : undefined}
+                    onClick={() => onSelectLocation?.(row)}
+                    onKeyDown={(event) => {
+                      if (!onSelectLocation) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelectLocation(row);
+                      }
+                    }}
+                    onMouseEnter={() => setHoveredLocation(row.locationId)}
+                    onMouseLeave={() => setHoveredLocation(null)}
+                    style={{
+                      background: isSelected
+                        ? "#eff6ff"
+                        : isHovered && onSelectLocation
+                          ? "#fafafa"
+                          : undefined,
+                      cursor: onSelectLocation ? "pointer" : undefined,
+                    }}
+                  >
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <strong>{row.locationName}</strong>
+                        {row.netProfit < 0 ? (
+                          <StatusBadge variant="warning">
+                            Negative net profit
+                          </StatusBadge>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.grossSales ?? 0)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.discounts ?? 0)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.returns ?? 0)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatNumber(row.returnedUnits ?? 0)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.revenue)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.refunds ?? 0)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatNumber(row.ordersCount)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatNumber(row.unitsSold)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.cogs)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.grossProfit)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatPercent(row.grossMarginPct)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.expenses)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.netProfit)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.averageOrderValue)}
+                    </td>
+                  </tr>
+                ) : (
+                  <tr
+                    key={row.locationId}
+                    title="Filter charts by this location"
+                    role={onSelectLocation ? "button" : undefined}
+                    tabIndex={onSelectLocation ? 0 : undefined}
+                    onClick={() => onSelectLocation?.(row)}
+                    onKeyDown={(event) => {
+                      if (!onSelectLocation) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelectLocation(row);
+                      }
+                    }}
+                    onMouseEnter={() => setHoveredLocation(row.locationId)}
+                    onMouseLeave={() => setHoveredLocation(null)}
+                    style={{
+                      background: isSelected
+                        ? "#eff6ff"
+                        : isHovered && onSelectLocation
+                          ? "#fafafa"
+                          : undefined,
+                      cursor: onSelectLocation ? "pointer" : undefined,
+                    }}
+                  >
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: 4 }}>
+                        <strong>{row.locationName}</strong>
+                        {row.netProfit < 0 ? (
+                          <StatusBadge variant="warning">
+                            Negative net profit
+                          </StatusBadge>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.revenue)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatNumber(row.ordersCount)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatNumber(row.unitsSold)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.cogs)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.grossProfit)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatPercent(row.grossMarginPct)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.expenses)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.netProfit)}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f0f0f0",
+                        padding: "12px 10px",
+                      }}
+                    >
+                      {formatCurrency(row.averageOrderValue)}
+                    </td>
+                  </tr>
                 );
               })
             ) : (
               <tr>
-                <td colSpan={10} style={{ color: "#707070", padding: 16 }}>
+                <td
+                  colSpan={isFinancialMetricsV2 ? v2Headers.length : 10}
+                  style={{ color: "#707070", padding: 16 }}
+                >
                   No locations available.
                 </td>
               </tr>
@@ -1673,13 +2185,17 @@ const breakdownColors = [
 
 function RevenueByVendorCard({
   rows,
+  financialMetricsVersion,
   selectedVendor,
   onSelectVendor,
 }: {
   rows: RevenueBreakdownRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   selectedVendor?: string | null;
   onSelectVendor?: (row: RevenueBreakdownRow) => void;
 }) {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
   const [hoveredVendor, setHoveredVendor] = useState<string | null>(null);
   const hasRevenue = rows.some((row) => row.revenue > 0);
   let currentPercent = 0;
@@ -1701,9 +2217,11 @@ function RevenueByVendorCard({
         padding: 18,
       }}
     >
-      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Revenue by Vendor</h2>
+      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>
+        {isFinancialMetricsV2 ? "Net Sales by Vendor" : "Revenue by Vendor"}
+      </h2>
       <p style={{ color: "#616161", margin: "0 0 16px" }}>
-        Revenue share for the current filters.
+        {revenueLabel} share for the current filters.
       </p>
 
       {hasRevenue ? (
@@ -1740,7 +2258,7 @@ function RevenueByVendorCard({
                 key={row.label}
                 title={[
                   `Vendor: ${row.label}`,
-                  `Revenue: ${formatCurrency(row.revenue)}`,
+                  `${revenueLabel}: ${formatCurrency(row.revenue)}`,
                   `Percent: ${row.percent.toFixed(1)}%`,
                   `Orders: ${formatNumber(row.ordersCount)}`,
                 ].join("\n")}
@@ -1774,8 +2292,7 @@ function RevenueByVendorCard({
               >
                 <span
                   style={{
-                    background:
-                      breakdownColors[index % breakdownColors.length],
+                    background: breakdownColors[index % breakdownColors.length],
                     borderRadius: 999,
                     height: 10,
                     width: 10,
@@ -1825,13 +2342,17 @@ function RevenueByVendorCard({
 
 function RevenueByStaffCard({
   rows,
+  financialMetricsVersion,
   selectedStaff,
   onSelectStaff,
 }: {
   rows: RevenueBreakdownRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   selectedStaff?: string | null;
   onSelectStaff?: (row: RevenueBreakdownRow) => void;
 }) {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
   const [hoveredStaff, setHoveredStaff] = useState<string | null>(null);
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
 
@@ -1844,9 +2365,12 @@ function RevenueByStaffCard({
         padding: 18,
       }}
     >
-      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Revenue by Staff</h2>
+      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>
+        {isFinancialMetricsV2 ? "Net Sales by Staff" : "Revenue by Staff"}
+      </h2>
       <p style={{ color: "#616161", margin: "0 0 16px" }}>
-        Top staff revenue for the current filters.
+        Top staff {isFinancialMetricsV2 ? "net sales" : "revenue"} for the
+        current filters.
       </p>
 
       {rows.length > 0 && maxRevenue > 0 ? (
@@ -1866,6 +2390,8 @@ function RevenueByStaffCard({
               <Fragment key={row.label}>
                 <div
                   title={row.label}
+                  role={onSelectStaff ? "button" : undefined}
+                  tabIndex={onSelectStaff ? 0 : undefined}
                   style={{
                     alignSelf: "center",
                     background: isSelected
@@ -1884,6 +2410,13 @@ function RevenueByStaffCard({
                     whiteSpace: "nowrap",
                   }}
                   onClick={() => onSelectStaff?.(row)}
+                  onKeyDown={(event) => {
+                    if (!onSelectStaff) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectStaff(row);
+                    }
+                  }}
                   onMouseEnter={() => setHoveredStaff(row.value)}
                   onMouseLeave={() => setHoveredStaff(null)}
                 >
@@ -1892,7 +2425,7 @@ function RevenueByStaffCard({
                 <div
                   title={[
                     `Staff: ${row.label}`,
-                    `Revenue: ${formatCurrency(row.revenue)}`,
+                    `${revenueLabel}: ${formatCurrency(row.revenue)}`,
                     `Orders: ${formatNumber(row.ordersCount)}`,
                     `Units: ${formatNumber(row.unitsSold)}`,
                   ].join("\n")}
@@ -1978,12 +2511,14 @@ function RevenueByStaffCard({
 function RevenueBreakdownSection({
   revenueByVendor,
   revenueByStaff,
+  financialMetricsVersion,
   activeDrilldowns,
   onSelectVendor,
   onSelectStaff,
 }: {
   revenueByVendor: RevenueBreakdownRow[];
   revenueByStaff: RevenueBreakdownRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   activeDrilldowns: ActiveLocationDrilldowns;
   onSelectVendor: (row: RevenueBreakdownRow) => void;
   onSelectStaff: (row: RevenueBreakdownRow) => void;
@@ -1999,11 +2534,13 @@ function RevenueBreakdownSection({
     >
       <RevenueByVendorCard
         rows={revenueByVendor}
+        financialMetricsVersion={financialMetricsVersion}
         selectedVendor={activeDrilldowns.vendor?.value ?? null}
         onSelectVendor={onSelectVendor}
       />
       <RevenueByStaffCard
         rows={revenueByStaff}
+        financialMetricsVersion={financialMetricsVersion}
         selectedStaff={activeDrilldowns.staff?.value ?? null}
         onSelectStaff={onSelectStaff}
       />
@@ -2136,8 +2673,10 @@ export default function LocationsPage() {
     endDate,
     preservedSearchParams,
     kpis,
+    financialMetricsVersion,
     locationRows,
     salesRows,
+    refundTransactions,
     period,
     hasGlobalExpenses,
     errors,
@@ -2160,13 +2699,12 @@ export default function LocationsPage() {
           (location) => location.shopify_location_id === draftLocationIds[0],
         )?.name || "1 location selected"
       : `${draftLocationIds.length} locations selected`;
-  const selectedLocationKey = selectedLocationIds.join("|");
   const selectedLocationsForMetrics = useMemo(
     () =>
       locations.filter((location) =>
         selectedLocationIds.includes(location.shopify_location_id),
       ),
-    [locations, selectedLocationKey],
+    [locations, selectedLocationIds],
   );
   const expensesByLocation = useMemo(
     () =>
@@ -2186,9 +2724,9 @@ export default function LocationsPage() {
   );
   const hasActiveDrilldowns = Boolean(
     activeDrilldowns.period ||
-      activeDrilldowns.vendor ||
-      activeDrilldowns.staff ||
-      activeDrilldowns.location,
+    activeDrilldowns.vendor ||
+    activeDrilldowns.staff ||
+    activeDrilldowns.location,
   );
   const locationsForDrilldownMetrics = useMemo(() => {
     if (!hasActiveDrilldowns) return selectedLocationsForMetrics;
@@ -2246,8 +2784,19 @@ export default function LocationsPage() {
         locations: locationsForDrilldownMetrics,
         orderLines: drilldownRows,
         expensesByLocation,
+        financialMetricsVersion,
+        refundsByLocation: allocateRefundsByLocation({
+          orderLines: drilldownRows,
+          refundTransactions,
+        }),
       }).rows,
-    [locationsForDrilldownMetrics, drilldownRows, expensesByLocation],
+    [
+      locationsForDrilldownMetrics,
+      drilldownRows,
+      expensesByLocation,
+      financialMetricsVersion,
+      refundTransactions,
+    ],
   );
   const toggleDrilldown = (
     key: keyof ActiveLocationDrilldowns,
@@ -2295,7 +2844,12 @@ export default function LocationsPage() {
             style={{ display: "grid", gap: 16 }}
           >
             {preservedSearchParams.map(({ name, value }, index) => (
-              <input key={`${name}-${index}`} type="hidden" name={name} value={value} />
+              <input
+                key={`${name}-${index}`}
+                type="hidden"
+                name={name}
+                value={value}
+              />
             ))}
             <input
               type="hidden"
@@ -2317,7 +2871,11 @@ export default function LocationsPage() {
                   type="date"
                   defaultValue={startDate}
                   onChange={() => setIsDirty(true)}
-                  style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
+                  style={{
+                    border: "1px solid #c9cccf",
+                    borderRadius: 10,
+                    padding: 10,
+                  }}
                 />
               </label>
               <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
@@ -2327,7 +2885,11 @@ export default function LocationsPage() {
                   type="date"
                   defaultValue={endDate}
                   onChange={() => setIsDirty(true)}
-                  style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
+                  style={{
+                    border: "1px solid #c9cccf",
+                    borderRadius: 10,
+                    padding: 10,
+                  }}
                 />
               </label>
               <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
@@ -2336,7 +2898,11 @@ export default function LocationsPage() {
                   name="staff"
                   defaultValue={selectedStaff}
                   onChange={() => setIsDirty(true)}
-                  style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
+                  style={{
+                    border: "1px solid #c9cccf",
+                    borderRadius: 10,
+                    padding: 10,
+                  }}
                 >
                   <option value="">All staff</option>
                   {staffOptions.map((option) => (
@@ -2352,7 +2918,11 @@ export default function LocationsPage() {
                   name="vendor"
                   defaultValue={selectedVendor}
                   onChange={() => setIsDirty(true)}
-                  style={{ border: "1px solid #c9cccf", borderRadius: 10, padding: 10 }}
+                  style={{
+                    border: "1px solid #c9cccf",
+                    borderRadius: 10,
+                    padding: 10,
+                  }}
                 >
                   <option value="">All vendors</option>
                   {vendorOptions.map((option) => (
@@ -2374,7 +2944,9 @@ export default function LocationsPage() {
                   marginBottom: 8,
                 }}
               >
-                <div style={{ color: "#616161", fontSize: 13, fontWeight: 800 }}>
+                <div
+                  style={{ color: "#616161", fontSize: 13, fontWeight: 800 }}
+                >
                   Locations
                 </div>
                 <div style={{ color: "#707070", fontSize: 13 }}>
@@ -2423,7 +2995,9 @@ export default function LocationsPage() {
                   >
                     <input
                       type="checkbox"
-                      checked={draftLocationIds.includes(location.shopify_location_id)}
+                      checked={draftLocationIds.includes(
+                        location.shopify_location_id,
+                      )}
                       onChange={(event) => {
                         setDraftLocationIds((current) =>
                           event.target.checked
@@ -2463,7 +3037,9 @@ export default function LocationsPage() {
               </div>
             ) : null}
 
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <div
+              style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
+            >
               <AppButton
                 type="submit"
                 name="preset"
@@ -2488,6 +3064,9 @@ export default function LocationsPage() {
           V1 expenses include location-specific active fixed expenses only.
           Global/unassigned expenses are not allocated
           {hasGlobalExpenses ? " in this view." : "."}
+          {financialMetricsVersion === "v2"
+            ? " Refunds are order-level cash movements allocated to locations from matching order lines."
+            : ""}
         </p>
 
         {errors.length > 0 ? (
@@ -2535,7 +3114,10 @@ export default function LocationsPage() {
           </section>
         ) : null}
 
-        <KpiGrid kpis={kpis} />
+        <KpiGrid
+          kpis={kpis}
+          financialMetricsVersion={financialMetricsVersion}
+        />
         <ActiveLocationsDrilldownChips
           activeDrilldowns={activeDrilldowns}
           onClearOne={(key) =>
@@ -2549,6 +3131,7 @@ export default function LocationsPage() {
         <TrendChart
           rows={drilldownTrendRows}
           period={period}
+          financialMetricsVersion={financialMetricsVersion}
           onFilterChange={() => setIsDirty(true)}
           selectedPeriod={activeDrilldowns.period?.value ?? null}
           onSelectPeriod={(row) =>
@@ -2561,6 +3144,7 @@ export default function LocationsPage() {
         <RevenueBreakdownSection
           revenueByVendor={drilldownRevenueByVendor}
           revenueByStaff={drilldownRevenueByStaff}
+          financialMetricsVersion={financialMetricsVersion}
           activeDrilldowns={activeDrilldowns}
           onSelectVendor={(row) =>
             toggleDrilldown("vendor", {
@@ -2577,6 +3161,7 @@ export default function LocationsPage() {
         />
         <LocationTable
           rows={drilldownLocationRows}
+          financialMetricsVersion={financialMetricsVersion}
           selectedLocation={activeDrilldowns.location?.value ?? null}
           onSelectLocation={(row) =>
             toggleDrilldown("location", {
