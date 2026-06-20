@@ -25,12 +25,20 @@ import {
   computeStockAlerts,
   daysBetween,
   getBestSellerDrilldownValue,
+  getLineCogsV2,
+  getLineDiscounts,
+  getLineGrossSales,
+  getLineNetSales,
+  getLineRefundedAmount,
+  getLineReturnedQuantity,
+  getLineReturns,
   getStaffDisplayLabel,
   getStaffFilterValue,
   getTodayStoreDate,
   getVendorFilterValue,
   isActiveInventoryProduct,
   nextDate,
+  normalizeFinancialMetricsVersion,
   storeDateToUtcIso,
   UNKNOWN_STAFF_FILTER_VALUE,
 } from "../lib/dashboard/dashboard-metrics";
@@ -119,21 +127,117 @@ function filterOrderLines({
   });
 }
 
+type OrderTransactionDbRow = {
+  shopify_order_id: string;
+  shopify_transaction_id: string;
+  kind: string | null;
+  status: string | null;
+  amount: number | null;
+  processed_at: string | null;
+};
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+}
+
+function isSuccessfulRefundTransaction(row: OrderTransactionDbRow) {
+  const kind = row.kind?.toUpperCase();
+  const status = row.status?.toUpperCase();
+
+  return kind === "REFUND" && (!status || status === "SUCCESS");
+}
+
+async function fetchRefundTransactionsForOrders({
+  supabase,
+  shop,
+  orderIds,
+  startDateUtc,
+  endExclusiveUtc,
+}: {
+  supabase: ReturnType<typeof getSupabaseAdminClient>;
+  shop: string;
+  orderIds: string[];
+  startDateUtc: string;
+  endExclusiveUtc: string;
+}) {
+  const rows: OrderTransactionDbRow[] = [];
+  const errors: string[] = [];
+
+  for (const batch of chunkArray(orderIds, 500)) {
+    const { data, error } = await supabase
+      .from("order_transactions")
+      .select(
+        "shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
+      )
+      .eq("shop_domain", shop)
+      .gte("processed_at", startDateUtc)
+      .lt("processed_at", endExclusiveUtc)
+      .in("shopify_order_id", batch);
+
+    if (error) {
+      errors.push(error.message);
+      continue;
+    }
+
+    rows.push(
+      ...((data ?? []) as OrderTransactionDbRow[]).filter(
+        isSuccessfulRefundTransaction,
+      ),
+    );
+  }
+
+  return { rows, errors };
+}
+
+function getRecentOrderChips(row: DashboardSalesOrderLineRow) {
+  const chips: string[] = [];
+  const refundedAmount = getLineRefundedAmount(row);
+  const netSales = getLineNetSales(row);
+
+  if (getLineDiscounts(row) > 0) chips.push("Discounted");
+  if (getLineReturns(row) > 0 || getLineReturnedQuantity(row) > 0) {
+    chips.push("Returned");
+  }
+  if (refundedAmount > 0) chips.push("Refunded");
+  if (refundedAmount > 0 && netSales > 0) chips.push("Partial refund");
+
+  return chips;
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
-  const permissions = await getPermissionContext({ request, session, supabase });
+  const permissions = await getPermissionContext({
+    request,
+    session,
+    supabase,
+  });
   const url = new URL(request.url);
   const preservedSearchParams = Array.from(url.searchParams.entries())
     .filter(
       ([name]) =>
-        !["locationId", "startDate", "endDate", "preset", "staff", "vendor"].includes(name),
+        ![
+          "locationId",
+          "startDate",
+          "endDate",
+          "preset",
+          "staff",
+          "vendor",
+        ].includes(name),
     )
     .map(([name, value]) => ({ name, value }));
   const today = getTodayStoreDate();
   const preset = url.searchParams.get("preset");
-  const startDate = preset === "today" ? today : url.searchParams.get("startDate") || today;
-  const endDate = preset === "today" ? today : url.searchParams.get("endDate") || today;
+  const startDate =
+    preset === "today" ? today : url.searchParams.get("startDate") || today;
+  const endDate =
+    preset === "today" ? today : url.searchParams.get("endDate") || today;
   const selectedStaff = url.searchParams.get("staff") || "";
   const selectedVendor = url.searchParams.get("vendor") || "";
   const endExclusive = nextDate(endDate);
@@ -141,6 +245,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const endExclusiveUtc = storeDateToUtcIso(endExclusive);
   const selectedDays = daysBetween(startDate, endExclusive);
   const errors: string[] = [];
+  const financialMetricsVersion = normalizeFinancialMetricsVersion(
+    process.env.FINANCIAL_METRICS_VERSION,
+  );
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const orderLinesSelect = isFinancialMetricsV2
+    ? "*"
+    : "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source";
 
   const { data: locationsData, error: locationsError } = await supabase
     .from("locations")
@@ -192,9 +303,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedLocationId
       ? supabase
           .from("order_lines")
-          .select(
-            "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source",
-          )
+          .select(orderLinesSelect)
           .eq("shop_domain", session.shop)
           .eq("retail_location_id", selectedLocationId)
           .gte("created_at_shopify", startDateUtc)
@@ -236,7 +345,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (expensesResult.error) errors.push(expensesResult.error.message);
   if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
 
-  const orderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
+  const orderLines = (orderLinesResult.data ?? []) as unknown as OrderLineDbRow[];
   const inventoryRows = (inventoryResult.data ?? []) as InventoryLevelDbRow[];
   const variants = (variantsResult.data ?? []) as VariantDbRow[];
   const products = (productsResult.data ?? []) as ProductDbRow[];
@@ -257,18 +366,74 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedStaff,
     selectedVendor,
   });
-  const revenue = filteredOrderLines.reduce(
-    (sum, row) => sum + Number(row.revenue ?? 0),
-    0,
-  );
-  const cogs = filteredOrderLines.reduce((sum, row) => sum + Number(row.cogs ?? 0), 0);
-  const grossProfit = filteredOrderLines.reduce(
-    (sum, row) => sum + Number(row.gross_profit ?? 0),
-    0,
-  );
+  const revenue = isFinancialMetricsV2
+    ? filteredOrderLines.reduce((sum, row) => sum + getLineNetSales(row), 0)
+    : filteredOrderLines.reduce(
+        (sum, row) => sum + Number(row.revenue ?? 0),
+        0,
+      );
+  const grossSales = isFinancialMetricsV2
+    ? filteredOrderLines.reduce((sum, row) => sum + getLineGrossSales(row), 0)
+    : revenue;
+  const discounts = isFinancialMetricsV2
+    ? filteredOrderLines.reduce((sum, row) => sum + getLineDiscounts(row), 0)
+    : 0;
+  const returns = isFinancialMetricsV2
+    ? filteredOrderLines.reduce((sum, row) => sum + getLineReturns(row), 0)
+    : 0;
+  const returnedQuantity = isFinancialMetricsV2
+    ? filteredOrderLines.reduce(
+        (sum, row) => sum + getLineReturnedQuantity(row),
+        0,
+      )
+    : 0;
+  const returnedOrdersCount = isFinancialMetricsV2
+    ? new Set(
+        filteredOrderLines
+          .filter(
+            (row) =>
+              getLineReturns(row) > 0 || getLineReturnedQuantity(row) > 0,
+          )
+          .map((row) => row.shopify_order_id),
+      ).size
+    : 0;
+  const cogs = isFinancialMetricsV2
+    ? filteredOrderLines.reduce((sum, row) => sum + getLineCogsV2(row), 0)
+    : filteredOrderLines.reduce((sum, row) => sum + Number(row.cogs ?? 0), 0);
+  const grossProfit = isFinancialMetricsV2
+    ? revenue - cogs
+    : filteredOrderLines.reduce(
+        (sum, row) => sum + Number(row.gross_profit ?? 0),
+        0,
+      );
   const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : null;
-  const uniqueOrders = new Set(filteredOrderLines.map((row) => row.shopify_order_id));
+  const uniqueOrders = new Set(
+    filteredOrderLines.map((row) => row.shopify_order_id),
+  );
   const ordersCount = uniqueOrders.size;
+  const refundTransactionsResult =
+    isFinancialMetricsV2 && uniqueOrders.size > 0
+      ? await fetchRefundTransactionsForOrders({
+          supabase,
+          shop: session.shop,
+          orderIds: Array.from(uniqueOrders),
+          startDateUtc,
+          endExclusiveUtc,
+        })
+      : { rows: [], errors: [] };
+  errors.push(...refundTransactionsResult.errors);
+  const refunds = refundTransactionsResult.rows.reduce(
+    (sum, row) => sum + Number(row.amount ?? 0),
+    0,
+  );
+  const refundTransactionsCount = refundTransactionsResult.rows.length;
+  const refundedOrdersCount = new Set(
+    refundTransactionsResult.rows.map((row) => row.shopify_order_id),
+  ).size;
+  const refundAllocationWarning =
+    isFinancialMetricsV2 && (selectedStaff || selectedVendor)
+      ? "Refunds are order-level and may not be fully allocated to individual staff/vendor/product."
+      : null;
   const unitsSold = filteredOrderLines.reduce(
     (sum, row) => sum + Number(row.quantity ?? 0),
     0,
@@ -306,10 +471,34 @@ export async function loader({ request }: LoaderFunctionArgs) {
       product_title: row.product_title,
       sku: row.sku,
       quantity: Number(row.quantity ?? 0),
-      revenue: Number(row.revenue ?? 0),
-      cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
-      gross_profit:
-        row.gross_profit === null ? null : Number(row.gross_profit ?? 0),
+      revenue: isFinancialMetricsV2
+        ? getLineNetSales(row)
+        : Number(row.revenue ?? 0),
+      cogs: isFinancialMetricsV2
+        ? getLineCogsV2(row)
+        : row.cogs === null
+          ? null
+          : Number(row.cogs ?? 0),
+      gross_profit: isFinancialMetricsV2
+        ? getLineNetSales(row) - getLineCogsV2(row)
+        : row.gross_profit === null
+          ? null
+          : Number(row.gross_profit ?? 0),
+      gross_sales: isFinancialMetricsV2 ? getLineGrossSales(row) : undefined,
+      discounts: isFinancialMetricsV2 ? getLineDiscounts(row) : undefined,
+      returns: isFinancialMetricsV2 ? getLineReturns(row) : undefined,
+      net_sales: isFinancialMetricsV2 ? getLineNetSales(row) : undefined,
+      refunded_amount: isFinancialMetricsV2
+        ? getLineRefundedAmount(row)
+        : undefined,
+      returned_quantity: isFinancialMetricsV2
+        ? getLineReturnedQuantity(row)
+        : undefined,
+      cost_at_sale: isFinancialMetricsV2
+        ? row.cost_at_sale === null || row.cost_at_sale === undefined
+          ? null
+          : Number(row.cost_at_sale)
+        : undefined,
       vendor: row.vendor,
       staff_member_id: row.staff_member_id,
       staff_member_name: row.staff_member_name,
@@ -331,8 +520,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     preservedSearchParams,
     lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
     selectedDays,
+    financialMetricsVersion,
     kpis: {
       revenue,
+      grossSales,
+      discounts,
+      returns,
+      refunds,
+      refundTransactionsCount,
+      refundedOrdersCount,
+      returnedQuantity,
+      returnedOrdersCount,
+      refundAllocationWarning,
       cogs,
       grossProfit,
       grossMarginPct,
@@ -368,6 +567,14 @@ function createRecentOrders({
     cogs: row.cogs === null ? null : Number(row.cogs ?? 0),
     grossProfit:
       row.gross_profit === null ? null : Number(row.gross_profit ?? 0),
+    grossSales: row.gross_sales ?? null,
+    discounts: row.discounts ?? null,
+    netSales: row.net_sales ?? null,
+    returns: row.returns ?? null,
+    refundedAmount: row.refunded_amount ?? null,
+    returnedQuantity: row.returned_quantity ?? null,
+    costAtSale: row.cost_at_sale ?? null,
+    chips: getRecentOrderChips(row),
     costSource: "-",
   }));
 }
@@ -396,6 +603,7 @@ export default function DbDashboardPage() {
     preservedSearchParams,
     lastSuccessfulSync,
     selectedDays,
+    financialMetricsVersion,
     kpis,
     stockAlerts,
     salesOrderLines,
@@ -492,9 +700,7 @@ export default function DbDashboardPage() {
 
         <KpiCards
           kpis={kpis}
-          selectedLocationName={selectedLocationName}
-          startDate={startDate}
-          endDate={endDate}
+          financialMetricsVersion={financialMetricsVersion}
         />
 
         <ActiveDrilldownBadge
@@ -511,6 +717,7 @@ export default function DbDashboardPage() {
         <div style={{ marginBottom: 20 }}>
           <SalesByHourCard
             salesByHour={drilldownSalesByHour}
+            financialMetricsVersion={financialMetricsVersion}
             selectedHour={selectedHour}
             onSelectHour={toggleHourDrilldown}
           />
@@ -526,6 +733,7 @@ export default function DbDashboardPage() {
         >
           <BestSellersCard
             bestSellers={drilldownBestSellers}
+            financialMetricsVersion={financialMetricsVersion}
             selectedProductKey={selectedProductKey}
             onSelectBestSeller={(row) =>
               toggleDrilldown("product", {
@@ -551,6 +759,7 @@ export default function DbDashboardPage() {
         >
           <SalesByStaffCard
             salesByStaff={drilldownSalesByStaff}
+            financialMetricsVersion={financialMetricsVersion}
             selectedStaffKey={selectedStaffKey}
             onSelectStaff={(row) =>
               toggleDrilldown("staff", {
@@ -562,6 +771,7 @@ export default function DbDashboardPage() {
 
           <SalesByVendorCard
             salesByVendor={drilldownSalesByVendor}
+            financialMetricsVersion={financialMetricsVersion}
             selectedVendorKey={selectedVendorKey}
             onSelectVendor={(row) =>
               toggleDrilldown("vendor", {
@@ -572,7 +782,10 @@ export default function DbDashboardPage() {
           />
         </div>
 
-        <RecentOrderLinesCard recentOrders={drilldownRecentOrders} />
+        <RecentOrderLinesCard
+          recentOrders={drilldownRecentOrders}
+          financialMetricsVersion={financialMetricsVersion}
+        />
       </div>
     </main>
   );

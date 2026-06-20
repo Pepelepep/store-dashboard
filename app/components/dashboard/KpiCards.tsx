@@ -1,9 +1,14 @@
+import type { ReactNode } from "react";
+
 import {
   formatCurrency,
   formatNumber,
   formatPercent,
 } from "../../lib/dashboard/dashboard-metrics";
-import type { DashboardLoaderData } from "../../lib/dashboard/dashboard-types";
+import type {
+  DashboardLoaderData,
+  FinancialMetricsVersion,
+} from "../../lib/dashboard/dashboard-types";
 
 function KpiCard({
   title,
@@ -13,7 +18,7 @@ function KpiCard({
 }: {
   title: string;
   value: string;
-  subtitle: string;
+  subtitle: ReactNode;
   explanation: string;
 }) {
   return (
@@ -28,7 +33,14 @@ function KpiCard({
         minHeight: 132,
       }}
     >
-      <div style={{ color: "#5f6368", fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
+      <div
+        style={{
+          color: "#5f6368",
+          fontSize: 14,
+          fontWeight: 700,
+          marginBottom: 10,
+        }}
+      >
         {title}
       </div>
       <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>
@@ -43,15 +55,17 @@ function KpiCard({
 
 export function KpiCards({
   kpis,
-  selectedLocationName,
-  startDate,
-  endDate,
+  financialMetricsVersion,
 }: {
   kpis: DashboardLoaderData["kpis"];
-  selectedLocationName: string | null;
-  startDate: string;
-  endDate: string;
+  financialMetricsVersion: FinancialMetricsVersion;
 }) {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const grossSales = kpis.grossSales ?? kpis.revenue;
+  const discounts = kpis.discounts ?? 0;
+  const discountPercent =
+    grossSales > 0 ? `${((discounts / grossSales) * 100).toFixed(1)}%` : "0.0%";
+
   return (
     <section
       style={{
@@ -62,11 +76,54 @@ export function KpiCards({
       }}
     >
       <KpiCard
-        title="Revenue"
+        title={isFinancialMetricsV2 ? "Net Sales" : "Revenue"}
         value={formatCurrency(kpis.revenue)}
-        subtitle="Synced retail sales"
-        explanation="Total synced sales revenue for the selected location and date range."
+        subtitle={
+          isFinancialMetricsV2 ? (
+            <>
+              <div>After discounts &amp; returns</div>
+              <div>
+                Discounts: {formatCurrency(discounts)} / {discountPercent} of
+                gross sales
+              </div>
+            </>
+          ) : (
+            "Synced retail sales"
+          )
+        }
+        explanation={
+          isFinancialMetricsV2
+            ? "Net sales for the selected location and date range. Refunds are tracked separately as cash movement."
+            : "Total synced sales revenue for the selected location and date range."
+        }
       />
+      {isFinancialMetricsV2 ? (
+        <>
+          <KpiCard
+            title="Refunds"
+            value={formatCurrency(kpis.refunds ?? 0)}
+            subtitle={
+              <>
+                <div>
+                  {formatNumber(kpis.refundTransactionsCount ?? 0)} refund
+                  transactions · {formatNumber(kpis.refundedOrdersCount ?? 0)}{" "}
+                  orders
+                </div>
+                {kpis.refundAllocationWarning ? (
+                  <div>{kpis.refundAllocationWarning}</div>
+                ) : null}
+              </>
+            }
+            explanation="Cash refunded during the selected date range based on successful refund transactions. Refunds are not subtracted from Net Sales."
+          />
+          <KpiCard
+            title="Returns"
+            value={formatCurrency(kpis.returns ?? 0)}
+            subtitle={`${formatNumber(kpis.returnedQuantity ?? 0)} units · ${formatNumber(kpis.returnedOrdersCount ?? 0)} orders`}
+            explanation="Returned merchandise on sales in selected period."
+          />
+        </>
+      ) : null}
       <KpiCard
         title="Orders"
         value={formatNumber(kpis.ordersCount)}
@@ -88,19 +145,35 @@ export function KpiCards({
       <KpiCard
         title="Gross profit"
         value={formatCurrency(kpis.grossProfit)}
-        subtitle="Revenue minus COGS"
-        explanation="Revenue minus COGS. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
+        subtitle={
+          isFinancialMetricsV2 ? "Net Sales minus COGS" : "Revenue minus COGS"
+        }
+        explanation={
+          isFinancialMetricsV2
+            ? "Net Sales minus COGS. COGS uses cost at sale when available, with legacy COGS fallback."
+            : "Revenue minus COGS. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
+        }
       />
       <KpiCard
         title="Gross margin"
         value={formatPercent(kpis.grossMarginPct)}
-        subtitle="Gross profit / revenue"
-        explanation="Gross profit as a percentage of revenue. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
+        subtitle={
+          isFinancialMetricsV2
+            ? "Gross profit / Net Sales"
+            : "Gross profit / revenue"
+        }
+        explanation={
+          isFinancialMetricsV2
+            ? "Gross profit as a percentage of Net Sales."
+            : "Gross profit as a percentage of revenue. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
+        }
       />
       <KpiCard
         title="Expenses"
         value={
-          kpis.expenses === null ? "Not configured" : formatCurrency(kpis.expenses)
+          kpis.expenses === null
+            ? "Not configured"
+            : formatCurrency(kpis.expenses)
         }
         subtitle="Fixed expenses from DB"
         explanation="Fixed expenses allocated to the selected location and date range."
@@ -108,7 +181,9 @@ export function KpiCards({
       <KpiCard
         title="Net profit"
         value={
-          kpis.netProfit === null ? "Not available" : formatCurrency(kpis.netProfit)
+          kpis.netProfit === null
+            ? "Not available"
+            : formatCurrency(kpis.netProfit)
         }
         subtitle="Gross profit minus expenses"
         explanation="Gross profit minus configured fixed expenses."

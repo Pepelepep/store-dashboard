@@ -4,7 +4,10 @@ import {
   formatCurrency,
   formatStoreDateTime,
 } from "../../lib/dashboard/dashboard-metrics";
-import type { RecentOrderRow } from "../../lib/dashboard/dashboard-types";
+import type {
+  FinancialMetricsVersion,
+  RecentOrderRow,
+} from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
 function Table({
@@ -84,27 +87,83 @@ function Table({
   );
 }
 
+function Chip({ label }: { label: string }) {
+  return (
+    <span
+      style={{
+        background: "#eef2ff",
+        border: "1px solid #c7d2fe",
+        borderRadius: 999,
+        color: "#3730a3",
+        display: "inline-block",
+        fontSize: 12,
+        fontWeight: 800,
+        margin: "0 4px 4px 0",
+        padding: "2px 8px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 export function RecentOrderLinesCard({
   recentOrders,
+  financialMetricsVersion,
 }: {
   recentOrders: RecentOrderRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
 }) {
-  return (
-    <SectionCard
-      title="Recent order lines"
-      exportConfig={{
-        filename: "recent-order-lines.csv",
-        headers: [
-          "Order",
-          "Date",
-          "Product",
-          "SKU",
-          "Qty",
-          "Revenue",
-          "COGS",
-          "Gross profit",
-        ],
-        rows: recentOrders.map((row) => [
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const exportHeaders = isFinancialMetricsV2
+    ? [
+        "Order",
+        "Date",
+        "Product",
+        "SKU",
+        "Qty",
+        "Gross Sales",
+        "Discounts",
+        "Net Sales",
+        "Returns",
+        "Refunded Amount",
+        "Returned Qty",
+        "Cost at Sale",
+        "COGS",
+        "Gross profit",
+        "Flags",
+      ]
+    : [
+        "Order",
+        "Date",
+        "Product",
+        "SKU",
+        "Qty",
+        "Revenue",
+        "COGS",
+        "Gross profit",
+      ];
+  const exportRows = recentOrders.map((row) =>
+    isFinancialMetricsV2
+      ? [
+          row.orderName,
+          formatStoreDateTime(row.date),
+          row.product,
+          row.sku,
+          row.quantity,
+          row.grossSales ?? "-",
+          row.discounts ?? "-",
+          row.netSales ?? "-",
+          row.returns ?? "-",
+          row.refundedAmount ?? "-",
+          row.returnedQuantity ?? "-",
+          row.costAtSale ?? "-",
+          row.cogs ?? "-",
+          row.grossProfit ?? "-",
+          row.chips?.join(", ") ?? "",
+        ]
+      : [
           row.orderName,
           formatStoreDateTime(row.date),
           row.product,
@@ -113,22 +172,73 @@ export function RecentOrderLinesCard({
           row.revenue,
           row.cogs ?? "-",
           row.grossProfit ?? "-",
-        ]),
-      }}
-    >
-      <Table
-        headers={[
-          "Order",
-          "Date",
-          "Product",
-          "SKU",
-          "Qty",
-          "Revenue",
-          "COGS",
-          "Gross profit",
-        ]}
-        rows={recentOrders.map((row) => [
-          <a href={row.orderUrl} target="_blank" rel="noreferrer">
+        ],
+  );
+  const tableHeaders = isFinancialMetricsV2
+    ? [
+        "Order",
+        "Date",
+        "Product",
+        "SKU",
+        "Qty",
+        "Gross Sales",
+        "Discounts",
+        "Net Sales",
+        "Returns",
+        "Refunded",
+        "Returned Qty",
+        "Cost at Sale",
+        "COGS",
+        "Gross profit",
+        "Flags",
+      ]
+    : [
+        "Order",
+        "Date",
+        "Product",
+        "SKU",
+        "Qty",
+        "Revenue",
+        "COGS",
+        "Gross profit",
+      ];
+  const tableRows = recentOrders.map((row) =>
+    isFinancialMetricsV2
+      ? [
+          <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
+            {row.orderName}
+          </a>,
+          formatStoreDateTime(row.date),
+          row.product,
+          row.sku,
+          row.quantity,
+          row.grossSales === null || row.grossSales === undefined
+            ? "-"
+            : formatCurrency(row.grossSales),
+          row.discounts === null || row.discounts === undefined
+            ? "-"
+            : formatCurrency(row.discounts),
+          row.netSales === null || row.netSales === undefined
+            ? "-"
+            : formatCurrency(row.netSales),
+          row.returns === null || row.returns === undefined
+            ? "-"
+            : formatCurrency(row.returns),
+          row.refundedAmount === null || row.refundedAmount === undefined
+            ? "-"
+            : formatCurrency(row.refundedAmount),
+          row.returnedQuantity ?? "-",
+          row.costAtSale === null || row.costAtSale === undefined
+            ? "-"
+            : formatCurrency(row.costAtSale),
+          row.cogs === null ? "-" : formatCurrency(row.cogs),
+          row.grossProfit === null ? "-" : formatCurrency(row.grossProfit),
+          row.chips && row.chips.length > 0
+            ? row.chips.map((chip) => <Chip key={chip} label={chip} />)
+            : "-",
+        ]
+      : [
+          <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
             {row.orderName}
           </a>,
           formatStoreDateTime(row.date),
@@ -138,8 +248,19 @@ export function RecentOrderLinesCard({
           formatCurrency(row.revenue),
           row.cogs === null ? "-" : formatCurrency(row.cogs),
           row.grossProfit === null ? "-" : formatCurrency(row.grossProfit),
-        ])}
-      />
+        ],
+  );
+
+  return (
+    <SectionCard
+      title="Recent order lines"
+      exportConfig={{
+        filename: "recent-order-lines.csv",
+        headers: exportHeaders,
+        rows: exportRows,
+      }}
+    >
+      <Table headers={tableHeaders} rows={tableRows} />
     </SectionCard>
   );
 }

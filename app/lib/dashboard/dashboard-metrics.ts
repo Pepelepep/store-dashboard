@@ -2,6 +2,7 @@ import type {
   BestSellerRow,
   ActiveDrilldowns,
   DashboardSalesOrderLineRow,
+  FinancialMetricsVersion,
   FixedExpenseDbRow,
   InventoryLevelDbRow,
   OrderLineDbRow,
@@ -15,6 +16,84 @@ import type {
 
 export const STORE_TIME_ZONE = "America/Toronto";
 export const UNKNOWN_STAFF_FILTER_VALUE = "__unknown_staff__";
+
+export function normalizeFinancialMetricsVersion(
+  value: string | undefined,
+): FinancialMetricsVersion {
+  return value === "v2" ? "v2" : "legacy";
+}
+
+export function toDashboardNumber(value: number | null | undefined) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function hasAnyV2SalesField(row: OrderLineDbRow | DashboardSalesOrderLineRow) {
+  return (
+    row.gross_sales != null ||
+    row.discounts != null ||
+    row.returns != null ||
+    row.net_sales != null
+  );
+}
+
+export function getLineGrossSales(
+  row: OrderLineDbRow | DashboardSalesOrderLineRow,
+) {
+  return row.gross_sales === null || row.gross_sales === undefined
+    ? toDashboardNumber(row.revenue)
+    : toDashboardNumber(row.gross_sales);
+}
+
+export function getLineDiscounts(
+  row: OrderLineDbRow | DashboardSalesOrderLineRow,
+) {
+  return toDashboardNumber(row.discounts);
+}
+
+export function getLineReturns(
+  row: OrderLineDbRow | DashboardSalesOrderLineRow,
+) {
+  return toDashboardNumber(row.returns);
+}
+
+export function getLineNetSales(
+  row: OrderLineDbRow | DashboardSalesOrderLineRow,
+) {
+  if (row.net_sales !== null && row.net_sales !== undefined) {
+    return toDashboardNumber(row.net_sales);
+  }
+
+  if (hasAnyV2SalesField(row)) {
+    return getLineGrossSales(row) - getLineDiscounts(row) - getLineReturns(row);
+  }
+
+  return toDashboardNumber(row.revenue);
+}
+
+export function getLineRefundedAmount(
+  row: OrderLineDbRow | DashboardSalesOrderLineRow,
+) {
+  return toDashboardNumber(row.refunded_amount);
+}
+
+export function getLineReturnedQuantity(
+  row: OrderLineDbRow | DashboardSalesOrderLineRow,
+) {
+  return toDashboardNumber(row.returned_quantity);
+}
+
+export function getLineCogsV2(
+  row: OrderLineDbRow | DashboardSalesOrderLineRow,
+) {
+  if (row.cost_at_sale !== null && row.cost_at_sale !== undefined) {
+    return (
+      toDashboardNumber(row.cost_at_sale) * toDashboardNumber(row.quantity)
+    );
+  }
+
+  return toDashboardNumber(row.cogs);
+}
 
 function getDatePartsInStoreTimezone(date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -146,7 +225,10 @@ export function formatStoreDateTime(value: string) {
   }).format(new Date(value));
 }
 
-export function buildShopifyOrderUrl(shopDomain: string, shopifyOrderId: string) {
+export function buildShopifyOrderUrl(
+  shopDomain: string,
+  shopifyOrderId: string,
+) {
   const numericId = shopifyOrderId.split("/").pop();
   const storeHandle = shopDomain.replace(".myshopify.com", "");
 
@@ -159,10 +241,7 @@ type SalesMetricOrderLine = DashboardSalesOrderLineRow & {
 
 export function getStaffFilterValue(row: DashboardSalesOrderLineRow) {
   return (
-    row.staff_member_id ||
-    row.staff_member_email ||
-    row.staff_member_name ||
-    ""
+    row.staff_member_id || row.staff_member_email || row.staff_member_name || ""
   );
 }
 
@@ -216,11 +295,10 @@ export function hasActiveDashboardDrilldowns(
   activeDrilldowns: ActiveDrilldowns,
 ) {
   return Boolean(
-    (activeDrilldowns.hour !== null &&
-      activeDrilldowns.hour !== undefined) ||
-      activeDrilldowns.product ||
-      activeDrilldowns.staff ||
-      activeDrilldowns.vendor,
+    (activeDrilldowns.hour !== null && activeDrilldowns.hour !== undefined) ||
+    activeDrilldowns.product ||
+    activeDrilldowns.staff ||
+    activeDrilldowns.vendor,
   );
 }
 
@@ -236,7 +314,8 @@ export function applyDashboardDrilldowns(
     if (
       activeDrilldowns.hour !== null &&
       activeDrilldowns.hour !== undefined &&
-      getStoreHourFromTimestamp(row.created_at_shopify) !== activeDrilldowns.hour
+      getStoreHourFromTimestamp(row.created_at_shopify) !==
+        activeDrilldowns.hour
     ) {
       return false;
     }

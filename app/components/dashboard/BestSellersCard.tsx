@@ -4,7 +4,10 @@ import {
   formatCurrency,
   getBestSellerDrilldownValue,
 } from "../../lib/dashboard/dashboard-metrics";
-import type { BestSellerRow } from "../../lib/dashboard/dashboard-types";
+import type {
+  BestSellerRow,
+  FinancialMetricsVersion,
+} from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
 function Table({
@@ -124,19 +127,24 @@ function Table({
 
 export function BestSellersCard({
   bestSellers,
+  financialMetricsVersion,
   selectedProductKey,
   onSelectBestSeller,
 }: {
   bestSellers: BestSellerRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   selectedProductKey?: string | null;
   onSelectBestSeller?: (row: BestSellerRow) => void;
 }) {
+  const revenueLabel =
+    financialMetricsVersion === "v2" ? "Product Net Sales" : "Revenue";
+
   return (
     <SectionCard
       title="Best sellers"
       exportConfig={{
         filename: "best-sellers.csv",
-        headers: ["Product", "SKU", "Vendor", "Units", "Revenue"],
+        headers: ["Product", "SKU", "Vendor", "Units", revenueLabel],
         rows: bestSellers.map((row) => [
           row.product,
           row.sku,
@@ -147,7 +155,7 @@ export function BestSellersCard({
       }}
     >
       <Table
-        headers={["Product", "SKU", "Vendor", "Units", "Revenue"]}
+        headers={["Product", "SKU", "Vendor", "Units", revenueLabel]}
         selectedRowKey={selectedProductKey}
         onRowClick={onSelectBestSeller}
         rows={bestSellers.map((row) => ({

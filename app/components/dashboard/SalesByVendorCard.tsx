@@ -1,7 +1,10 @@
 import { useState } from "react";
 
 import { formatCurrency } from "../../lib/dashboard/dashboard-metrics";
-import type { VendorRow } from "../../lib/dashboard/dashboard-types";
+import type {
+  FinancialMetricsVersion,
+  VendorRow,
+} from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
 function SalesTable({
@@ -121,28 +124,33 @@ function SalesTable({
 
 export function SalesByVendorCard({
   salesByVendor,
+  financialMetricsVersion,
   selectedVendorKey,
   onSelectVendor,
 }: {
   salesByVendor: VendorRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   selectedVendorKey?: string | null;
   onSelectVendor?: (row: VendorRow) => void;
 }) {
+  const revenueLabel =
+    financialMetricsVersion === "v2" ? "Net Sales" : "Revenue";
+
   return (
     <SectionCard
-      title="Sales by vendor"
+      title={
+        financialMetricsVersion === "v2"
+          ? "Net Sales by Vendor"
+          : "Sales by vendor"
+      }
       exportConfig={{
         filename: "sales-by-vendor.csv",
-        headers: ["Vendor", "Units", "Revenue"],
-        rows: salesByVendor.map((row) => [
-          row.vendor,
-          row.units,
-          row.revenue,
-        ]),
+        headers: ["Vendor", "Units", revenueLabel],
+        rows: salesByVendor.map((row) => [row.vendor, row.units, row.revenue]),
       }}
     >
       <SalesTable
-        headers={["Vendor", "Units", "Revenue"]}
+        headers={["Vendor", "Units", revenueLabel]}
         selectedRowKey={selectedVendorKey}
         onRowClick={onSelectVendor}
         rows={salesByVendor.map((row) => ({

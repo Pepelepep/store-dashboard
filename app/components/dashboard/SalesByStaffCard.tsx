@@ -1,7 +1,10 @@
 import { useState } from "react";
 
 import { formatCurrency } from "../../lib/dashboard/dashboard-metrics";
-import type { StaffSalesRow } from "../../lib/dashboard/dashboard-types";
+import type {
+  FinancialMetricsVersion,
+  StaffSalesRow,
+} from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
 function SalesTable({
@@ -110,21 +113,30 @@ function SalesTable({
 
 export function SalesByStaffCard({
   salesByStaff,
+  financialMetricsVersion,
   selectedStaffKey,
   onSelectStaff,
 }: {
   salesByStaff: StaffSalesRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   selectedStaffKey?: string | null;
   onSelectStaff?: (row: StaffSalesRow) => void;
 }) {
+  const revenueLabel =
+    financialMetricsVersion === "v2" ? "Net Sales" : "Revenue";
+
   return (
     <SectionCard
-      title="Sales by Staff"
+      title={
+        financialMetricsVersion === "v2"
+          ? "Net Sales by Staff"
+          : "Sales by Staff"
+      }
       exportConfig={
         salesByStaff.length > 0
           ? {
               filename: "sales-by-staff.csv",
-              headers: ["Staff", "Units", "Revenue"],
+              headers: ["Staff", "Units", revenueLabel],
               rows: salesByStaff.map((row) => [
                 row.staff,
                 row.units,
@@ -136,7 +148,7 @@ export function SalesByStaffCard({
     >
       {salesByStaff.length > 0 ? (
         <SalesTable
-          headers={["Staff", "Units", "Revenue"]}
+          headers={["Staff", "Units", revenueLabel]}
           selectedRowKey={selectedStaffKey}
           onRowClick={onSelectStaff}
           rows={salesByStaff.map((row) => ({

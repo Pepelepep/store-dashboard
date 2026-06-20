@@ -4,6 +4,8 @@ export type LocationRow = {
   is_active: boolean;
 };
 
+export type FinancialMetricsVersion = "legacy" | "v2";
+
 export type OrderLineDbRow = {
   order_name: string;
   shopify_order_id: string;
@@ -20,6 +22,14 @@ export type OrderLineDbRow = {
   unit_cost: number | null;
   cogs: number | null;
   gross_profit: number | null;
+  gross_sales?: number | null;
+  discounts?: number | null;
+  returns?: number | null;
+  net_sales?: number | null;
+  refunded_amount?: number | null;
+  taxes?: number | null;
+  returned_quantity?: number | null;
+  cost_at_sale?: number | null;
   cost_source: string | null;
   staff_member_id: string | null;
   staff_member_name: string | null;
@@ -38,6 +48,14 @@ export type DashboardSalesOrderLineRow = Pick<
   | "revenue"
   | "cogs"
   | "gross_profit"
+  | "gross_sales"
+  | "discounts"
+  | "returns"
+  | "net_sales"
+  | "refunded_amount"
+  | "taxes"
+  | "returned_quantity"
+  | "cost_at_sale"
   | "vendor"
   | "staff_member_id"
   | "staff_member_name"
@@ -148,6 +166,14 @@ export type RecentOrderRow = {
   revenue: number;
   cogs: number | null;
   grossProfit: number | null;
+  grossSales?: number | null;
+  discounts?: number | null;
+  netSales?: number | null;
+  returns?: number | null;
+  refundedAmount?: number | null;
+  returnedQuantity?: number | null;
+  costAtSale?: number | null;
+  chips?: string[];
   costSource: string;
 };
 
@@ -170,8 +196,18 @@ export type DashboardLoaderData = {
   preservedSearchParams: Array<{ name: string; value: string }>;
   lastSuccessfulSync: string | null;
   selectedDays: number;
+  financialMetricsVersion: FinancialMetricsVersion;
   kpis: {
     revenue: number;
+    grossSales?: number;
+    discounts?: number;
+    returns?: number;
+    refunds?: number;
+    refundTransactionsCount?: number;
+    refundedOrdersCount?: number;
+    returnedQuantity?: number;
+    returnedOrdersCount?: number;
+    refundAllocationWarning?: string | null;
     cogs: number;
     grossProfit: number;
     grossMarginPct: number | null;

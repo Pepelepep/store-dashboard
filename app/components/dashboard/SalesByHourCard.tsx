@@ -4,7 +4,10 @@ import {
   formatCurrency,
   formatNumber,
 } from "../../lib/dashboard/dashboard-metrics";
-import type { SalesByHourRow } from "../../lib/dashboard/dashboard-types";
+import type {
+  FinancialMetricsVersion,
+  SalesByHourRow,
+} from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
 function formatHourLabel(hour: number) {
@@ -20,23 +23,17 @@ function formatCompactCurrency(value: number) {
   }).format(value);
 }
 
-function getBarTitle(row: SalesByHourRow) {
+function getBarTitle(row: SalesByHourRow, revenueLabel: string) {
   return [
     `Hour: ${formatHourLabel(row.hour)}`,
-    `Revenue: ${formatCurrency(row.revenue)}`,
+    `${revenueLabel}: ${formatCurrency(row.revenue)}`,
     `Orders: ${formatNumber(row.ordersCount)}`,
     `Units: ${formatNumber(row.unitsSold)}`,
     `Average order value: ${formatCurrency(row.averageOrderValue)}`,
   ].join("\n");
 }
 
-function LegendItem({
-  color,
-  label,
-}: {
-  color: string;
-  label: string;
-}) {
+function LegendItem({ color, label }: { color: string; label: string }) {
   return (
     <span
       style={{
@@ -63,14 +60,18 @@ function LegendItem({
 
 export function SalesByHourCard({
   salesByHour,
+  financialMetricsVersion,
   selectedHour,
   onSelectHour,
 }: {
   salesByHour: SalesByHourRow[];
+  financialMetricsVersion: FinancialMetricsVersion;
   selectedHour?: number | null;
   onSelectHour?: (hour: number) => void;
 }) {
   const [hoveredHour, setHoveredHour] = useState<number | null>(null);
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
   const maxRevenue = Math.max(...salesByHour.map((row) => row.revenue), 0);
   const maxOrders = Math.max(...salesByHour.map((row) => row.ordersCount), 0);
   const hasSales = salesByHour.some(
@@ -81,13 +82,13 @@ export function SalesByHourCard({
 
   return (
     <SectionCard
-      title="Sales by hour"
-      subtitle="Revenue and order count grouped by order hour."
+      title={isFinancialMetricsV2 ? "Hourly Net Sales" : "Sales by hour"}
+      subtitle={`${revenueLabel} and order count grouped by order hour.`}
     >
       {hasSales ? (
         <div style={{ display: "grid", gap: 16 }}>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <LegendItem color="#2563eb" label="Revenue" />
+            <LegendItem color="#2563eb" label={revenueLabel} />
             <LegendItem color="#14b8a6" label="Orders" />
           </div>
 
@@ -121,7 +122,7 @@ export function SalesByHourCard({
               return (
                 <div
                   key={row.hour}
-                  title={getBarTitle(row)}
+                  title={getBarTitle(row, revenueLabel)}
                   role={onSelectHour ? "button" : undefined}
                   tabIndex={onSelectHour ? 0 : undefined}
                   onClick={() => onSelectHour?.(row.hour)}
