@@ -83,8 +83,8 @@ export function KpiCards({
             <>
               <div>After discounts &amp; returns</div>
               <div>
-                Discounts: {formatCurrency(discounts)} / {discountPercent} of
-                gross sales
+                Discounts applied: {formatCurrency(discounts)} (
+                {discountPercent} of Gross)
               </div>
             </>
           ) : (
@@ -93,7 +93,7 @@ export function KpiCards({
         }
         explanation={
           isFinancialMetricsV2
-            ? "Net sales for the selected location and date range. Refunds are tracked separately as cash movement."
+            ? "Net Sales is Gross Sales minus Discounts and Returns. Refunds are tracked separately as cash movement."
             : "Total synced sales revenue for the selected location and date range."
         }
       />

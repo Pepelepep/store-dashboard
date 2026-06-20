@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import {
   formatCurrency,
   formatStoreDateTime,
+  STORE_TIME_ZONE,
 } from "../../lib/dashboard/dashboard-metrics";
 import type {
   FinancialMetricsVersion,
@@ -13,9 +14,11 @@ import { SectionCard } from "./SectionCard";
 function Table({
   headers,
   rows,
+  dateColumnMinWidth,
 }: {
   headers: string[];
   rows: Array<Array<string | number | ReactNode>>;
+  dateColumnMinWidth?: number;
 }) {
   return (
     <div
@@ -41,6 +44,10 @@ function Table({
                   borderBottom: "1px solid #dcdcdc",
                   color: "#616161",
                   fontWeight: 800,
+                  minWidth:
+                    header === "Date" && dateColumnMinWidth
+                      ? dateColumnMinWidth
+                      : undefined,
                   whiteSpace: "nowrap",
                   position: "sticky",
                   top: 0,
@@ -63,6 +70,14 @@ function Table({
                     style={{
                       padding: "12px 10px",
                       borderBottom: "1px solid #f0f0f0",
+                      minWidth:
+                        cellIndex === 1 && dateColumnMinWidth
+                          ? dateColumnMinWidth
+                          : undefined,
+                      whiteSpace:
+                        cellIndex === 1 && dateColumnMinWidth
+                          ? "nowrap"
+                          : undefined,
                       verticalAlign: "top",
                     }}
                   >
@@ -87,14 +102,58 @@ function Table({
   );
 }
 
+function formatRecentOrderDate(value: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: STORE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
+}
+
+function getChipStyles(label: string) {
+  if (label === "Returned") {
+    return {
+      background: "#fff1f0",
+      border: "1px solid #ffccc7",
+      color: "#a8071a",
+    };
+  }
+
+  if (label === "Refunded" || label === "Partial refund") {
+    return {
+      background: "#fff7e6",
+      border: "1px solid #ffd591",
+      color: "#ad4e00",
+    };
+  }
+
+  return {
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    color: "#1d4ed8",
+  };
+}
+
 function Chip({ label }: { label: string }) {
+  const toneStyles = getChipStyles(label);
+
   return (
     <span
+      title="Return = merchandise returned. Refund = money returned to customer."
       style={{
-        background: "#eef2ff",
-        border: "1px solid #c7d2fe",
+        ...toneStyles,
         borderRadius: 999,
-        color: "#3730a3",
         display: "inline-block",
         fontSize: 12,
         fontWeight: 800,
@@ -116,6 +175,9 @@ export function RecentOrderLinesCard({
   financialMetricsVersion: FinancialMetricsVersion;
 }) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const formatDate = isFinancialMetricsV2
+    ? formatRecentOrderDate
+    : formatStoreDateTime;
   const exportHeaders = isFinancialMetricsV2
     ? [
         "Order",
@@ -148,7 +210,7 @@ export function RecentOrderLinesCard({
     isFinancialMetricsV2
       ? [
           row.orderName,
-          formatStoreDateTime(row.date),
+          formatDate(row.date),
           row.product,
           row.sku,
           row.quantity,
@@ -165,7 +227,7 @@ export function RecentOrderLinesCard({
         ]
       : [
           row.orderName,
-          formatStoreDateTime(row.date),
+          formatDate(row.date),
           row.product,
           row.sku,
           row.quantity,
@@ -208,7 +270,7 @@ export function RecentOrderLinesCard({
           <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
             {row.orderName}
           </a>,
-          formatStoreDateTime(row.date),
+          formatDate(row.date),
           row.product,
           row.sku,
           row.quantity,
@@ -241,7 +303,7 @@ export function RecentOrderLinesCard({
           <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
             {row.orderName}
           </a>,
-          formatStoreDateTime(row.date),
+          formatDate(row.date),
           row.product,
           row.sku,
           row.quantity,
@@ -254,13 +316,22 @@ export function RecentOrderLinesCard({
   return (
     <SectionCard
       title="Recent order lines"
+      subtitle={
+        isFinancialMetricsV2
+          ? "Return = merchandise returned. Refund = money returned to customer."
+          : undefined
+      }
       exportConfig={{
         filename: "recent-order-lines.csv",
         headers: exportHeaders,
         rows: exportRows,
       }}
     >
-      <Table headers={tableHeaders} rows={tableRows} />
+      <Table
+        headers={tableHeaders}
+        rows={tableRows}
+        dateColumnMinWidth={isFinancialMetricsV2 ? 138 : undefined}
+      />
     </SectionCard>
   );
 }
