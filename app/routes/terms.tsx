@@ -152,10 +152,15 @@ export default function TermsOfService() {
                 Privacy Policy
               </Link>
               . For help, contact{" "}
+              <a style={linkStyle} href="mailto:support@shopopsstudio.com">
+                support@shopopsstudio.com
+              </a>{" "}
+              or visit{" "}
               <Link style={linkStyle} to="/support">
                 ShopOps Studio support
               </Link>
-              .
+              . Support requests receive a response within 2 business days.
+              Security or privacy requests are prioritized.
             </p>
           </section>
         </article>

@@ -31,6 +31,8 @@ Draft status: marketplace preparation checklist.
 - [x] Privacy URL implemented in marketplace preview: `https://shopops-marketplace-preview.onrender.com/privacy`.
 - [x] Terms URL implemented in marketplace preview: `https://shopops-marketplace-preview.onrender.com/terms`.
 - [x] Support URL implemented in marketplace preview: `https://shopops-marketplace-preview.onrender.com/support`.
+- [x] Public support and privacy/security contact set to `support@shopopsstudio.com`.
+- [x] Public expected response time set to within 2 business days; security or privacy requests are prioritized.
 - [ ] Legal review privacy policy.
 - [ ] Legal review terms of service.
 - [ ] Approve data retention policy.
@@ -78,7 +80,7 @@ Draft status: marketplace preparation checklist.
 - [ ] Final short description.
 - [ ] Final long description.
 - [ ] Final FAQ.
-- [ ] Final support URL/email.
+- [x] Final support URL/email implemented for preview: `https://shopops-marketplace-preview.onrender.com/support`, `support@shopopsstudio.com`.
 - [x] Final privacy policy URL implemented for preview: `https://shopops-marketplace-preview.onrender.com/privacy`.
 - [x] Final terms URL implemented for preview: `https://shopops-marketplace-preview.onrender.com/terms`.
 

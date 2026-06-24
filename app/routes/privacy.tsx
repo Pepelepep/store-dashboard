@@ -153,9 +153,14 @@ export default function PrivacyPolicy() {
           <section style={sectionStyle}>
             <h2>Contact</h2>
             <p>
-              For privacy or support questions, contact{" "}
+              For privacy, security, or support questions, contact{" "}
+              <a style={linkStyle} href="mailto:support@shopopsstudio.com">
+                support@shopopsstudio.com
+              </a>
+              . Security or privacy requests are prioritized. You can also
+              review the{" "}
               <Link style={linkStyle} to="/support">
-                ShopOps Studio support
+                support page
               </Link>
               .
             </p>

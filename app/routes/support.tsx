@@ -82,17 +82,19 @@ export default function Support() {
             <h2>Contact</h2>
             <p>
               Support email:{" "}
-              <a style={linkStyle} href="mailto:support@shopopsstudio.example">
-                support@shopopsstudio.example
+              <a style={linkStyle} href="mailto:support@shopopsstudio.com">
+                support@shopopsstudio.com
               </a>
             </p>
             <p>
-              Expected response time:{" "}
-              <strong>[response time placeholder]</strong>
+              Expected response time: <strong>within 2 business days</strong>
             </p>
             <p>
-              Emergency or security contact:{" "}
-              <strong>[emergency contact placeholder]</strong>
+              Privacy and security contact:{" "}
+              <a style={linkStyle} href="mailto:support@shopopsstudio.com">
+                support@shopopsstudio.com
+              </a>
+              . Security or privacy requests are prioritized.
             </p>
           </section>
 

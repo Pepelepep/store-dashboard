@@ -4,7 +4,7 @@ Draft status: marketplace preparation draft. Update with final test shop and cre
 
 ## Test Shop Requirements
 
-Reviewer test shop: `[test shop domain placeholder]`
+Reviewer test shop: provide the assigned Shopify review shop domain in the App Store submission notes.
 
 Required demo data:
 
@@ -220,4 +220,5 @@ Expected outcome:
 - Explain that the app does not intentionally store direct customer profiles, customer addresses, customer phone numbers, or customer emails in business reporting tables.
 - Explain why historical order access is requested if `read_all_orders` remains in scope.
 - Explain why staff/user access is requested if `read_users` remains in scope.
-- Provide support contact and emergency contact.
+- Support, privacy, and security contact: `support@shopopsstudio.com`.
+- Expected response time: within 2 business days. Security or privacy requests are prioritized.
