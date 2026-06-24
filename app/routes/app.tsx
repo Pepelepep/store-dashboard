@@ -43,9 +43,9 @@ export default function App() {
           Dashboard
         </a>
         {canAdmin ? <a href={`/app/locations${search}`}>Locations</a> : null}
-        {canAdmin ? <a href={`/app/data-quality${search}`}>Data Health</a> : null}
         {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expenses</a> : null}
         {canAdmin ? <a href={`/app/admin/permissions${search}`}>Permissions</a> : null}
+        {canAdmin ? <a href={`/app/data-quality${search}`}>Data Health</a> : null}
       </ui-nav-menu>
 
       <Outlet />
