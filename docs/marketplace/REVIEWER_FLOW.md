@@ -23,6 +23,20 @@ Demo seed reference:
 
 - `supabase/seeds/001_staging_demo_data.sql` contains fake/demo reporting data for staging UI testing.
 
+## Public Marketplace Pages
+
+These pages are publicly accessible without Shopify authentication, an installed shop, or session context:
+
+- Privacy: `https://shopops-marketplace-preview.onrender.com/privacy`
+- Terms: `https://shopops-marketplace-preview.onrender.com/terms`
+- Support: `https://shopops-marketplace-preview.onrender.com/support`
+
+Expected outcome:
+
+- Each page loads directly in a browser.
+- The pages do not redirect to Shopify OAuth.
+- The pages link to each other for reviewer navigation.
+
 ## Install App
 
 1. Install ShopOps Studio from the Shopify App Store or test installation link.

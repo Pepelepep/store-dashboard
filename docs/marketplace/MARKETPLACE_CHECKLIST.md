@@ -28,6 +28,9 @@ Draft status: marketplace preparation checklist.
 
 ## Data / Privacy Readiness
 
+- [x] Privacy URL implemented in marketplace preview: `https://shopops-marketplace-preview.onrender.com/privacy`.
+- [x] Terms URL implemented in marketplace preview: `https://shopops-marketplace-preview.onrender.com/terms`.
+- [x] Support URL implemented in marketplace preview: `https://shopops-marketplace-preview.onrender.com/support`.
 - [ ] Legal review privacy policy.
 - [ ] Legal review terms of service.
 - [ ] Approve data retention policy.
@@ -76,8 +79,8 @@ Draft status: marketplace preparation checklist.
 - [ ] Final long description.
 - [ ] Final FAQ.
 - [ ] Final support URL/email.
-- [ ] Final privacy policy URL.
-- [ ] Final terms URL.
+- [x] Final privacy policy URL implemented for preview: `https://shopops-marketplace-preview.onrender.com/privacy`.
+- [x] Final terms URL implemented for preview: `https://shopops-marketplace-preview.onrender.com/terms`.
 
 ## Reviewer Testing
 
