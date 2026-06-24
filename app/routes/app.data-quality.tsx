@@ -609,7 +609,7 @@ function SyncFreshnessSection({
           </HelperText>
         </div>
         <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
-          Open Sync Monitor
+          Open Sync Center
         </AppButtonLink>
       </div>
 
@@ -740,11 +740,31 @@ export default function DataQualityPage() {
           }}
         >
           <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
-            Data Quality
+            Data Health
           </h1>
           <p style={{ color: "#616161", margin: "6px 0 0" }}>
-            Fast health checks for sync freshness, costs, orders, variants, and inventory joins.
+            These checks help explain whether reports are ready to trust.
+            Review sync freshness, missing costs, reporting gaps, financial
+            completeness where available, and recent sync failures.
           </p>
+          <div style={{ marginTop: 14 }}>
+            <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
+              Open Sync Center
+            </AppButtonLink>
+            <span
+              style={{
+                color: "#616161",
+                display: "inline-block",
+                fontSize: 13,
+                lineHeight: 1.4,
+                marginLeft: 10,
+                verticalAlign: "middle",
+              }}
+            >
+              Admin/support diagnostic view for sync jobs, freshness, and
+              troubleshooting.
+            </span>
+          </div>
         </section>
 
         {errors.length > 0 ? (
@@ -766,11 +786,11 @@ export default function DataQualityPage() {
 
         {isFirstRun ? (
           <PageNotice
-            title="Data Quality is waiting for synced data."
-            message="Data Quality becomes useful after Shopify locations, products, inventory, and orders have synced."
+            title="Data Health is waiting for synced data."
+            message="Data Health becomes useful after Shopify locations, products, inventory, and orders have synced."
             bullets={[
-              "Use Sync Center to monitor sync freshness and recent failures.",
-              "Once data is available, this page checks costs, orders, variants, inventory joins, staff attribution, and expenses.",
+              "Use Sync Center as an admin/support diagnostic view for sync freshness and recent failures.",
+              "Once data is available, this page checks costs, orders, variants, inventory joins, financial completeness, staff attribution, and expenses.",
             ]}
             cta={{
               to: `/app/admin/sync${preservedSearch}`,

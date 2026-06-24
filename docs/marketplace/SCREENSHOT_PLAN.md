@@ -16,8 +16,8 @@ Draft status: marketplace listing asset plan.
 2. Dashboard tables and stock alerts.
 3. Sales by Vendor and Sales by Staff.
 4. Locations comparison.
-5. Data Quality.
-6. Sync Center.
+5. Data Health.
+6. Sync Center only if showing admin/support diagnostics.
 7. Permissions.
 8. Expenses.
 9. First-run/empty state.
@@ -85,7 +85,7 @@ Data requirements:
 - Sales in each location.
 - Expenses configured for at least some locations.
 
-### 5. Data Quality
+### 5. Data Health
 
 Show:
 
@@ -93,6 +93,7 @@ Show:
 - Product/variant/order/inventory checks.
 - Expense coverage.
 - Optional staff attribution check.
+- Copy that explains these checks help show whether reports are ready to trust.
 
 Data requirements:
 
@@ -118,6 +119,7 @@ Important:
 
 - Do not show internal secrets.
 - Do not show any reviewer-facing full sync trigger.
+- Treat this as an admin/support diagnostic screenshot, not a primary marketplace product screen.
 
 ### 7. Permissions
 
@@ -178,8 +180,8 @@ Working capture recommendations:
 - [ ] Dashboard table/stock alert screenshot.
 - [ ] Vendor/staff screenshot.
 - [ ] Locations screenshot.
-- [ ] Data Quality screenshot.
-- [ ] Sync Center screenshot.
+- [ ] Data Health screenshot.
+- [ ] Sync Center screenshot only if needed for admin/support diagnostics.
 - [ ] Permissions screenshot.
 - [ ] Expenses screenshot.
 - [ ] First-run empty state screenshot.

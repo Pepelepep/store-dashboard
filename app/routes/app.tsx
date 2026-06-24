@@ -1,4 +1,4 @@
-import type { LoaderFunctionArgs } from "react-router";
+import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import type { DetailedHTMLProps, HTMLAttributes } from "react";
 import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
@@ -9,6 +9,7 @@ import { getPermissionContext } from "../lib/auth/permissions.server";
 import { authenticate } from "../shopify.server";
 
 declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
     interface IntrinsicElements {
       "ui-nav-menu": DetailedHTMLProps<
@@ -42,10 +43,9 @@ export default function App() {
           Dashboard
         </a>
         {canAdmin ? <a href={`/app/locations${search}`}>Locations</a> : null}
-        {canAdmin ? <a href={`/app/data-quality${search}`}>Data Quality</a> : null}
+        {canAdmin ? <a href={`/app/data-quality${search}`}>Data Health</a> : null}
         {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expenses</a> : null}
         {canAdmin ? <a href={`/app/admin/permissions${search}`}>Permissions</a> : null}
-        {canAdmin ? <a href={`/app/admin/sync${search}`}>Data Sync</a> : null}
       </ui-nav-menu>
 
       <Outlet />
@@ -57,6 +57,6 @@ export function ErrorBoundary() {
   return boundary.error(useRouteError());
 }
 
-export const headers = (headersArgs: any) => {
+export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };

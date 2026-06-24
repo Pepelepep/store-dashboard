@@ -32,8 +32,8 @@ ShopOps Studio is designed for merchants who operate physical retail locations, 
 - Sales by Staff where staff data is available.
 - Location-based permission controls.
 - Fixed expense management by location or globally.
-- Sync Center for freshness and troubleshooting visibility.
-- Data Quality page for identifying missing costs, incomplete syncs, and reporting gaps.
+- Data Health page for sync freshness, missing costs, financial completeness, recent failures, and reporting gaps.
+- Sync Center for admin/support diagnostics when troubleshooting sync jobs and freshness.
 - Shopify compliance webhook handling for customer/shop data requests.
 
 ## Ideal Customer
@@ -68,8 +68,8 @@ Recommended screenshots:
 2. Best sellers, stock alerts, and recent order lines.
 3. Sales by Vendor and Sales by Staff.
 4. Locations comparison page.
-5. Data Quality page.
-6. Sync Center.
+5. Data Health page.
+6. Sync Center only if showing admin/support diagnostics.
 7. Permissions management.
 8. Expenses management.
 9. Empty/first-run onboarding state.
@@ -102,7 +102,7 @@ Staff/user access supports Sales by Staff and location-level permissions. If una
 
 ### How does sync work?
 
-ShopOps Studio syncs Shopify data into reporting tables and uses webhooks for incremental updates. Admin users can review sync freshness in the Sync Center.
+ShopOps Studio syncs Shopify data into reporting tables and uses webhooks for incremental updates. Admin users can review report readiness in Data Health and use Sync Center for support diagnostics.
 
 ### How do I get support?
 

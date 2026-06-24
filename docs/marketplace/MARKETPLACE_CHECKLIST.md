@@ -8,7 +8,8 @@ Draft status: marketplace preparation checklist.
 - [ ] Approve target launch strategy: private, unlisted, or public App Store.
 - [ ] Decide whether `/app/locations` should remain admin-only or become viewer-accessible.
 - [ ] Decide first-install onboarding requirements.
-- [ ] Confirm Sync Center remains monitoring-only for reviewer flow.
+- [ ] Confirm Data Health is the marketplace-facing report trust page.
+- [ ] Confirm Sync Center remains admin/support diagnostic and hidden from main navigation.
 - [ ] Confirm financial metrics disclaimers.
 - [ ] Confirm historical reporting expectations.
 
@@ -65,8 +66,8 @@ Draft status: marketplace preparation checklist.
 - [ ] Final app icon.
 - [ ] Dashboard screenshot.
 - [ ] Locations screenshot.
-- [ ] Data Quality screenshot.
-- [ ] Sync Center screenshot.
+- [ ] Data Health screenshot.
+- [ ] Sync Center screenshot only if needed for admin/support diagnostics.
 - [ ] Permissions screenshot.
 - [ ] Expenses screenshot.
 - [ ] First-run onboarding screenshot.

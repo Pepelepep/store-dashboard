@@ -17,7 +17,7 @@ Required demo data:
 - Orders attributed to staff where available.
 - App-configured fixed expenses.
 - At least one successful sync run.
-- Optional: one failed sync run for Data Quality visibility.
+- Optional: one failed sync run for Data Health visibility.
 
 Demo seed reference:
 
@@ -131,22 +131,23 @@ Expected outcome:
 - Refunds and returns are visible where financial metrics v2 data is available.
 - Reporting copy does not imply accounting/tax finality.
 
-## Verify Data Quality
+## Verify Data Health
 
 Route: `/app/data-quality`
 
 Steps:
 
-1. Open Data Quality as admin.
+1. Open Data Health as admin.
 2. Review sync freshness.
 3. Review missing cost, missing product, missing location, and optional issue sections.
 4. Open sample order links if present.
 
 Expected outcome:
 
-- Data Quality loads without cross-shop data.
+- Data Health loads without cross-shop data.
 - Issues are grouped clearly.
 - Failed sync indicators are visible when present.
+- The page explains whether reports are ready to trust and links admins to Sync Center for support diagnostics.
 
 ## Verify Sync Center
 
@@ -162,7 +163,7 @@ Steps:
 Expected outcome:
 
 - Sync status is understandable.
-- The route is monitoring-oriented and does not require reviewer-triggered production sync.
+- The route is admin/support diagnostic and does not require reviewer-triggered production sync.
 
 ## Verify Permissions
 

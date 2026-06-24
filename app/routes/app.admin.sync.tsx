@@ -675,9 +675,10 @@ export default function AdminSyncPage() {
     >
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <header style={{ marginBottom: 28 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Sync Monitor</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Sync Center</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Monitor sync freshness, history, and troubleshooting details.
+            Admin/support diagnostic view for sync jobs, freshness, and
+            troubleshooting.
           </p>
           <div style={{ color: "#8a8f93", fontSize: 12, marginTop: 8 }}>
             Shop: {shop}
@@ -691,7 +692,7 @@ export default function AdminSyncPage() {
             bullets={[
               "This page is for monitoring sync health, freshness, and troubleshooting history.",
               "No reviewer-facing full sync trigger is available here.",
-              "When sync completes, Dashboard, Locations, and Data Quality will show richer reporting.",
+              "When sync completes, Dashboard, Locations, and Data Health will show richer reporting.",
             ]}
             tone="info"
           />
