@@ -1,8 +1,56 @@
-# Store Dashboard — Shopify Embedded App
+# ShopOps Studio — Shopify Embedded App
 
-## Project status
+## Marketplace product name
 
-`Store_dashboard` is a Shopify embedded app for **Local**.
+**ShopOps Studio** is the marketplace-facing product name for this Shopify embedded app.
+
+This repository also contains current client/internal implementation details from the original Store Dashboard work. Keep technical config filenames, historical references, and client-specific operational notes intact unless a marketplace cleanup task explicitly approves changing them.
+
+---
+
+## Marketplace development safety rules
+
+Marketplace work must stay on `marketplace/stable-prep` and `marketplace/*` branches unless explicit approval is given.
+
+Do not merge marketplace preparation work into client staging, main, or production branches without explicit approval.
+
+Do not change:
+
+```text
+current client production Shopify config
+current client Render production environment variables
+current client production data
+database schema
+webhook, cron, or backfill behavior
+billing or marketplace mode defaults
+```
+
+Do not use client production data in marketplace screenshots, demo stores, reviewer flows, or listing assets.
+
+---
+
+## Shopify config map
+
+Use separate Shopify config files for separate deployment targets:
+
+```text
+shopify.app.store-dashboard.toml
+→ current client production config
+
+shopify.app.store-dashboard-staging.toml
+→ current staging config
+
+shopify.app.shopops-marketplace.toml
+→ marketplace draft config
+```
+
+Do not change values in the current client production Shopify config for marketplace preparation. Marketplace config values should be finalized only in the dedicated marketplace config after approval.
+
+---
+
+## Current client/internal project status
+
+The original Store Dashboard app is a Shopify embedded app for **Local**.
 
 The app is installed on the real Local Shopify store and is built with:
 
