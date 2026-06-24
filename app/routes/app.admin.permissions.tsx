@@ -6,6 +6,7 @@ import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { AppButtonLink } from "../components/ui/AppButton";
+import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -379,6 +380,10 @@ export async function action({ request }: ActionFunctionArgs) {
     ok: true,
     message: "Permissions saved.",
   } satisfies ActionData;
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorNotice />;
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {

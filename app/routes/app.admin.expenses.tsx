@@ -9,6 +9,7 @@ import { AppButton } from "../components/ui/AppButton";
 import { FieldError } from "../components/ui/FieldError";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
+import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 
 type LocationRow = {
@@ -233,6 +234,10 @@ export async function action({ request }: ActionFunctionArgs) {
     ok: true,
     message: "Expense saved.",
   } satisfies ActionData;
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorNotice />;
 }
 
 function formatCurrency(value: number) {

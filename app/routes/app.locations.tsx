@@ -4,6 +4,7 @@ import { Form, useLoaderData } from "react-router";
 
 import { AppButton } from "../components/ui/AppButton";
 import { PageNotice } from "../components/ui/PageNotice";
+import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -1326,6 +1327,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     errors,
     debugInfo,
   } satisfies LoaderData;
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorNotice />;
 }
 
 function KpiGrid({

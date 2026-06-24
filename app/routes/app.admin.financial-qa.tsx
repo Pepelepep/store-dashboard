@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { Form, useLoaderData } from "react-router";
 
 import { HelperText } from "../components/ui/HelperText";
+import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
@@ -514,6 +515,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     orders: filteredOrders,
     errors,
   } satisfies LoaderData;
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorNotice />;
 }
 
 function SummaryCard({

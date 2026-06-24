@@ -8,6 +8,7 @@ import type { SyncJobRow } from "../lib/sync/sync-jobs.server";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { PageNotice } from "../components/ui/PageNotice";
+import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 
 type TableCount = {
@@ -494,6 +495,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     activeJob: selectCurrentSyncJob(typedRecentJobs),
     recentJobs: typedRecentJobs,
   };
+}
+
+export function ErrorBoundary() {
+  return <RouteErrorNotice />;
 }
 
 function Card({
