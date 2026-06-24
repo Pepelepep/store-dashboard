@@ -1,0 +1,90 @@
+# Marketplace Shopify app configuration draft for ShopOps Studio.
+# This file is intentionally separate from the current client production config:
+# - Do not deploy this config to the current client production Shopify app.
+# - Replace all TODO placeholders with values from the dedicated marketplace app
+#   before running `shopify app deploy --config shopify.app.shopops-marketplace.toml`.
+# - Keep billing disabled until a dedicated billing implementation branch is approved.
+
+# TODO(marketplace): replace with dedicated marketplace Shopify app client_id.
+client_id = "TODO_MARKETPLACE_CLIENT_ID"
+
+# TODO(marketplace): confirm final marketplace app name/handle in Partner Dashboard.
+name = "ShopOps Studio Marketplace"
+
+# TODO(marketplace): replace with dedicated marketplace Render/app URL.
+# Example: "https://shopops-studio-marketplace.onrender.com"
+application_url = "https://TODO_MARKETPLACE_APP_URL"
+
+# Embedded app setting expected for Shopify Admin marketplace review.
+embedded = true
+
+[webhooks]
+# Keep webhook API version aligned with deployed app capability.
+api_version = "2026-07"
+
+# Operational webhook URLs. These match current app routes but should point to
+# the marketplace application_url once this config is deployed.
+[[webhooks.subscriptions]]
+topics = ["orders/create"]
+uri = "/webhooks/orders/create"
+
+[[webhooks.subscriptions]]
+topics = ["orders/updated"]
+uri = "/webhooks/orders/updated"
+
+[[webhooks.subscriptions]]
+topics = ["inventory_levels/update"]
+uri = "/webhooks/inventory-levels/update"
+
+[[webhooks.subscriptions]]
+topics = ["inventory_items/update"]
+uri = "/webhooks/inventory-items/update"
+
+[[webhooks.subscriptions]]
+topics = ["products/create"]
+uri = "/webhooks/products/create"
+
+[[webhooks.subscriptions]]
+topics = ["products/update"]
+uri = "/webhooks/products/update"
+
+[[webhooks.subscriptions]]
+topics = ["products/delete"]
+uri = "/webhooks/products/delete"
+
+# Compliance webhook URLs required for App Store readiness.
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request"]
+uri = "/webhooks/customers/data_request"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/redact"]
+uri = "/webhooks/customers/redact"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["shop/redact"]
+uri = "/webhooks/shop/redact"
+
+[access_scopes]
+# Current scope set. Do not remove scopes in this phase.
+# TODO(marketplace): decide whether read_all_orders remains for MVP historical analytics.
+# TODO(marketplace): decide whether read_users remains required or moves to degraded mode.
+scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations,read_users"
+optional_scopes = []
+use_legacy_install_flow = false
+
+[auth]
+# TODO(marketplace): replace TODO_MARKETPLACE_APP_URL with the final marketplace URL.
+# Keep all callback paths in sync with Shopify app package auth behavior.
+redirect_urls = [
+  "https://TODO_MARKETPLACE_APP_URL/auth/callback",
+  "https://TODO_MARKETPLACE_APP_URL/auth/shopify/callback",
+  "https://TODO_MARKETPLACE_APP_URL/api/auth/callback"
+]
+
+[pos]
+embedded = false
+
+[build]
+# Safe for local development only. Confirm CLI behavior before marketplace deploy.
+automatically_update_urls_on_dev = false
