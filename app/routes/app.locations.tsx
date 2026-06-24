@@ -3,6 +3,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Form, useLoaderData } from "react-router";
 
 import { AppButton } from "../components/ui/AppButton";
+import { PageNotice } from "../components/ui/PageNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -125,6 +126,7 @@ type LoaderData = {
   startDate: string;
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;
+  lastSuccessfulSync: string | null;
   selectedDays: number;
   period: Period;
   kpis: Omit<LocationMetricRow, "locationId" | "locationName">;
@@ -1134,6 +1136,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (orderLinesResult.error) errors.push(orderLinesResult.error.message);
   if (expensesResult.error) errors.push(expensesResult.error.message);
 
+  const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
+    await supabase
+      .from("sync_runs")
+      .select("finished_at")
+      .eq("shop_domain", session.shop)
+      .eq("status", "success")
+      .order("finished_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+  if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
+
   const orderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
   const expenses = (expensesResult.data ?? []) as FixedExpenseDbRow[];
   const staffOptions = buildStaffOptions(orderLines);
@@ -1298,6 +1311,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     startDate,
     endDate,
     preservedSearchParams,
+    lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
     selectedDays,
     period,
     financialMetricsVersion,
@@ -2672,6 +2686,7 @@ export default function LocationsPage() {
     startDate,
     endDate,
     preservedSearchParams,
+    lastSuccessfulSync,
     kpis,
     financialMetricsVersion,
     locationRows,
@@ -2807,6 +2822,11 @@ export default function LocationsPage() {
       [key]: current[key]?.value === next.value ? null : next,
     }));
   };
+  const hasNoSyncedLocations = locations.length === 0;
+  const isDataPreparing = !lastSuccessfulSync && salesRows.length === 0;
+  const hasNoSalesForRange =
+    !hasNoSyncedLocations && !isDataPreparing && salesRows.length === 0;
+  const shouldShowAnalytics = !hasNoSyncedLocations && !isDataPreparing;
 
   return (
     <main
@@ -3114,62 +3134,101 @@ export default function LocationsPage() {
           </section>
         ) : null}
 
-        <KpiGrid
-          kpis={kpis}
-          financialMetricsVersion={financialMetricsVersion}
-        />
-        <ActiveLocationsDrilldownChips
-          activeDrilldowns={activeDrilldowns}
-          onClearOne={(key) =>
-            setActiveDrilldowns((current) => ({
-              ...current,
-              [key]: null,
-            }))
-          }
-          onClearAll={() => setActiveDrilldowns({})}
-        />
-        <TrendChart
-          rows={drilldownTrendRows}
-          period={period}
-          financialMetricsVersion={financialMetricsVersion}
-          onFilterChange={() => setIsDirty(true)}
-          selectedPeriod={activeDrilldowns.period?.value ?? null}
-          onSelectPeriod={(row) =>
-            toggleDrilldown("period", {
-              value: row.period,
-              label: row.period,
-            })
-          }
-        />
-        <RevenueBreakdownSection
-          revenueByVendor={drilldownRevenueByVendor}
-          revenueByStaff={drilldownRevenueByStaff}
-          financialMetricsVersion={financialMetricsVersion}
-          activeDrilldowns={activeDrilldowns}
-          onSelectVendor={(row) =>
-            toggleDrilldown("vendor", {
-              value: row.value,
-              label: row.label,
-            })
-          }
-          onSelectStaff={(row) =>
-            toggleDrilldown("staff", {
-              value: row.value,
-              label: row.label,
-            })
-          }
-        />
-        <LocationTable
-          rows={drilldownLocationRows}
-          financialMetricsVersion={financialMetricsVersion}
-          selectedLocation={activeDrilldowns.location?.value ?? null}
-          onSelectLocation={(row) =>
-            toggleDrilldown("location", {
-              value: row.locationId,
-              label: row.locationName,
-            })
-          }
-        />
+        {hasNoSyncedLocations ? (
+          <PageNotice
+            title="Your data is being prepared"
+            message="No locations have synced yet. Location reports appear after Shopify data sync completes."
+            bullets={[
+              "Open Sync Center to confirm whether locations, products, inventory, and orders have synced.",
+              "This page remains admin-only while marketplace onboarding is prepared.",
+            ]}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            tone="info"
+          />
+        ) : isDataPreparing ? (
+          <PageNotice
+            title="Your data is being prepared"
+            message="Reports appear after Shopify data sync completes."
+            bullets={[
+              "Location comparisons populate after successful sync runs create sales rows.",
+              "ShopOps Studio uses synced Shopify data to report sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health.",
+            ]}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            tone="info"
+          />
+        ) : hasNoSalesForRange ? (
+          <PageNotice
+            title="No sales for this date range."
+            message="Try another date range or confirm sync status."
+            bullets={[
+              "Filters remain available so admins can review another location, staff member, vendor, or date range.",
+              "If sales should already be available, check Sync Center for freshness or failures.",
+            ]}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            tone="neutral"
+          />
+        ) : null}
+
+        {shouldShowAnalytics ? (
+          <>
+            <KpiGrid
+              kpis={kpis}
+              financialMetricsVersion={financialMetricsVersion}
+            />
+            <ActiveLocationsDrilldownChips
+              activeDrilldowns={activeDrilldowns}
+              onClearOne={(key) =>
+                setActiveDrilldowns((current) => ({
+                  ...current,
+                  [key]: null,
+                }))
+              }
+              onClearAll={() => setActiveDrilldowns({})}
+            />
+            <TrendChart
+              rows={drilldownTrendRows}
+              period={period}
+              financialMetricsVersion={financialMetricsVersion}
+              onFilterChange={() => setIsDirty(true)}
+              selectedPeriod={activeDrilldowns.period?.value ?? null}
+              onSelectPeriod={(row) =>
+                toggleDrilldown("period", {
+                  value: row.period,
+                  label: row.period,
+                })
+              }
+            />
+            <RevenueBreakdownSection
+              revenueByVendor={drilldownRevenueByVendor}
+              revenueByStaff={drilldownRevenueByStaff}
+              financialMetricsVersion={financialMetricsVersion}
+              activeDrilldowns={activeDrilldowns}
+              onSelectVendor={(row) =>
+                toggleDrilldown("vendor", {
+                  value: row.value,
+                  label: row.label,
+                })
+              }
+              onSelectStaff={(row) =>
+                toggleDrilldown("staff", {
+                  value: row.value,
+                  label: row.label,
+                })
+              }
+            />
+            <LocationTable
+              rows={drilldownLocationRows}
+              financialMetricsVersion={financialMetricsVersion}
+              selectedLocation={activeDrilldowns.location?.value ?? null}
+              onSelectLocation={(row) =>
+                toggleDrilldown("location", {
+                  value: row.locationId,
+                  label: row.locationName,
+                })
+              }
+            />
+          </>
+        ) : null}
       </div>
     </main>
   );

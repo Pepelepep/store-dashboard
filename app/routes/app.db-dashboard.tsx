@@ -14,6 +14,7 @@ import { SalesByHourCard } from "../components/dashboard/SalesByHourCard";
 import { SalesByStaffCard } from "../components/dashboard/SalesByStaffCard";
 import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
+import { PageNotice } from "../components/ui/PageNotice";
 import {
   buildShopifyOrderUrl,
   applyDashboardDrilldowns,
@@ -268,11 +269,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     : allLocations.filter((location) =>
         permissions.allowedLocationIds.has(location.shopify_location_id),
       );
-  if (!permissions.isAdmin && locations.length === 0) {
-    throw new Response("Forbidden: no location access configured", {
-      status: 403,
-    });
-  }
+  const noAssignedLocations = !permissions.isAdmin && locations.length === 0;
   const requestedLocationId = url.searchParams.get("locationId");
   const selectedLocation =
     locations.find(
@@ -292,6 +289,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .order("finished_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { count: recentSyncFailureCount, error: recentSyncFailureError } =
+    await supabase
+      .from("sync_runs")
+      .select("*", { count: "exact", head: true })
+      .eq("shop_domain", session.shop)
+      .eq("status", "error")
+      .gte("started_at", since24h);
 
   const [
     orderLinesResult,
@@ -344,6 +350,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (productsResult.error) errors.push(productsResult.error.message);
   if (expensesResult.error) errors.push(expensesResult.error.message);
   if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
+  if (recentSyncFailureError) errors.push(recentSyncFailureError.message);
 
   const orderLines = (orderLinesResult.data ?? []) as unknown as OrderLineDbRow[];
   const inventoryRows = (inventoryResult.data ?? []) as InventoryLevelDbRow[];
@@ -519,6 +526,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
     endDate,
     preservedSearchParams,
     lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
+    readiness: {
+      canAdmin: permissions.isAdmin,
+      activeLocationsCount: allLocations.length,
+      accessibleLocationsCount: locations.length,
+      selectedLocationsCount: selectedLocationId ? 1 : 0,
+      orderLinesForSelectedPeriod: orderLines.length,
+      productsCount: products.length,
+      inventoryRowsCount: inventoryRows.length,
+      hasRecentSyncFailure: (recentSyncFailureCount ?? 0) > 0,
+      noAssignedLocations,
+    },
     selectedDays,
     financialMetricsVersion,
     kpis: {
@@ -602,6 +620,7 @@ export default function DbDashboardPage() {
     endDate,
     preservedSearchParams,
     lastSuccessfulSync,
+    readiness,
     selectedDays,
     financialMetricsVersion,
     kpis,
@@ -654,6 +673,19 @@ export default function DbDashboardPage() {
       [key]: isSameDrilldown(current[key], next) ? null : next,
     }));
   };
+  const syncCenterCta = readiness.canAdmin
+    ? { to: "/app/admin/sync", label: "Open Sync Center" }
+    : undefined;
+  const isFirstRunPreparing =
+    readiness.activeLocationsCount === 0 ||
+    (!lastSuccessfulSync && readiness.orderLinesForSelectedPeriod === 0);
+  const hasNoSalesForPeriod =
+    !isFirstRunPreparing &&
+    readiness.accessibleLocationsCount > 0 &&
+    readiness.orderLinesForSelectedPeriod === 0;
+  const hasProductInventoryGap =
+    !isFirstRunPreparing &&
+    (readiness.productsCount === 0 || readiness.inventoryRowsCount === 0);
 
   return (
     <main
@@ -666,6 +698,37 @@ export default function DbDashboardPage() {
       }}
     >
       <div style={{ maxWidth: 1360, margin: "0 auto" }}>
+        {readiness.noAssignedLocations ? (
+          <PageNotice
+            title="You do not have access to any locations yet."
+            message="Ask an app admin to assign your location access."
+            bullets={[
+              "ShopOps Studio keeps dashboard data filtered to locations you are allowed to view.",
+              "After an admin grants access, return to the dashboard to review your assigned location reports.",
+            ]}
+            tone="warning"
+          />
+        ) : isFirstRunPreparing ? (
+          <PageNotice
+            title="Your data is being prepared"
+            message="Reports appear after Shopify data sync completes. ShopOps Studio helps multi-location merchants understand sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health."
+            bullets={
+              readiness.canAdmin
+                ? [
+                    "Check Sync Center to confirm whether locations, products, inventory, and orders have synced.",
+                    "Dashboard reports populate automatically once synced Shopify data is available.",
+                    "No billing or reviewer-facing full sync action is required on this page.",
+                  ]
+                : [
+                    "Ask an app admin to confirm sync status in Sync Center.",
+                    "If you should see a location, ask an app admin to assign your location access.",
+                  ]
+            }
+            cta={syncCenterCta}
+            tone="info"
+          />
+        ) : null}
+
         <DashboardHeader
           locations={locations}
           selectedLocationId={selectedLocationId}
@@ -698,94 +761,140 @@ export default function DbDashboardPage() {
           </section>
         ) : null}
 
-        <KpiCards
-          kpis={kpis}
-          financialMetricsVersion={financialMetricsVersion}
-        />
-
-        <ActiveDrilldownBadge
-          activeDrilldowns={activeDrilldowns}
-          onClearOne={(key) =>
-            setActiveDrilldowns((current) => ({
-              ...current,
-              [key]: null,
-            }))
-          }
-          onClearAll={() => setActiveDrilldowns(emptyDrilldowns)}
-        />
-
-        <div style={{ marginBottom: 20 }}>
-          <SalesByHourCard
-            salesByHour={drilldownSalesByHour}
-            financialMetricsVersion={financialMetricsVersion}
-            selectedHour={selectedHour}
-            onSelectHour={toggleHourDrilldown}
+        {!readiness.noAssignedLocations && hasNoSalesForPeriod ? (
+          <PageNotice
+            title="No sales for this period."
+            message="Try another date range or confirm sync status."
+            bullets={[
+              "Filters remain available so you can review another location, staff member, vendor, or date range.",
+              readiness.canAdmin
+                ? "Admins can check Sync Center if sales should already be available."
+                : "Ask an app admin to confirm sync status if sales should already be available.",
+            ]}
+            cta={syncCenterCta}
+            tone="neutral"
           />
-        </div>
+        ) : null}
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)",
-            gap: 20,
-            marginBottom: 20,
-          }}
-        >
-          <BestSellersCard
-            bestSellers={drilldownBestSellers}
-            financialMetricsVersion={financialMetricsVersion}
-            selectedProductKey={selectedProductKey}
-            onSelectBestSeller={(row) =>
-              toggleDrilldown("product", {
-                value: getBestSellerDrilldownValue(row),
-                label:
-                  row.sku && row.sku !== "-"
-                    ? `${row.product} / ${row.sku}`
-                    : row.product,
-              })
-            }
+        {!readiness.noAssignedLocations && hasProductInventoryGap ? (
+          <PageNotice
+            title="Inventory and margin context may still be preparing."
+            message="Inventory and margin context may appear after product and inventory sync completes."
+            bullets={[
+              "Sales reporting can appear before every product, variant, or inventory row is available.",
+              "Stock alerts and cost context may be limited until product and inventory syncs finish.",
+            ]}
+            cta={syncCenterCta}
+            tone="warning"
           />
+        ) : null}
 
-          <StockAlertsCard stockAlerts={stockAlerts} />
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-            gap: 20,
-            marginBottom: 20,
-          }}
-        >
-          <SalesByStaffCard
-            salesByStaff={drilldownSalesByStaff}
-            financialMetricsVersion={financialMetricsVersion}
-            selectedStaffKey={selectedStaffKey}
-            onSelectStaff={(row) =>
-              toggleDrilldown("staff", {
-                value: row.staffKey,
-                label: row.staff,
-              })
-            }
+        {!readiness.noAssignedLocations && readiness.hasRecentSyncFailure ? (
+          <PageNotice
+            title="Recent sync failures need review."
+            message="Some sync work failed in the last 24 hours, so reports may be incomplete until an admin reviews sync health."
+            bullets={[
+              readiness.canAdmin
+                ? "Open Sync Center to review failed sync runs and recent jobs."
+                : "Ask an app admin to review Sync Center if reports look incomplete.",
+            ]}
+            cta={syncCenterCta}
+            tone="warning"
           />
+        ) : null}
 
-          <SalesByVendorCard
-            salesByVendor={drilldownSalesByVendor}
-            financialMetricsVersion={financialMetricsVersion}
-            selectedVendorKey={selectedVendorKey}
-            onSelectVendor={(row) =>
-              toggleDrilldown("vendor", {
-                value: row.vendor,
-                label: row.vendor,
-              })
-            }
-          />
-        </div>
+        {!readiness.noAssignedLocations && !isFirstRunPreparing ? (
+          <>
+            <KpiCards
+              kpis={kpis}
+              financialMetricsVersion={financialMetricsVersion}
+            />
 
-        <RecentOrderLinesCard
-          recentOrders={drilldownRecentOrders}
-          financialMetricsVersion={financialMetricsVersion}
-        />
+            <ActiveDrilldownBadge
+              activeDrilldowns={activeDrilldowns}
+              onClearOne={(key) =>
+                setActiveDrilldowns((current) => ({
+                  ...current,
+                  [key]: null,
+                }))
+              }
+              onClearAll={() => setActiveDrilldowns(emptyDrilldowns)}
+            />
+
+            <div style={{ marginBottom: 20 }}>
+              <SalesByHourCard
+                salesByHour={drilldownSalesByHour}
+                financialMetricsVersion={financialMetricsVersion}
+                selectedHour={selectedHour}
+                onSelectHour={toggleHourDrilldown}
+              />
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)",
+                gap: 20,
+                marginBottom: 20,
+              }}
+            >
+              <BestSellersCard
+                bestSellers={drilldownBestSellers}
+                financialMetricsVersion={financialMetricsVersion}
+                selectedProductKey={selectedProductKey}
+                onSelectBestSeller={(row) =>
+                  toggleDrilldown("product", {
+                    value: getBestSellerDrilldownValue(row),
+                    label:
+                      row.sku && row.sku !== "-"
+                        ? `${row.product} / ${row.sku}`
+                        : row.product,
+                  })
+                }
+              />
+
+              <StockAlertsCard stockAlerts={stockAlerts} />
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                gap: 20,
+                marginBottom: 20,
+              }}
+            >
+              <SalesByStaffCard
+                salesByStaff={drilldownSalesByStaff}
+                financialMetricsVersion={financialMetricsVersion}
+                selectedStaffKey={selectedStaffKey}
+                onSelectStaff={(row) =>
+                  toggleDrilldown("staff", {
+                    value: row.staffKey,
+                    label: row.staff,
+                  })
+                }
+              />
+
+              <SalesByVendorCard
+                salesByVendor={drilldownSalesByVendor}
+                financialMetricsVersion={financialMetricsVersion}
+                selectedVendorKey={selectedVendorKey}
+                onSelectVendor={(row) =>
+                  toggleDrilldown("vendor", {
+                    value: row.vendor,
+                    label: row.vendor,
+                  })
+                }
+              />
+            </div>
+
+            <RecentOrderLinesCard
+              recentOrders={drilldownRecentOrders}
+              financialMetricsVersion={financialMetricsVersion}
+            />
+          </>
+        ) : null}
       </div>
     </main>
   );

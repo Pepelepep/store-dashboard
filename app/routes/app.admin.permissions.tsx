@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { AppButtonLink } from "../components/ui/AppButton";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -706,8 +707,15 @@ export default function AdminPermissionsPage() {
                   <FieldHelp>
                     {staffMembers.length > 0
                       ? "Select a staff member to fill their email automatically."
-                      : "No staff members synced yet. Go to Sync Center and run Sync staff members."}
+                      : "No staff members synced yet. Staff may appear after Shopify staff sync if read_users is available."}
                   </FieldHelp>
+                  {staffMembers.length === 0 ? (
+                    <div>
+                      <AppButtonLink to="/app/admin/sync" compact>
+                        Open Sync Center
+                      </AppButtonLink>
+                    </div>
+                  ) : null}
                   <FieldError>{fieldErrors?.staff}</FieldError>
                 </label>
 
@@ -804,8 +812,15 @@ export default function AdminPermissionsPage() {
                 </div>
                 {locations.length === 0 ? (
                   <p style={{ color: "#616161", fontSize: 13, lineHeight: 1.35 }}>
-                    No locations synced yet. Sync locations first.
+                    No locations synced yet. Locations may appear after location sync completes.
                   </p>
+                ) : null}
+                {locations.length === 0 ? (
+                  <div>
+                    <AppButtonLink to="/app/admin/sync" compact>
+                      Open Sync Center
+                    </AppButtonLink>
+                  </div>
                 ) : null}
                 <FieldError>{fieldErrors?.locations}</FieldError>
               </div>

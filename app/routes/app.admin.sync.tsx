@@ -7,6 +7,7 @@ import { assertAdminAccess } from "../lib/auth/permissions.server";
 import type { SyncJobRow } from "../lib/sync/sync-jobs.server";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
+import { PageNotice } from "../components/ui/PageNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 
 type TableCount = {
@@ -649,6 +650,17 @@ export default function AdminSyncPage() {
   const lastSuccessfulSync = lastSyncRuns.find(
     (run) => run.status === "success" && run.finished_at,
   );
+  const businessRecordCount = counts
+    .filter((row) =>
+      ["locations", "products", "variants", "inventory_levels", "orders", "order_lines"].includes(
+        row.table,
+      ),
+    )
+    .reduce((sum, row) => sum + row.count, 0);
+  const shouldShowFirstRunStatus =
+    !lastSuccessfulSync ||
+    businessRecordCount === 0 ||
+    (lastSyncRuns.length === 0 && recentJobs.length === 0);
   const fullRefreshCommand = `npm run sync:local -- --shop ${shop} --steps locations,products,inventory,orders`;
 
   return (
@@ -671,6 +683,19 @@ export default function AdminSyncPage() {
             Shop: {shop}
           </div>
         </header>
+
+        {shouldShowFirstRunStatus ? (
+          <PageNotice
+            title="First run status"
+            message="Data may still be preparing. Reports populate after Shopify locations, products, inventory, and orders sync into ShopOps Studio."
+            bullets={[
+              "This page is for monitoring sync health, freshness, and troubleshooting history.",
+              "No reviewer-facing full sync trigger is available here.",
+              "When sync completes, Dashboard, Locations, and Data Quality will show richer reporting.",
+            ]}
+            tone="info"
+          />
+        ) : null}
 
         <section
           style={{

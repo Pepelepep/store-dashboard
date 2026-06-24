@@ -195,6 +195,17 @@ export type DashboardLoaderData = {
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;
   lastSuccessfulSync: string | null;
+  readiness: {
+    canAdmin: boolean;
+    activeLocationsCount: number;
+    accessibleLocationsCount: number;
+    selectedLocationsCount: number;
+    orderLinesForSelectedPeriod: number;
+    productsCount: number;
+    inventoryRowsCount: number;
+    hasRecentSyncFailure: boolean;
+    noAssignedLocations: boolean;
+  };
   selectedDays: number;
   financialMetricsVersion: FinancialMetricsVersion;
   kpis: {

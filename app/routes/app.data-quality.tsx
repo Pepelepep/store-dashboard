@@ -3,6 +3,7 @@ import { useLoaderData } from "react-router";
 
 import { AppButtonLink } from "../components/ui/AppButton";
 import { HelperText } from "../components/ui/HelperText";
+import { PageNotice } from "../components/ui/PageNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -57,6 +58,7 @@ type LoaderData = {
     rows: Array<{ locationName: string; status: "Covered" | "Missing" }>;
   };
   errors: string[];
+  isFirstRun: boolean;
 };
 
 const sampleLimit = 10;
@@ -364,6 +366,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       rows: expenseRows,
     },
     errors,
+    isFirstRun: allLocations.length === 0 && syncRuns.length === 0,
   } satisfies LoaderData;
 }
 
@@ -713,6 +716,7 @@ export default function DataQualityPage() {
     optionalIssues,
     expenseCoverage,
     errors,
+    isFirstRun,
   } = useLoaderData<LoaderData>();
 
   return (
@@ -758,6 +762,22 @@ export default function DataQualityPage() {
               {JSON.stringify(errors, null, 2)}
             </pre>
           </section>
+        ) : null}
+
+        {isFirstRun ? (
+          <PageNotice
+            title="Data Quality is waiting for synced data."
+            message="Data Quality becomes useful after Shopify locations, products, inventory, and orders have synced."
+            bullets={[
+              "Use Sync Center to monitor sync freshness and recent failures.",
+              "Once data is available, this page checks costs, orders, variants, inventory joins, staff attribution, and expenses.",
+            ]}
+            cta={{
+              to: `/app/admin/sync${preservedSearch}`,
+              label: "Open Sync Center",
+            }}
+            tone="info"
+          />
         ) : null}
 
         <div style={{ display: "grid", gap: 20 }}>
