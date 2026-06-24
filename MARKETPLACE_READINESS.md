@@ -20,6 +20,20 @@ The main blockers are not broad code rewrites; they are marketplace readiness de
 
 Recommended next branch: `marketplace/readiness-phase-1-docs-legal-onboarding`.
 
+## Phase 1 Documentation
+
+Marketplace readiness Phase 1 drafts:
+
+- [Privacy Policy Draft](docs/marketplace/PRIVACY_POLICY_DRAFT.md)
+- [Terms of Service Draft](docs/marketplace/TERMS_OF_SERVICE_DRAFT.md)
+- [Support and Contacts](docs/marketplace/SUPPORT_AND_CONTACTS.md)
+- [Data Retention Policy](docs/marketplace/DATA_RETENTION_POLICY.md)
+- [Shopify Scopes Justification](docs/marketplace/SHOPIFY_SCOPES_JUSTIFICATION.md)
+- [Protected Customer Data Matrix](docs/marketplace/PROTECTED_CUSTOMER_DATA_MATRIX.md)
+- [Reviewer Flow](docs/marketplace/REVIEWER_FLOW.md)
+- [Listing Copy Draft](docs/marketplace/LISTING_COPY_DRAFT.md)
+- [Marketplace Checklist](docs/marketplace/MARKETPLACE_CHECKLIST.md)
+
 ## Current Status
 
 ### Route Inventory
