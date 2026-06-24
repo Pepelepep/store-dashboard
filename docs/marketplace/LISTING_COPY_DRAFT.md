@@ -47,18 +47,27 @@ ShopOps Studio is built for Shopify merchants that:
 - Need lightweight operational dashboards inside Shopify.
 - Want admin-controlled access by location.
 
-## Pricing Placeholder
+## Pricing
 
-Pricing: `[pricing plan placeholder]`
+Initial public plan:
 
-Draft options:
+- ShopOps Studio: `$59.99/month`
+- 14-day free trial
+- Billing through Shopify App Store managed pricing
 
-- Free during private beta.
-- Monthly subscription by location count.
-- Flat monthly subscription for small retailers.
-- Trial period followed by paid subscription.
+Future pricing draft:
 
-Billing is not currently enabled and must be implemented before paid public launch.
+- Starter: `$39.99/month`
+- Growth: `$99.99/month`
+- Pro: `$199.99/month`
+
+Billing should remain disabled by default until final review.
+
+## Onboarding Copy
+
+1. Connect your store
+2. Sync your data
+3. Trust your reporting
 
 ## Screenshot List
 

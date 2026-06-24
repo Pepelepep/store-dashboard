@@ -1,10 +1,17 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import type { DetailedHTMLProps, HTMLAttributes } from "react";
-import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
+import {
+  Outlet,
+  redirect,
+  useLoaderData,
+  useLocation,
+  useRouteError,
+} from "react-router";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
+import { getBillingGateState } from "../lib/billing.server";
 
 import { authenticate } from "../shopify.server";
 
@@ -21,18 +28,26 @@ declare global {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const billing = await getBillingGateState({ admin, shop: session.shop });
+
+  if (billing.requiresBilling && url.pathname !== "/app/billing-required") {
+    throw redirect(`/app/billing-required${url.search}`);
+  }
+
   const supabase = getSupabaseAdminClient();
   const permissions = await getPermissionContext({ request, session, supabase });
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY ?? "",
+    billingEnabled: billing.billingEnabled,
     canAdmin: permissions.isAdmin,
   };
 }
 
 export default function App() {
-  const { apiKey, canAdmin } = useLoaderData<typeof loader>();
+  const { apiKey, billingEnabled, canAdmin } = useLoaderData<typeof loader>();
   const location = useLocation();
   const search = location.search;
 
@@ -46,6 +61,9 @@ export default function App() {
         {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expenses</a> : null}
         {canAdmin ? <a href={`/app/admin/permissions${search}`}>Permissions</a> : null}
         {canAdmin ? <a href={`/app/data-quality${search}`}>Data Health</a> : null}
+        {billingEnabled ? (
+          <a href={`/app/billing-required${search}`}>Billing</a>
+        ) : null}
       </ui-nav-menu>
 
       <Outlet />

@@ -45,9 +45,33 @@ Marketplace Render service should define:
 - `FINANCIAL_METRICS_VERSION`: recommended `v2` for marketplace review if the demo data and sync path support current financial fields.
 - `ADMIN_EMAILS`: reviewer/admin bootstrap email list for the demo shop.
 - `ADMIN_SHOPIFY_USER_IDS`: optional bootstrap user IDs for reviewer/admin access.
+- `BILLING_ENABLED`: set to `false` by default. Set to `true` only for final billing review.
+- `BILLING_TEST_SHOPS`: comma-separated dev or reviewer shop domains that may bypass the billing gate while billing is enabled.
 - `SHOP_CUSTOM_DOMAIN`: only if the marketplace app needs a custom shop domain. Leave unset by default.
 
 Do not copy current client production secrets into the marketplace environment.
+
+## Billing Configuration
+
+Billing uses Shopify App Store managed pricing only. Do not configure Stripe or external billing for marketplace review.
+
+Initial public plan:
+
+- ShopOps Studio: `$59.99/month`
+- Free trial: 14 days
+
+Runtime behavior:
+
+- Keep `BILLING_ENABLED=false` until final review.
+- When `BILLING_ENABLED=false`, app access is not blocked.
+- When `BILLING_ENABLED=true`, shops without an active Shopify managed subscription are sent to the billing-required state.
+- Shops listed in `BILLING_TEST_SHOPS` bypass the billing gate for dev and reviewer testing.
+
+Future pricing draft:
+
+- Starter: `$39.99/month`
+- Growth: `$99.99/month`
+- Pro: `$199.99/month`
 
 ## Financial Metrics Version Guidance
 

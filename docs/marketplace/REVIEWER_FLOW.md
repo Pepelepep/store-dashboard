@@ -33,6 +33,7 @@ Expected outcome:
 
 - App opens embedded in Shopify admin.
 - Merchant lands in ShopOps Studio.
+- If `BILLING_ENABLED=true` and the shop has no active Shopify managed subscription, the app shows the billing-required state for the ShopOps Studio plan at `$59.99/month` with a 14-day free trial.
 - If no synced data exists, the app should show first-run guidance and sync expectations.
 
 ## Open Embedded App
@@ -48,9 +49,11 @@ Expected outcome:
 
 ## First-Run / Onboarding Expectation
 
-Current implementation note:
+Current onboarding copy:
 
-- The app currently redirects to `/app/db-dashboard`; a marketplace-grade first-run onboarding state is still recommended.
+- Connect your store
+- Sync your data
+- Trust your reporting
 
 Expected future outcome:
 

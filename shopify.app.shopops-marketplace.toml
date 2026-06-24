@@ -5,15 +5,13 @@
 #   before running `shopify app deploy --config shopify.app.shopops-marketplace.toml`.
 # - Keep billing disabled until a dedicated billing implementation branch is approved.
 
-# TODO(marketplace): replace with dedicated marketplace Shopify app client_id.
-client_id = "TODO_MARKETPLACE_CLIENT_ID"
+client_id = "751df93cb283cb05edc5b46b35de06be"
 
-# TODO(marketplace): confirm final marketplace app name/handle in Partner Dashboard.
-name = "ShopOps Studio Marketplace"
+name = "ShopOps Studio MP Preview"
 
 # TODO(marketplace): replace with dedicated marketplace Render/app URL.
 # Example: "https://shopops-studio-marketplace.onrender.com"
-application_url = "https://TODO_MARKETPLACE_APP_URL"
+application_url = "https://shopops-marketplace-preview.onrender.com"
 
 # Embedded app setting expected for Shopify Admin marketplace review.
 embedded = true
@@ -69,7 +67,7 @@ uri = "/webhooks/shop/redact"
 # Current scope set. Do not remove scopes in this phase.
 # TODO(marketplace): decide whether read_all_orders remains for MVP historical analytics.
 # TODO(marketplace): decide whether read_users remains required or moves to degraded mode.
-scopes = "read_all_orders,read_inventory,read_orders,read_products,read_locations,read_users"
+scopes = "read_orders,read_all_orders,read_products,read_inventory,read_locations,read_users"
 optional_scopes = []
 use_legacy_install_flow = false
 
@@ -77,9 +75,9 @@ use_legacy_install_flow = false
 # TODO(marketplace): replace TODO_MARKETPLACE_APP_URL with the final marketplace URL.
 # Keep all callback paths in sync with Shopify app package auth behavior.
 redirect_urls = [
-  "https://TODO_MARKETPLACE_APP_URL/auth/callback",
-  "https://TODO_MARKETPLACE_APP_URL/auth/shopify/callback",
-  "https://TODO_MARKETPLACE_APP_URL/api/auth/callback"
+  "https://shopops-marketplace-preview.onrender.com/auth/callback",
+  "https://shopops-marketplace-preview.onrender.com/auth/shopify/callback",
+  "https://shopops-marketplace-preview.onrender.com/api/auth/callback"
 ]
 
 [pos]
