@@ -53,6 +53,12 @@ export type SyncJobRow = {
   created_at: string;
 };
 
+type ProcessManualSyncJobResult = {
+  job: SyncJobRow;
+  processed: boolean;
+  skippedReason?: string | null;
+};
+
 const fullSyncSteps = ["locations", "products", "inventory", "orders"];
 const marketplaceSyncJobTypes: SyncJobType[] = [
   "locations",
@@ -62,7 +68,8 @@ const marketplaceSyncJobTypes: SyncJobType[] = [
   "full",
   "full_refresh",
 ];
-const STALE_ACTIVE_JOB_MS = 30 * 60 * 1000;
+const STALE_ACTIVE_JOB_MS = 15 * 60 * 1000;
+const MAX_STALE_RETRY_COUNT = 3;
 const ORDERS_RECONCILIATION_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ORDERS_RECONCILIATION_WINDOW_MS = 48 * 60 * 60 * 1000;
 const FINANCIAL_BACKFILL_RECENT_SUCCESS_MS = 24 * 60 * 60 * 1000;
@@ -84,31 +91,15 @@ function getNextFullStep(currentStep: string | null) {
   return fullSyncSteps[currentIndex + 1] ?? null;
 }
 
-function mergeCounts(
+function setStepCounts(
   existing: Record<string, unknown> | null | undefined,
   step: string,
   batchCounts: Record<string, unknown>,
 ) {
-  const next = { ...(existing ?? {}) };
-  const stepCounts = {
-    ...(((next[step] as Record<string, unknown> | undefined) ?? {}) as Record<
-      string,
-      unknown
-    >),
+  return {
+    ...(existing ?? {}),
+    [step]: batchCounts,
   };
-
-  for (const [key, value] of Object.entries(batchCounts)) {
-    if (typeof value === "number") {
-      stepCounts[key] = Number(stepCounts[key] ?? 0) + value;
-      continue;
-    }
-
-    stepCounts[key] = value;
-  }
-
-  next[step] = stepCounts;
-
-  return next;
 }
 
 function getErrorDetails(error: unknown) {
@@ -159,15 +150,69 @@ function getProgressForStep(job: SyncJobRow, step: string) {
 }
 
 function isStaleActiveJob(job: SyncJobRow) {
-  if (job.status !== "pending" && job.status !== "running") {
+  if (job.status !== "running") {
     return false;
   }
 
-  const activityTime = new Date(job.updated_at ?? job.created_at).getTime();
+  const activityTime = new Date(job.updated_at ?? job.started_at ?? job.created_at).getTime();
 
   return Number.isFinite(activityTime)
     ? Date.now() - activityTime > STALE_ACTIVE_JOB_MS
     : false;
+}
+
+function isTerminalStatus(status: string) {
+  return status === "success" || status === "error" || status === "cancelled";
+}
+
+function getSafeErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return message.slice(0, 1000);
+}
+
+function summarizeCounts(counts: Record<string, unknown> | null | undefined) {
+  const summary: Record<string, unknown> = {};
+
+  for (const [step, value] of Object.entries(counts ?? {})) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+
+    summary[step] = Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).filter(
+        ([, entryValue]) =>
+          typeof entryValue === "number" ||
+          typeof entryValue === "string" ||
+          typeof entryValue === "boolean" ||
+          entryValue === null,
+      ),
+    );
+  }
+
+  return summary;
+}
+
+function logJobTransition({
+  job,
+  previousStatus,
+  finalStatus,
+  startedAtMs,
+}: {
+  job: SyncJobRow;
+  previousStatus: string;
+  finalStatus: string;
+  startedAtMs: number;
+}) {
+  console.info("[sync-jobs] job transition", {
+    jobId: job.id,
+    shop: job.shop_domain,
+    jobType: job.job_type,
+    previousStatus,
+    finalStatus,
+    durationMs: Date.now() - startedAtMs,
+    counts: summarizeCounts(job.counts),
+  });
 }
 
 async function cancelStaleActiveJobs({
@@ -605,19 +650,41 @@ export async function getRunnableMarketplaceSyncJobs({
   supabase: SupabaseAdminClient;
   limit: number;
 }) {
-  const { data, error } = await supabase
+  const safeLimit = Math.max(1, limit);
+  const staleBefore = new Date(Date.now() - STALE_ACTIVE_JOB_MS).toISOString();
+  const { data: pendingJobs, error: pendingError } = await supabase
     .from("sync_jobs")
     .select("*")
     .in("job_type", marketplaceSyncJobTypes)
-    .in("status", ["pending", "running"])
+    .eq("status", "pending")
     .order("created_at", { ascending: true })
-    .limit(limit);
+    .limit(safeLimit);
 
-  if (error) {
-    throw new Error(error.message);
+  if (pendingError) {
+    throw new Error(pendingError.message);
   }
 
-  return (data ?? []) as SyncJobRow[];
+  const jobs = (pendingJobs ?? []) as SyncJobRow[];
+  const remainingLimit = safeLimit - jobs.length;
+
+  if (remainingLimit <= 0) {
+    return jobs;
+  }
+
+  const { data: staleRunningJobs, error: staleRunningError } = await supabase
+    .from("sync_jobs")
+    .select("*")
+    .in("job_type", marketplaceSyncJobTypes)
+    .eq("status", "running")
+    .or(`updated_at.lt.${staleBefore},started_at.lt.${staleBefore}`)
+    .order("updated_at", { ascending: true })
+    .limit(remainingLimit);
+
+  if (staleRunningError) {
+    throw new Error(staleRunningError.message);
+  }
+
+  return [...jobs, ...((staleRunningJobs ?? []) as SyncJobRow[])];
 }
 
 async function markStepCompleted({
@@ -764,7 +831,7 @@ export async function processManualSyncJobBatch({
   supabase: SupabaseAdminClient;
   shop: string;
   jobId: string;
-}) {
+}): Promise<ProcessManualSyncJobResult> {
   const { data: jobData, error: jobError } = await supabase
     .from("sync_jobs")
     .select("*")
@@ -778,23 +845,43 @@ export async function processManualSyncJobBatch({
 
   const job = jobData as SyncJobRow;
 
-  if (["success", "error", "cancelled"].includes(job.status)) {
+  if (isTerminalStatus(job.status)) {
     return {
       job,
       processed: false,
+      skippedReason: "terminal_status",
     };
   }
 
-  if (isStaleActiveJob(job)) {
-    const { data: cancelledJob, error: cancelError } = await supabase
+  const isStaleRetry = isStaleActiveJob(job);
+  if (job.status === "running" && !isStaleRetry) {
+    return {
+      job,
+      processed: false,
+      skippedReason: "already_running",
+    };
+  }
+
+  const previousStatus = job.status;
+  const startedAt = job.started_at ?? new Date().toISOString();
+  const processingStartedAtMs = Date.now();
+  const staleRetryCount =
+    typeof job.details?.staleRetryCount === "number"
+      ? job.details.staleRetryCount + (isStaleRetry ? 1 : 0)
+      : isStaleRetry
+        ? 1
+        : 0;
+
+  if (isStaleRetry && staleRetryCount > MAX_STALE_RETRY_COUNT) {
+    const { data: failedJob, error: failedJobError } = await supabase
       .from("sync_jobs")
       .update({
-        status: "cancelled",
-        error_message:
-          "Sync job was cancelled because it was stale and no longer processing.",
+        status: "error",
+        error_message: "Sync job exceeded stale retry limit.",
         details: {
-          stale: true,
-          staleTimeoutMinutes: STALE_ACTIVE_JOB_MS / 60000,
+          ...(job.details ?? {}),
+          staleRetryCount,
+          staleRetryLimit: MAX_STALE_RETRY_COUNT,
         },
         updated_at: new Date().toISOString(),
         finished_at: new Date().toISOString(),
@@ -804,28 +891,45 @@ export async function processManualSyncJobBatch({
       .select("*")
       .single();
 
-    if (cancelError) {
-      throw new Error(cancelError.message);
+    if (failedJobError) {
+      throw new Error(failedJobError.message);
     }
 
+    const finalJob = failedJob as SyncJobRow;
+    logJobTransition({
+      job: finalJob,
+      previousStatus,
+      finalStatus: finalJob.status,
+      startedAtMs: processingStartedAtMs,
+    });
+
     return {
-      job: cancelledJob as SyncJobRow,
-      processed: false,
+      job: finalJob,
+      processed: true,
     };
   }
-
-  const startedAt = job.started_at ?? new Date().toISOString();
   const { data: claimedJobs, error: claimError } = await supabase
     .from("sync_jobs")
     .update({
       status: "running",
       started_at: startedAt,
+      finished_at: null,
+      error_message: null,
+      details: {
+        ...(job.details ?? {}),
+        ...(isStaleRetry
+          ? {
+              staleRetryCount,
+              staleRetriedAt: new Date().toISOString(),
+            }
+          : {}),
+      },
       updated_at: new Date().toISOString(),
     })
     .eq("shop_domain", shop)
     .eq("id", job.id)
     .eq("updated_at", job.updated_at)
-    .in("status", ["pending", "running"])
+    .eq("status", previousStatus)
     .select("*")
     .limit(1);
 
@@ -850,6 +954,7 @@ export async function processManualSyncJobBatch({
     return {
       job: latestJob as SyncJobRow,
       processed: false,
+      skippedReason: "claim_lost",
     };
   }
 
@@ -867,7 +972,7 @@ export async function processManualSyncJobBatch({
       ...(claimedJob.progress ?? {}),
       [step]: batchResult.progress,
     };
-    const nextCounts = mergeCounts(claimedJob.counts, step, batchResult.counts);
+    const nextCounts = setStepCounts(claimedJob.counts, step, batchResult.counts);
     const nextStep =
       batchResult.done &&
       (claimedJob.job_type === "full" || claimedJob.job_type === "full_refresh")
@@ -907,6 +1012,7 @@ export async function processManualSyncJobBatch({
         started_at: startedAt,
         updated_at: new Date().toISOString(),
         finished_at: isDone ? new Date().toISOString() : null,
+        error_message: null,
       })
       .eq("shop_domain", shop)
       .eq("id", job.id)
@@ -917,12 +1023,20 @@ export async function processManualSyncJobBatch({
       throw new Error(updateError.message);
     }
 
+    const finalJob = updatedJob as SyncJobRow;
+    logJobTransition({
+      job: finalJob,
+      previousStatus,
+      finalStatus: finalJob.status,
+      startedAtMs: processingStartedAtMs,
+    });
+
     return {
-      job: updatedJob as SyncJobRow,
+      job: finalJob,
       processed: true,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = getSafeErrorMessage(error);
     const errorDetails = getErrorDetails(error);
 
     await insertSyncRun({
@@ -966,8 +1080,16 @@ export async function processManualSyncJobBatch({
       throw new Error(updateError.message);
     }
 
+    const finalJob = updatedJob as SyncJobRow;
+    logJobTransition({
+      job: finalJob,
+      previousStatus,
+      finalStatus: finalJob.status,
+      startedAtMs: processingStartedAtMs,
+    });
+
     return {
-      job: updatedJob as SyncJobRow,
+      job: finalJob,
       processed: true,
     };
   }
@@ -981,8 +1103,10 @@ export type ProcessSyncJobsSummary = {
   jobs: Array<{
     id: string;
     type: string;
-    status: string;
+    previousStatus: string;
+    finalStatus: string;
     processed: boolean;
+    skippedReason?: string | null;
     errorMessage?: string | null;
   }>;
 };
@@ -1011,6 +1135,7 @@ export async function processSyncJobsBatch({
   };
 
   for (const job of jobs) {
+    const previousStatus = job.status;
     try {
       const admin = await getAdminClient(job.shop_domain);
       const result = await processManualSyncJobBatch({
@@ -1035,18 +1160,22 @@ export async function processSyncJobsBatch({
       summary.jobs.push({
         id: result.job.id,
         type: result.job.job_type,
-        status: result.job.status,
+        previousStatus,
+        finalStatus: result.job.status,
         processed: result.processed,
+        skippedReason: result.skippedReason ?? null,
         errorMessage: result.job.error_message,
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getSafeErrorMessage(error);
       summary.failed += 1;
       summary.jobs.push({
         id: job.id,
         type: job.job_type,
-        status: "error",
+        previousStatus,
+        finalStatus: "error",
         processed: false,
+        skippedReason: null,
         errorMessage,
       });
     }

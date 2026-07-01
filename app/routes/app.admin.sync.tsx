@@ -848,9 +848,10 @@ export default function AdminSyncPage() {
           <div>
             <div style={{ fontWeight: 800 }}>Manual sync actions</div>
             <HelperText>
-              Queue sync jobs for marketplace setup and reviewer-safe onboarding.
               Manual sync requests are queued and processed automatically by the background sync worker.
-              Staff directory sync is skipped when `read_users` is not configured.
+            </HelperText>
+            <HelperText>
+              Use the process-now button for testing/support. Production runs through Render Cron every 5 minutes.
             </HelperText>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -910,10 +911,9 @@ export default function AdminSyncPage() {
           }}
         >
           <div>
-            <div style={{ fontWeight: 800 }}>Official full refresh command</div>
+            <div style={{ fontWeight: 800 }}>Local support refresh</div>
             <HelperText>
-              The marketplace path should use queued sync jobs for historical
-              data. Webhooks keep future Shopify changes updated afterward.
+              Local refresh is for development/support only. The marketplace path should use queued sync jobs for historical data.
             </HelperText>
           </div>
           <pre
