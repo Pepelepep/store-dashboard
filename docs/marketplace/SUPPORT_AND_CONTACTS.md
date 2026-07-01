@@ -4,11 +4,11 @@ Draft status: marketplace preparation draft. Replace placeholders before App Sto
 
 ## Public Support Contact
 
-Support email: `[support@shopopsstudio.example]`
+Support email: `support@shopopsstudio.com`
 
-Support form URL: `[support form URL placeholder]`
+Support form URL: `https://shopops-marketplace-preview.onrender.com/support`
 
-Support website: `[support site URL placeholder]`
+Support website: `https://shopops-marketplace-preview.onrender.com/support`
 
 ## Emergency Contact
 
@@ -53,10 +53,22 @@ Ask merchants to include:
 - Date/time and timezone when the issue occurred.
 - Screenshots or screen recording if possible.
 - Whether the issue affects all staff or one staff user.
-- Whether recent Shopify changes occurred, such as new locations, products, refunds, returns, staff, or permissions.
+- Whether recent Shopify changes occurred, such as new locations, products, refunds, returns, staff attribution, or permissions.
 - For reporting issues, the expected value, observed value, and sample order/product/location IDs.
 
 Merchants should not send customer addresses, phone numbers, full payment details, or unnecessary customer personal data in support requests.
+
+Permissions support note:
+
+- Public App Store permissions use the currently logged-in Shopify staff identity from the embedded app session where available plus ShopOps Studio DB assignments.
+- Merchant admins manage access by manually entering staff emails.
+- A synced Shopify staff list is not required for permissions.
+- `user_location_access.user_email` is a staff/app permission identity field, not a customer email field.
+
+Staff attribution support note:
+
+- Sales by Staff is best-effort based on available order/session data.
+- Advanced Shopify staff directory sync is future-only for custom, Plus, or Advanced implementations.
 
 ## Operational Escalation Notes
 
@@ -69,6 +81,12 @@ Escalate internally when:
 - A merchant reports cross-shop data exposure.
 - Protected customer data handling is questioned by Shopify review.
 - Production Render, Supabase, Shopify API, or database availability blocks app usage.
+
+Compliance webhook behavior to verify during escalations:
+
+- `customers/data_request`, `customers/redact`, and `shop/redact` validate Shopify HMAC through Shopify webhook authentication.
+- Valid requests return 200.
+- Invalid HMAC requests return 401.
 
 ## Pre-Submission Contact Checklist
 

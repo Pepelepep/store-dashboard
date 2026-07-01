@@ -287,8 +287,7 @@ export async function action({ request }: ActionFunctionArgs) {
       ok: false,
       message: "Email is required.",
       fieldErrors: {
-        staff: "Select a staff member with an email or enter an email manually.",
-        user_email: "Enter an email address.",
+        user_email: "Enter the staff member's Shopify account email.",
       },
     } satisfies ActionData;
   }
@@ -673,7 +672,7 @@ export default function AdminPermissionsPage() {
         <header style={{ marginBottom: 28 }}>
           <h1 style={{ margin: 0, fontSize: 32 }}>Permissions</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Manage staff access by location.
+            Manage access by staff email and location.
           </p>
         </header>
 
@@ -688,48 +687,20 @@ export default function AdminPermissionsPage() {
                   <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
                     Step 1
                   </div>
-                  <div style={{ fontWeight: 800, fontSize: 18 }}>Staff member</div>
-                  <FieldHelp>Select a staff member synced from Shopify.</FieldHelp>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>User email</div>
+                  <FieldHelp>
+                    Enter the Shopify account email for the staff member. ShopOps Studio
+                    uses this email with its own location access rules for the
+                    public app.
+                  </FieldHelp>
                 </div>
 
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Staff member
-                  <select
-                    value={formState.selectedStaffId}
-                    onChange={(event) => selectStaffMember(event.target.value)}
-                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
-                  >
-                    <option value="">Manual entry</option>
-                    {staffMembers.map((staffMember) => (
-                      <option
-                        key={staffMember.shopify_staff_id}
-                        value={staffMember.shopify_staff_id}
-                      >
-                        {getStaffLabel(staffMember)}
-                      </option>
-                    ))}
-                  </select>
-                  <FieldHelp>
-                    {staffMembers.length > 0
-                      ? "Select a staff member to fill their email automatically."
-                      : "No staff members synced yet. Staff may appear after Shopify staff sync if read_users is available."}
-                  </FieldHelp>
-                  {staffMembers.length === 0 ? (
-                    <div>
-                      <AppButtonLink to="/app/admin/sync" compact>
-                        Open Sync Center
-                      </AppButtonLink>
-                    </div>
-                  ) : null}
-                  <FieldError>{fieldErrors?.staff}</FieldError>
-                </label>
-
-                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Email
+                  Staff email
                   <input
                     name="user_email"
                     required
-                    placeholder="manager@local.ca"
+                    placeholder="manager@example.com"
                     value={formState.user_email}
                     onChange={(event) => {
                       clearActionFeedback();
@@ -742,9 +713,40 @@ export default function AdminPermissionsPage() {
                     }}
                     style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: emailFieldBorder }}
                   />
-                  <FieldHelp>Staff not listed? Enter their Shopify account email.</FieldHelp>
+                  <FieldHelp>
+                    The user should sign in to Shopify with this email. Existing
+                    staff-directory data is optional and is not required for
+                    permissions.
+                  </FieldHelp>
                   <FieldError>{fieldErrors?.user_email}</FieldError>
                 </label>
+
+                {staffMembers.length > 0 ? (
+                  <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                    Optional staff suggestion
+                    <select
+                      value={formState.selectedStaffId}
+                      onChange={(event) => selectStaffMember(event.target.value)}
+                      style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: staffFieldBorder }}
+                    >
+                      <option value="">No suggestion selected</option>
+                      {staffMembers.map((staffMember) => (
+                        <option
+                          key={staffMember.shopify_staff_id}
+                          value={staffMember.shopify_staff_id}
+                        >
+                          {getStaffLabel(staffMember)}
+                        </option>
+                      ))}
+                    </select>
+                    <FieldHelp>
+                      Suggestions can fill the email when available in existing
+                      staff data. Public App Store permissions do not require a
+                      synced Shopify staff list.
+                    </FieldHelp>
+                    <FieldError>{fieldErrors?.staff}</FieldError>
+                  </label>
+                ) : null}
               </div>
 
               <div style={{ display: "grid", gap: 10 }}>

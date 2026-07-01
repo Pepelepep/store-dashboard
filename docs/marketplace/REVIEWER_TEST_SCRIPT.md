@@ -6,10 +6,12 @@ Draft status: marketplace reviewer script. Replace placeholders before submissio
 
 App name: ShopOps Studio  
 Demo shop: `TODO_DEMO_SHOP.myshopify.com`  
-Support contact: `TODO_SUPPORT_EMAIL`  
+Support contact: `support@shopopsstudio.com`  
 Emergency contact: `TODO_EMERGENCY_CONTACT`
 
 ShopOps Studio provides operational reporting. It is not accounting, tax, payroll, legal, or financial advice. Merchants remain responsible for validating reports before business use.
+
+Public App Store scopes are `read_orders`, `read_all_orders`, `read_products`, `read_inventory`, and `read_locations`. The public app does not request `read_users`.
 
 ## Install and Open App
 
@@ -22,6 +24,7 @@ Expected result:
 
 - App opens embedded in Shopify admin.
 - Dashboard is the default experience.
+- Requested scopes do not include `read_users`.
 - If the demo data has not synced yet, reviewer sees "Your data is being prepared."
 
 ## Expected Empty State
@@ -57,7 +60,7 @@ Steps:
 4. Review Best sellers.
 5. Review Soon out of stock.
 6. Review Sales by Vendor.
-7. Review Sales by Staff if staff data is enabled.
+7. Review Sales by Staff if Shopify order/session data includes staff attribution.
 8. Review Recent Order Lines.
 
 Expected result:
@@ -65,6 +68,7 @@ Expected result:
 - Dashboard shows operational reporting for the selected location/date range.
 - Discounts, refunds, returns, COGS, gross profit, and margin context appear where demo data supports them.
 - Tables remain shop-scoped and permission-filtered.
+- Staff attribution is best-effort. If staff names/emails are unavailable, safe fallbacks such as `Unknown staff` or `Unassigned` are acceptable.
 
 ## No Sales Date Range
 
@@ -93,7 +97,7 @@ Steps:
 2. Select all locations.
 3. Select one location.
 4. Change date range.
-5. Review location KPIs, trend, vendor/staff breakdowns, and location table.
+5. Review location KPIs, trend, vendor/staff breakdowns where available, and location table.
 
 Expected result:
 
@@ -110,7 +114,7 @@ Steps:
 1. Open Data Quality as admin.
 2. Review Sync failures.
 3. Review Sync freshness.
-4. Review product, variant, cost, order, inventory, staff, and expense checks.
+4. Review product, variant, cost, order, inventory, staff-attribution, and expense checks.
 
 Expected result:
 
@@ -135,6 +139,7 @@ Expected result:
 
 - Sync Center is monitoring-only.
 - It shows freshness, history, counts, and troubleshooting status.
+- Staff directory sync is hidden or labeled future/custom-only when `read_users` is absent.
 - It does not expose a reviewer-facing full sync trigger.
 
 ## Permissions
@@ -145,14 +150,17 @@ Steps:
 
 1. Open Permissions as admin.
 2. Confirm locations appear after location sync.
-3. Confirm staff appears after Shopify staff sync if `read_users` is available.
-4. Review existing access rules or create a demo-only viewer/manager assignment.
+3. Enter a staff email manually.
+4. Assign a role and one or more locations.
+5. Review optional staff suggestions only if existing `staff_members` data is present.
+6. Review existing access rules or create a demo-only viewer/manager assignment.
 
 Expected result:
 
-- Admin can assign staff/location access.
-- Hints explain staff/location data may appear after sync.
-- Sync Center link is available when staff/locations are missing.
+- Admin can assign staff/location access without a synced Shopify staff list.
+- Permissions use the current embedded Shopify staff identity where available plus ShopOps Studio DB assignments.
+- Hints explain that manual email entry is the primary public app flow.
+- `user_location_access.user_email` is a staff/app permission field, not a customer email field.
 
 ## Expenses
 
@@ -175,6 +183,11 @@ Expected result:
 
 - ShopOps Studio is operational reporting, not accounting/tax/legal advice.
 - The app does not intentionally store direct customer profiles, customer addresses, customer phone numbers, or customer emails in business reporting tables.
+- No individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored.
 - Order history and transaction data may still be sensitive/protected.
-- `read_all_orders` is currently included for historical analytics unless removed before MVP.
-- `read_users` is currently included for staff attribution and permissions unless degraded mode is approved.
+- `orders.shipping` is a shipping amount, not a customer shipping address.
+- `orders.staff_member_email` and `order_lines.staff_member_email` are staff attribution fields, not customer email fields.
+- `read_all_orders` is included for historical reporting and backfills.
+- `read_users` is not requested for the public App Store app.
+- Advanced Shopify staff sync is future-only for custom/Plus/Advanced implementations.
+- Compliance webhooks validate Shopify HMAC through Shopify webhook authentication. Valid requests return 200; invalid HMAC requests return 401.

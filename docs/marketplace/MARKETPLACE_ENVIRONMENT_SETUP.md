@@ -142,17 +142,33 @@ Embedded app:
 | Scope | Current recommendation | Review risk | MVP decision needed | Fallback |
 |---|---|---|---|---|
 | `read_orders` | Keep | High because order history can be sensitive | No removal recommended | App cannot provide core sales/margin reporting |
-| `read_all_orders` | Decide before submission | High; historical order access can slow review | Keep for full historical analytics or remove for faster MVP review | Limit historical reporting to accessible recent/order-forward data |
+| `read_all_orders` | Keep | High; historical order access can slow review | Keep for historical analytics and backfills | Limit historical reporting to accessible recent/order-forward data |
 | `read_products` | Keep | Low customer-data risk | No removal recommended | Product/vendor/SKU reporting and joins degrade sharply |
 | `read_inventory` | Keep | Low customer-data risk, medium merchant cost sensitivity | No removal recommended | Disable stock alerts and cost/margin context |
 | `read_locations` | Keep | Low customer-data risk | No removal recommended | Remove location reporting and location permissions |
-| `read_users` | Decide before submission | Medium; staff personal data | Keep for staff attribution/permissions or degraded mode | Manual email permissions and reduced/hidden Sales by Staff |
+| `read_users` | Do not request for public app | N/A for public App Store apps | Public app uses manual email permissions | Future/custom/Plus-only staff directory sync |
 
 Current recommendation:
 
-- Keep current scopes in the marketplace config draft.
-- Prepare explicit Shopify review justification for `read_all_orders` and `read_users`.
-- Do not remove scopes in Phase 3.
+- Public marketplace `SCOPES` must be `read_orders,read_all_orders,read_products,read_inventory,read_locations`.
+- Do not include `read_users` in the public marketplace app. Shopify Partner Support confirmed it is unavailable for public App Store apps.
+- Permissions use the currently logged-in Shopify staff identity from the embedded app session where available plus ShopOps Studio DB assignments in `user_location_access`.
+- Merchant admins manage location access by manually entering staff emails.
+- Staff sales attribution is best-effort based on available Shopify order/session data.
+- Advanced Shopify staff directory sync is future-only for custom, Plus, or Advanced implementations.
+
+Data field notes:
+
+- No individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored in reporting tables.
+- `orders.shipping` is a shipping amount, not a customer shipping address.
+- `orders.staff_member_email`, `order_lines.staff_member_email`, and `user_location_access.user_email` are staff/app permission fields, not customer email fields.
+
+Compliance webhook behavior:
+
+- `customers/data_request`, `customers/redact`, and `shop/redact` are registered in marketplace config.
+- Each compliance webhook route validates Shopify HMAC through Shopify webhook authentication.
+- Valid compliance webhook requests return 200.
+- Invalid HMAC requests return 401.
 
 ## No Client Production Data
 

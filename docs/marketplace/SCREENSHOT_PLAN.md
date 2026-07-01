@@ -1,6 +1,6 @@
 # Screenshot Plan
 
-Status: Phase 7A first-submission screenshot sequence.
+Status: Phase 7B first-submission screenshot sequence.
 
 ## Capture Rules
 
@@ -11,6 +11,8 @@ Status: Phase 7A first-submission screenshot sequence.
 - Keep browser zoom and Shopify admin frame consistent across screenshots.
 - Make screenshots match the listing promise: reporting, margin, COGS, refunds, discounts, returns, permissions, and Data Health.
 - Treat reports as merchant-facing and informational; do not show copy that implies accounting, tax, legal, payroll, or financial advice.
+- Public App Store screenshots should not imply `read_users` is required or available.
+- Permissions screenshots should show manual staff email entry as the primary flow.
 
 ## Final Screenshot Sequence
 
@@ -87,14 +89,15 @@ Data requirements:
 Show:
 
 - Location-aware access assignment.
-- Staff selector or staff list where `read_users` data is available.
+- Manual staff email entry.
 - Demo access rules for admin, manager, or viewer roles.
+- Optional staff suggestions only if existing `staff_members` data is present, clearly secondary to manual email entry.
 
 Data requirements:
 
-- Demo staff users only.
 - Fake staff emails only.
 - At least 2 locations assigned across demo users.
+- A synced Shopify staff list is not required.
 
 ### 6. Billing / Onboarding If Needed
 
@@ -121,6 +124,7 @@ If captured, show:
 - Last successful sync.
 - Record counts.
 - Recent sync jobs.
+- Staff directory sync hidden or labeled future/custom-only when `read_users` is absent.
 - No internal secrets.
 - No reviewer-facing production full-refresh action.
 

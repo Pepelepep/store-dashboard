@@ -1,10 +1,12 @@
 # Shopify Scopes Justification
 
-Draft status: marketplace preparation draft.
+Status: Phase 7B public App Store scope package.
 
-Current scopes:
+Public marketplace scopes:
 
-`read_orders, read_all_orders, read_products, read_inventory, read_locations, read_users`
+`read_orders, read_all_orders, read_products, read_inventory, read_locations`
+
+ShopOps Studio does not request `read_users` for the public App Store app. Shopify Partner Support confirmed `read_users` is not available for public apps and has no public-app approval path.
 
 ## `read_orders`
 
@@ -12,74 +14,67 @@ Feature using the scope:
 
 - Dashboard sales reporting.
 - Order line reporting.
-- Refunds/returns reporting.
-- Financial QA.
+- Discounts, refunds, and returns reporting.
+- COGS, gross profit, and margin reporting.
+- Location performance reporting.
+- Best-effort staff attribution when Shopify order data includes staff fields.
+- Financial QA and order reconciliation jobs.
 - Webhook-based order updates.
-- Order reconciliation jobs.
 
 Why it is needed:
 
-- ShopOps Studio's core reporting depends on orders and order line financial data.
+- ShopOps Studio's core value depends on merchant-facing reporting from orders, order lines, discounts, refunds, returns, product sales, locations, and margin inputs.
 
 Data stored:
 
-- Order IDs, order display names, created timestamps, financial status, gross sales, discounts, returns, net sales, refunds, taxes, shipping, total sales, transaction totals, order line IDs, products, variants, quantities, prices, COGS, gross profit, staff attribution fields, and location fields.
+- Order IDs, order display names, created timestamps, financial status, gross sales, discounts, returns, net sales, refunds, taxes, shipping amount, total sales, transaction totals, order line IDs, products, variants, quantities, prices, COGS, gross profit, staff attribution fields where available, and location fields.
 
 Protected/customer/staff data risk:
 
-- Order history and transaction data may be considered sensitive or protected. The app does not intentionally store direct customer profiles, addresses, phones, or customer emails in business reporting tables.
+- Order history and transaction data may be sensitive or protected. ShopOps Studio does not display or store customer name, customer address, customer email, or customer phone in reporting tables.
+- `orders.shipping` is a shipping amount, not a customer shipping address.
+- `orders.staff_member_email` and `order_lines.staff_member_email` are staff attribution fields, not customer email fields.
 
 Can it be removed:
 
-- No. Removing it removes the primary app value.
+- No. Removing it removes the primary reporting value.
 
 Fallback if removed:
 
-- App could only show inventory/product/location setup data and would not be marketplace-useful as an operations dashboard.
+- The app could only show product, inventory, and location setup data and would not be marketplace-useful as a reporting app.
 
 ## `read_all_orders`
 
 Feature using the scope:
 
-- Historical analytics beyond the default Shopify order access window.
-- Historical backfills.
-- Long-range COGS and financial QA.
+- Historical reporting beyond Shopify's standard recent order access window.
+- Historical backfills after install.
+- Long-range location, product, margin, refund, return, discount, and COGS comparisons.
+- Financial QA across historical reporting periods.
 
 Why it is needed:
 
-- Merchants need historical location, product, staff, refund, return, and margin reporting, not only recent orders.
+- Merchants need historical trends and prior-period comparisons, not only order-forward reporting after install. Shopify Partner Support confirmed the `read_all_orders` justification is acceptable for review.
 
 Data stored:
 
-- Same order/order-line/reporting data as `read_orders`, extended across historical periods.
+- Same reporting data as `read_orders`, extended across historical periods.
 
 Protected/customer/staff data risk:
 
-- High review risk because it expands access to historical order data. Even with customer data minimization, Shopify may require strong justification and protected customer data review.
+- High review risk because it expands access to historical order data. ShopOps Studio minimizes direct customer fields and does not display or store customer name, address, email, or phone in reporting tables.
 
 Can it be removed:
 
-- Yes, if MVP accepts limited historical reporting.
+- Technically yes, but doing so would limit historical analytics and weaken first-install reporting.
 
 Fallback if removed:
 
-- Limit reporting and backfill to Shopify's default order window.
-- Present in-app copy explaining that historical reporting begins from install date or recent accessible order history.
-- Offer historical analytics later after scope approval.
+- Limit reporting and backfill to Shopify's standard accessible order window and explain historical limitations in-app.
 
-Option A: request scope for historical analytics.
+Decision:
 
-- Pros: full product value, useful historical comparisons, better financial QA.
-- Cons: higher review burden and possible approval delay.
-
-Option B: remove for MVP and limit historical reporting.
-
-- Pros: simpler review and lower protected data surface.
-- Cons: weaker merchant value, less useful onboarding, less accurate historical trends.
-
-Recommended draft decision:
-
-- Decide based on launch strategy. If marketplace review speed is the priority, consider Option B for MVP. If full historical reporting is required for app value, prepare a strong Option A justification.
+- Keep for first submission with the historical reporting justification above.
 
 ## `read_products`
 
@@ -95,7 +90,7 @@ Feature using the scope:
 
 Why it is needed:
 
-- Product, variant, SKU, vendor, and status data are required to interpret sales and inventory.
+- Product, variant, SKU, vendor, and status data are required to interpret sales, inventory, and margin reporting.
 
 Data stored:
 
@@ -107,7 +102,7 @@ Protected/customer/staff data risk:
 
 Can it be removed:
 
-- No, unless product/vendor/inventory/margin features are removed.
+- No, unless product, vendor, inventory, and margin features are removed.
 
 Fallback if removed:
 
@@ -124,7 +119,7 @@ Feature using the scope:
 
 Why it is needed:
 
-- The app needs available inventory, tracked status, inventory item IDs, and costs to support operations reporting.
+- The app needs available inventory, tracked status, inventory item IDs, and costs to support operational reporting.
 
 Data stored:
 
@@ -154,7 +149,7 @@ Feature using the scope:
 
 Why it is needed:
 
-- Multi-location reporting is central to ShopOps Studio.
+- Multi-location reporting and location-aware permissions are central to ShopOps Studio.
 
 Data stored:
 
@@ -172,40 +167,32 @@ Fallback if removed:
 
 - Remove location breakdowns, location permissions, and location expense allocation.
 
-## `read_users`
+## `read_users` Not Requested
 
-Feature using the scope:
+Decision:
 
-- Staff member sync.
-- Sales by Staff.
-- Staff attribution.
-- Permissions staff dropdown.
-- Current-user permission matching.
+- Public App Store builds do not request `read_users`.
 
-Why it is needed:
+Reason:
 
-- The app uses staff/user metadata to attribute sales and manage location-level access.
+- Shopify Partner Support confirmed `read_users` is unavailable to public App Store apps and has no approval path.
 
-Data stored:
+Permissions flow:
 
-- Shopify staff/user IDs, names, email addresses where available, active status, and related attribution fields.
+- ShopOps Studio uses the currently logged-in Shopify staff identity from the embedded app session where available.
+- Merchant admins manage role and location assignments by manually entering staff emails in ShopOps Studio.
+- Assignments are stored in `user_location_access`.
+- `user_location_access.user_email` is an app permission identity field, not a customer email field.
+- Shopify user IDs from the current session may be stored when available to support identity matching.
 
-Protected/customer/staff data risk:
+Staff attribution flow:
 
-- Not direct customer data, but staff/user metadata is personal data and should be minimized, disclosed, and protected.
+- Staff sales attribution remains best-effort.
+- If Shopify order data includes staff attribution without `read_users`, ShopOps Studio may store nullable `staff_member_id`, `staff_member_name`, and `staff_member_email` values.
+- If staff names/emails are unavailable, reporting should display safe fallbacks such as `Unknown staff` or `Unassigned`.
+- `orders.staff_member_email` and `order_lines.staff_member_email` are staff attribution fields, not customer email fields.
 
-Can it be removed:
+Future/custom support:
 
-- Possibly, if staff attribution and staff-based permission ergonomics are reduced.
-
-Fallback if unavailable:
-
-- Use manual email entry for permissions.
-- Hide or degrade Sales by Staff.
-- Use Shopify user ID from current session where available, without full staff directory sync.
-- Explain that staff attribution requires additional approval.
-
-Recommended draft decision:
-
-- Keep if staff reporting is central to the app positioning.
-- Prepare App Store explanation focused on access control and staff attribution.
+- `staff_members` remains in the schema for future custom, Plus, or Advanced implementations.
+- Advanced Shopify staff directory sync is future-only and optional. It is not required for public marketplace permissions or dashboard rendering.

@@ -1,6 +1,6 @@
 # Reviewer Flow
 
-Status: Phase 7A aligned with first-submission listing package. Update with final test shop and credentials/process before submission.
+Status: Phase 7B aligned with public App Store scope package. Update with final test shop and credentials/process before submission.
 
 ## Test Shop Requirements
 
@@ -14,7 +14,7 @@ Required demo data:
 - Orders with discounts.
 - Orders with refunds.
 - Orders with returns.
-- Orders attributed to staff where available.
+- Orders attributed to staff where Shopify order/session data provides staff context.
 - App-configured fixed expenses.
 - At least one successful sync run.
 - Optional: one failed sync run for Data Health visibility.
@@ -48,6 +48,8 @@ Expected outcome:
 
 - App opens embedded in Shopify admin.
 - Merchant lands in ShopOps Studio.
+- Requested scopes are `read_orders`, `read_all_orders`, `read_products`, `read_inventory`, and `read_locations`.
+- Public App Store builds do not request `read_users`.
 - If `BILLING_ENABLED=true` and the shop has no active Shopify managed subscription, the app shows the billing-required state for the ShopOps Studio plan at `$59.99/month` with a 14-day free trial.
 - For first submission, billing code is prepared but disabled by default with `BILLING_ENABLED=false` unless billing review is intentionally enabled.
 - If no synced data exists, the app should show first-run guidance and sync expectations.
@@ -90,6 +92,7 @@ Reviewer-safe path:
 Expected outcome:
 
 - Sync Center shows sync freshness and recent runs.
+- Staff directory sync is labeled optional/future/custom-only when `read_users` is absent.
 - No manual production full-refresh action is required from the reviewer.
 
 Operational note:
@@ -115,6 +118,7 @@ Expected outcome:
 - Order links point to Shopify admin order pages.
 - Empty states are clear if data is unavailable.
 - Reporting is presented as operational information, not accounting, tax, legal, payroll, or financial advice.
+- Staff sales attribution is best-effort. If staff names/emails are unavailable, reporting uses safe fallbacks such as `Unknown staff` or `Unassigned`.
 
 ## Open Locations
 
@@ -195,15 +199,17 @@ Route: `/app/admin/permissions`
 Steps:
 
 1. Open Permissions as admin.
-2. Confirm staff list is available if `read_users` data exists.
-3. Review location assignment UI.
-4. Create or inspect a viewer/manager permission in a test shop only.
+2. Enter a staff email manually.
+3. Assign a role and one or more locations.
+4. Review optional staff suggestions only if existing `staff_members` data is present.
+5. Create or inspect a viewer/manager permission in a test shop only.
 
 Expected outcome:
 
-- Admin can assign staff to locations.
+- Admin can assign staff email identities to locations without a synced Shopify staff list.
 - Non-admin users see only permitted dashboard locations.
-- Staff/user access supports staff attribution and staff/location permissions.
+- Permissions use the currently logged-in Shopify staff identity from the embedded app session where available plus ShopOps Studio database assignments in `user_location_access`.
+- `user_location_access.user_email` is an app permission identity field, not a customer email field.
 
 ## Verify Expenses
 
@@ -224,10 +230,16 @@ Expected outcome:
 ## Reviewer Notes to Include in Submission
 
 - Explain that ShopOps Studio is a merchant-facing reporting app, not accounting, tax, legal, payroll, or financial advice.
+- Explain that the public app does not request `read_users` because Shopify Partner Support confirmed it is unavailable for public App Store apps.
 - Explain that `read_orders` powers sales, line items, products sold, discounts, refunds, returns, transactions, location performance, staff attribution where available, and order-level reporting completeness.
 - Explain that `read_all_orders` supports historical reporting, backfills after install, and period comparisons beyond the recent order access window.
-- Explain that `read_users` supports staff attribution and staff/location permission assignment.
+- Explain that permissions use current embedded-session staff identity plus ShopOps Studio DB assignments, and merchant admins manage access by email.
+- Explain that staff sales attribution is best-effort based on available order/session data.
+- Explain that advanced Shopify staff directory sync is future-only for custom/Plus/Advanced implementations.
 - Explain that protected customer/order data may be processed because Shopify order records can include customer/order information needed to calculate and validate sales, refund, return, discount, product, location, and margin reports.
+- Explain that no individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored.
+- Explain that `orders.shipping` is a shipping amount, not a customer shipping address.
+- Explain that `orders.staff_member_email`, `order_lines.staff_member_email`, and `user_location_access.user_email` are staff/app permission fields, not customer email fields.
 - Explain that data is isolated by shop and is not sold or shared for third-party marketing.
 - Support, privacy, and security contact: `support@shopopsstudio.com`.
 - Expected response time: within 2 business days. Security or privacy requests are prioritized.

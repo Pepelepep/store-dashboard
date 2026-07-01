@@ -64,10 +64,8 @@ compliance_topics = ["shop/redact"]
 uri = "/webhooks/shop/redact"
 
 [access_scopes]
-# Current scope set. Do not remove scopes in this phase.
-# TODO(marketplace): decide whether read_all_orders remains for MVP historical analytics.
-# TODO(marketplace): decide whether read_users remains required or moves to degraded mode.
-scopes = "read_orders,read_all_orders,read_products,read_inventory,read_locations,read_users"
+# Public App Store scope set. `read_users` is unavailable to public apps.
+scopes = "read_orders,read_all_orders,read_products,read_inventory,read_locations"
 optional_scopes = []
 use_legacy_install_flow = false
 

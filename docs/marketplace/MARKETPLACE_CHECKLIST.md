@@ -8,12 +8,26 @@ Draft status: marketplace preparation checklist.
 - [x] Finalized App Store positioning around Shopify reporting, margin, COGS, refunds, discounts, returns, and Data Health.
 - [x] Added first-submission pricing copy: ShopOps Studio, `$59.99/month`, 14-day free trial.
 - [x] Added support, privacy, terms, and support URLs for marketplace preview.
-- [x] Added reviewer note for `read_orders`, `read_all_orders`, `read_users`, protected customer/order data processing, shop isolation, and no data sale/third-party marketing sharing.
+- [x] Added reviewer note for `read_orders`, `read_all_orders`, public-app removal of `read_users`, protected customer/order data processing, shop isolation, and no data sale/third-party marketing sharing.
 - [x] Finalized first-submission screenshot sequence.
 - [x] Aligned reviewer flow with finalized listing package.
-- [ ] Confirm Shopify approval for Protected Customer Data, `read_all_orders`, and `read_users`.
+- [ ] Confirm Shopify approval for Protected Customer Data and `read_all_orders`.
 - [ ] Capture final screenshots with demo data only.
 - [ ] Confirm final Shopify App Store screenshot dimensions.
+
+## Phase 7B Status
+
+- [x] Removed `read_users` from public marketplace scope package.
+- [x] Confirmed public App Store permissions use current embedded-session staff identity plus ShopOps Studio DB assignments.
+- [x] Confirmed merchant admins manage access by manual staff email entry.
+- [x] Confirmed staff sales attribution is best-effort based on available order/session data.
+- [x] Kept `staff_members` and staff attribution fields for future custom/Plus support.
+- [x] Documented advanced Shopify staff sync as future/custom-only.
+- [x] Documented no individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored.
+- [x] Documented `orders.shipping` as a shipping amount, not customer address.
+- [x] Documented `staff_member_email` / `user_email` as staff/app permission fields, not customer email fields.
+- [x] Verified compliance webhook design: valid HMAC returns 200, invalid HMAC returns 401.
+- [ ] Confirm Protected Customer Data Draft review with App Store listing.
 
 ## Product Readiness
 
@@ -53,6 +67,9 @@ Draft status: marketplace preparation checklist.
 - [ ] Decide permission preservation vs reset on uninstall.
 - [ ] Decide compliance audit event retention window.
 - [ ] Confirm direct customer profile fields are not stored in reporting tables.
+- [x] Confirm no customer name, customer email, customer phone, or customer address columns are used in reporting tables.
+- [x] Confirm `orders.shipping` is shipping amount only.
+- [x] Confirm staff/app email fields are not customer email fields.
 - [ ] Confirm operational webhook payload retention policy.
 - [ ] Confirm support workflow avoids unnecessary customer personal data.
 - [ ] Validate compliance webhook behavior in staging.
@@ -64,7 +81,7 @@ Draft status: marketplace preparation checklist.
 - [ ] Confirm webhook subscriptions.
 - [ ] Confirm compliance webhook URLs.
 - [x] Confirm `read_all_orders` decision for first submission.
-- [x] Confirm `read_users` decision for first submission.
+- [x] Confirm public app does not request `read_users`.
 - [x] Prepare scope justification for Shopify review.
 - [ ] Confirm App Store contact metadata.
 - [ ] Do not modify production Shopify config during prep.
@@ -100,7 +117,7 @@ Draft status: marketplace preparation checklist.
 
 - [ ] Prepare test shop.
 - [ ] Seed or sync demo data.
-- [ ] Include discounts, refunds, returns, products, vendors, SKUs, inventory, locations, staff, and expenses.
+- [ ] Include discounts, refunds, returns, products, vendors, SKUs, inventory, locations, best-effort staff attribution, manual email permissions, and expenses.
 - [ ] Verify admin reviewer account.
 - [ ] Verify viewer/manager test account if needed.
 - [ ] Verify install flow.

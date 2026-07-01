@@ -66,11 +66,14 @@ Returns:
 - Include at least 2 return examples.
 - Confirm returned quantity/return metrics appear where v2 data supports them.
 
-Staff/users:
+Staff attribution and permissions:
 
-- Include multiple Shopify staff users if `read_users` remains enabled.
-- Include orders attributed to staff if Shopify data supports it.
-- Include at least one staff member used for Permissions and Sales by Staff screenshots.
+- Public App Store builds do not request `read_users`.
+- Include orders attributed to staff only if Shopify order/session data supports it without staff directory sync.
+- Sales by Staff may show best-effort attribution or safe fallbacks such as `Unknown staff` / `Unassigned`.
+- Configure Permissions by manually entering fake staff emails and assigning locations.
+- Existing `staff_members` data may be used only as optional suggestions; it is not required.
+- Advanced Shopify staff sync is future-only for custom, Plus, or Advanced implementations.
 
 Expenses:
 
@@ -110,6 +113,7 @@ First-run/empty-state path:
 Do:
 
 - Use fake customer/order/product/staff names where possible.
+- Use fake staff emails for app permissions.
 - Use fake expenses.
 - Use a dedicated demo shop/domain.
 - Keep screenshots free of current client production data.
@@ -120,17 +124,23 @@ Do not:
 - Use real customer names, emails, addresses, or phone numbers.
 - Use current client sales, cost, staff, or expense data.
 
+Field safety notes:
+
+- No individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored in reporting tables.
+- `orders.shipping` is a shipping amount, not a customer shipping address.
+- `orders.staff_member_email`, `order_lines.staff_member_email`, and `user_location_access.user_email` are staff/app permission fields, not customer email fields.
+
 ## Acceptance Checklist
 
 - [ ] Dashboard KPIs show non-zero sales.
 - [ ] Best sellers table has several rows.
 - [ ] Stock alerts show healthy/warning/critical examples.
 - [ ] Sales by Vendor has several vendors.
-- [ ] Sales by Staff has staff examples or documented degraded mode.
+- [ ] Sales by Staff has best-effort staff examples or safe fallback labels.
 - [ ] Recent Order Lines has demo orders.
 - [ ] Locations page compares multiple locations.
 - [ ] Data Quality has meaningful OK/warning examples.
 - [ ] Sync Center shows successful runs and record counts.
-- [ ] Permissions page has staff/location data available.
+- [ ] Permissions page shows manual email entry and location assignments.
 - [ ] Expenses page has demo expenses.
 - [ ] Empty/new-shop test confirms first-run notice.

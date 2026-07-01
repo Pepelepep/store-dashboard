@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import { hasConfiguredScope } from "../shopify/scopes.server";
 
 type SupabaseAdminClient = ReturnType<typeof getSupabaseAdminClient>;
 
@@ -3394,6 +3395,28 @@ export async function syncStaffMembers({
   let cursor: string | null = null;
   let hasNextPage = true;
   let syncedCount = 0;
+
+  if (!hasConfiguredScope("read_users")) {
+    const result = {
+      ok: true,
+      syncedCount,
+      skipped: true,
+      reason:
+        "read_users is not configured; staff directory sync is optional and reserved for custom/Plus implementations.",
+    };
+
+    await insertSyncRun({
+      supabase,
+      shop,
+      syncType: "staff_members",
+      status: "success",
+      source,
+      startedAt,
+      details: result,
+    });
+
+    return result;
+  }
 
   try {
     while (hasNextPage) {

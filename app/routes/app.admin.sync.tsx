@@ -5,6 +5,7 @@ import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import type { SyncJobRow } from "../lib/sync/sync-jobs.server";
+import { hasConfiguredScope } from "../lib/shopify/scopes.server";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { PageNotice } from "../components/ui/PageNotice";
@@ -34,11 +35,13 @@ type LoaderData = {
   lastSyncRuns: SyncRun[];
   activeJob: SyncJobRow | null;
   recentJobs: SyncJobRow[];
+  hasReadUsersScope: boolean;
 };
 
 type SyncTypeConfig = {
   syncType: string;
   label: string;
+  note?: string;
 };
 
 const freshnessMs = 24 * 60 * 60 * 1000;
@@ -494,6 +497,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     lastSyncRuns: (syncRuns ?? []) as SyncRun[],
     activeJob: selectCurrentSyncJob(typedRecentJobs),
     recentJobs: typedRecentJobs,
+    hasReadUsersScope: hasConfiguredScope("read_users"),
   };
 }
 
@@ -614,6 +618,11 @@ function SyncTypeStatusCard({
             <strong>Bulk operation:</strong> {getBulkOperationId(latestRun)}
           </div>
         ) : null}
+        {config.note ? (
+          <div>
+            <strong>Note:</strong> {config.note}
+          </div>
+        ) : null}
       </div>
 
       {summary.lastError?.error_message ? (
@@ -649,7 +658,7 @@ function SyncTypeStatusCard({
 }
 
 export default function AdminSyncPage() {
-  const { shop, counts, lastSyncRuns, activeJob, recentJobs } =
+  const { shop, counts, lastSyncRuns, activeJob, recentJobs, hasReadUsersScope } =
     useLoaderData<LoaderData>();
   const liveJob = selectCurrentSyncJob([activeJob]);
   const lastSuccessfulSync = lastSyncRuns.find(
@@ -667,6 +676,23 @@ export default function AdminSyncPage() {
     businessRecordCount === 0 ||
     (lastSyncRuns.length === 0 && recentJobs.length === 0);
   const fullRefreshCommand = `npm run sync:local -- --shop ${shop} --steps locations,products,inventory,orders`;
+  const visibleSyncTypeConfigs = hasReadUsersScope
+    ? [
+        ...syncTypeConfigs,
+        {
+          syncType: "staff_members",
+          label: "Staff directory",
+          note: "Optional staff directory sync is enabled for this environment.",
+        },
+      ]
+    : [
+        ...syncTypeConfigs,
+        {
+          syncType: "staff_members",
+          label: "Staff directory",
+          note: "Public App Store builds do not request read_users; staff sync is future/custom-only and permissions use manual email assignments.",
+        },
+      ];
 
   return (
     <main
@@ -785,7 +811,7 @@ export default function AdminSyncPage() {
               gap: 16,
             }}
           >
-            {syncTypeConfigs.map((config) => (
+            {visibleSyncTypeConfigs.map((config) => (
               <SyncTypeStatusCard
                 key={config.syncType}
                 config={config}
