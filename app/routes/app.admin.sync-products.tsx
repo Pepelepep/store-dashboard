@@ -3,11 +3,17 @@ import { redirect } from "react-router";
 
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
 
 async function redirectToSyncCenter(request: Request) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.sync-products",
+    shop: session.shop,
+    supabase,
+  });
 
   await assertAdminAccess({ request, session, supabase });
 

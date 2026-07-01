@@ -155,8 +155,17 @@ export async function getPermissionContext({
   const adminShopifyUserIds = parseCsvEnv(process.env.ADMIN_SHOPIFY_USER_IDS);
 
   let rows: PermissionRow[] = [];
+  let shopPermissionRuleCount = 0;
 
   if (identity.email || identity.shopifyUserId) {
+    const { count, error: countError } = await supabase
+      .from("user_location_access")
+      .select("*", { count: "exact", head: true })
+      .eq("shop_domain", session.shop);
+
+    if (countError) throw new Response(countError.message, { status: 500 });
+    shopPermissionRuleCount = count ?? 0;
+
     let query = supabase
       .from("user_location_access")
       .select(
@@ -180,9 +189,19 @@ export async function getPermissionContext({
     (identity.shopifyUserId
       ? adminShopifyUserIds.has(identity.shopifyUserId.toLowerCase())
       : false);
+  const isFreshInstallSetupAdmin =
+    shopPermissionRuleCount === 0 &&
+    Boolean(identity.email || identity.shopifyUserId);
+  if (isFreshInstallSetupAdmin) {
+    console.info("[fresh-install:permissions] setup admin enabled", {
+      route: "permissions",
+      shop: session.shop,
+      emptyPermissionRules: true,
+    });
+  }
 
   const isDbAdmin = rows.some((row) => row.role === "admin");
-  const isAdmin = isBootstrapAdmin || isDbAdmin;
+  const isAdmin = isBootstrapAdmin || isDbAdmin || isFreshInstallSetupAdmin;
 
   const allowedLocationIds = new Set<string>();
   for (const row of rows) {

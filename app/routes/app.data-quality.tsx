@@ -9,6 +9,10 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
+  ensureShopInitialized,
+  logEmptyDataState,
+} from "../lib/shop/shop-initialization.server";
+import {
   buildShopifyOrderUrl,
   formatNumber,
   formatStoreDateTime,
@@ -161,6 +165,11 @@ async function getFailedSyncCount({
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.data-quality",
+    shop: session.shop,
+    supabase,
+  });
   const permissions = await assertAdminAccess({ request, session, supabase });
   const url = new URL(request.url);
   const preservedSearch = url.search;
@@ -182,7 +191,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         permissions.allowedLocationIds.has(location.shopify_location_id),
       );
 
-  if (!permissions.isAdmin && accessibleLocations.length === 0) {
+  if (!permissions.isAdmin && allLocations.length > 0 && accessibleLocations.length === 0) {
     throw new Response("Forbidden: no location access configured", {
       status: 403,
     });
@@ -230,6 +239,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     syncRunsResult.status === "fulfilled" && !syncRunsResult.value.error
       ? ((syncRunsResult.value.data ?? []) as Array<Record<string, unknown>>)
       : [];
+  if (allLocations.length === 0 && syncRuns.length === 0) {
+    logEmptyDataState({
+      route: "app.data-quality",
+      shop: session.shop,
+      reason: "no_synced_locations_or_sync_runs",
+      counts: {
+        locations: allLocations.length,
+        accessibleLocations: accessibleLocations.length,
+        syncRuns: syncRuns.length,
+      },
+    });
+  }
   const report =
     reportResult.status === "fulfilled" && !reportResult.value.error
       ? ((reportResult.value.data ?? {}) as Record<string, unknown>)

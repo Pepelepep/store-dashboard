@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { Form, useLoaderData } from "react-router";
 
 import { HelperText } from "../components/ui/HelperText";
+import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
@@ -18,6 +19,10 @@ import type {
   OrderLineDbRow,
 } from "../lib/dashboard/dashboard-types";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import {
+  ensureShopInitialized,
+  logEmptyDataState,
+} from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
 
 type SupabaseAdminClient = ReturnType<typeof getSupabaseAdminClient>;
@@ -349,6 +354,11 @@ function formatDateTime(value: string) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.financial-qa",
+    shop: session.shop,
+    supabase,
+  });
   await assertAdminAccess({ request, session, supabase });
 
   const url = new URL(request.url);
@@ -402,6 +412,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedLocationId,
   });
   errors.push(...orderLinesResult.errors);
+  if (ordersResult.rows.length === 0 && orderLinesResult.rows.length === 0) {
+    logEmptyDataState({
+      route: "app.admin.financial-qa",
+      shop: session.shop,
+      reason: "no_orders_or_order_lines",
+      counts: {
+        locations: locations.length,
+        orders: ordersResult.rows.length,
+        orderLines: orderLinesResult.rows.length,
+      },
+    });
+  }
 
   const lineSummariesByOrder = getLineSummariesByOrder(orderLinesResult.rows);
   const orderRows =
@@ -603,6 +625,19 @@ export default function FinancialQaPage() {
             totals. Dashboard V2 uses line-level Net Sales.
           </HelperText>
         </header>
+
+        {orders.length === 0 ? (
+          <PageNotice
+            title="Financial QA is waiting for synced orders."
+            message="Financial QA becomes useful after Shopify orders and order lines have synced."
+            bullets={[
+              "Use Sync Center to review locations, products, inventory, and orders sync status.",
+              "This page will compare order-level and line-level financial totals once order data exists.",
+            ]}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            tone="info"
+          />
+        ) : null}
 
         <section
           style={{

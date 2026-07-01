@@ -1,11 +1,19 @@
-import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
-import type { SyncJobRow } from "../lib/sync/sync-jobs.server";
+import {
+  createManualSyncJob,
+  type SyncJobRow,
+  type SyncJobType,
+} from "../lib/sync/sync-jobs.server";
 import { hasConfiguredScope } from "../lib/shopify/scopes.server";
+import {
+  ensureShopInitialized,
+  logEmptyDataState,
+} from "../lib/shop/shop-initialization.server";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { PageNotice } from "../components/ui/PageNotice";
@@ -38,6 +46,11 @@ type LoaderData = {
   hasReadUsersScope: boolean;
 };
 
+type ActionData = {
+  ok: boolean;
+  message: string;
+};
+
 type SyncTypeConfig = {
   syncType: string;
   label: string;
@@ -62,6 +75,13 @@ const syncTypeConfigs: SyncTypeConfig[] = [
     syncType: "orders",
     label: "Orders",
   },
+];
+const manualSyncActions: Array<{ jobType: SyncJobType; label: string }> = [
+  { jobType: "locations", label: "Sync locations" },
+  { jobType: "products", label: "Sync products" },
+  { jobType: "inventory", label: "Sync inventory" },
+  { jobType: "orders", label: "Sync orders" },
+  { jobType: "full", label: "Full refresh job" },
 ];
 
 async function getTableCount({
@@ -455,6 +475,11 @@ function getJobProgressSummary(job?: SyncJobRow | null) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.sync",
+    shop: session.shop,
+    supabase,
+  });
 
   await assertAdminAccess({ request, session, supabase });
 
@@ -490,6 +515,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .order("updated_at", { ascending: false })
     .limit(20);
   const typedRecentJobs = (recentJobs ?? []) as SyncJobRow[];
+  if (
+    counts.every((row) => row.count === 0) &&
+    (syncRuns ?? []).length === 0 &&
+    typedRecentJobs.length === 0
+  ) {
+    logEmptyDataState({
+      route: "app.admin.sync",
+      shop: session.shop,
+      reason: "fresh_business_database",
+      counts: Object.fromEntries(counts.map((row) => [row.table, row.count])),
+    });
+  }
 
   return {
     shop: session.shop,
@@ -499,6 +536,48 @@ export async function loader({ request }: LoaderFunctionArgs) {
     recentJobs: typedRecentJobs,
     hasReadUsersScope: hasConfiguredScope("read_users"),
   };
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  const { session } = await authenticate.admin(request);
+  const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.sync.action",
+    shop: session.shop,
+    supabase,
+  });
+  await assertAdminAccess({ request, session, supabase });
+
+  const formData = await request.formData();
+  const jobType = String(formData.get("jobType") ?? "") as SyncJobType;
+  const allowedJobTypes = new Set(manualSyncActions.map((action) => action.jobType));
+
+  if (!allowedJobTypes.has(jobType)) {
+    return {
+      ok: false,
+      message: "Unknown sync action.",
+    } satisfies ActionData;
+  }
+
+  const result = await createManualSyncJob({
+    supabase,
+    shop: session.shop,
+    jobType,
+  });
+
+  console.info("[fresh-install:sync-action]", {
+    route: "app.admin.sync.action",
+    shop: session.shop,
+    jobType,
+    reused: result.reused,
+  });
+
+  return {
+    ok: true,
+    message: result.reused
+      ? `Existing ${jobType} sync job is already queued or running.`
+      : `Queued ${jobType} sync job.`,
+  } satisfies ActionData;
 }
 
 export function ErrorBoundary() {
@@ -660,7 +739,10 @@ function SyncTypeStatusCard({
 export default function AdminSyncPage() {
   const { shop, counts, lastSyncRuns, activeJob, recentJobs, hasReadUsersScope } =
     useLoaderData<LoaderData>();
+  const actionData = useActionData<ActionData>();
+  const navigation = useNavigation();
   const liveJob = selectCurrentSyncJob([activeJob]);
+  const isSubmitting = navigation.state !== "idle";
   const lastSuccessfulSync = lastSyncRuns.find(
     (run) => run.status === "success" && run.finished_at,
   );
@@ -728,6 +810,55 @@ export default function AdminSyncPage() {
             tone="info"
           />
         ) : null}
+
+        {actionData ? (
+          <InlineResult variant={actionData.ok ? "success" : "error"}>
+            {actionData.message}
+          </InlineResult>
+        ) : null}
+
+        <section
+          style={{
+            background: "white",
+            border: "1px solid #e3e3e3",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 20,
+            display: "grid",
+            gap: 12,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 800 }}>Manual sync actions</div>
+            <HelperText>
+              Queue sync jobs for marketplace setup and reviewer-safe onboarding.
+              Staff directory sync is skipped when `read_users` is not configured.
+            </HelperText>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {manualSyncActions.map((syncAction) => (
+              <Form key={syncAction.jobType} method="post">
+                <input type="hidden" name="jobType" value={syncAction.jobType} />
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  style={{
+                    background: "#202223",
+                    border: "1px solid #202223",
+                    borderRadius: 8,
+                    color: "white",
+                    cursor: isSubmitting ? "not-allowed" : "pointer",
+                    fontWeight: 700,
+                    opacity: isSubmitting ? 0.65 : 1,
+                    padding: "8px 12px",
+                  }}
+                >
+                  {syncAction.label}
+                </button>
+              </Form>
+            ))}
+          </div>
+        </section>
 
         <section
           style={{

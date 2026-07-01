@@ -7,6 +7,10 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { AppButtonLink } from "../components/ui/AppButton";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
+import {
+  ensureShopInitialized,
+  logEmptyDataState,
+} from "../lib/shop/shop-initialization.server";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -197,6 +201,11 @@ function getButtonStyle({
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.permissions",
+    shop: session.shop,
+    supabase,
+  });
   const permissionContext = await assertAdminAccess({ request, session, supabase });
 
   const [
@@ -229,18 +238,39 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (permissionsError) throw new Response(permissionsError.message, { status: 500 });
   if (staffMembersError) throw new Response(staffMembersError.message, { status: 500 });
 
+  const locations = (locationsData ?? []) as LocationRow[];
+  const permissions = (permissionsData ?? []) as PermissionRow[];
+  const staffMembers = (staffMembersData ?? []) as StaffMemberRow[];
+  if (locations.length === 0 && permissions.length === 0 && staffMembers.length === 0) {
+    logEmptyDataState({
+      route: "app.admin.permissions",
+      shop: session.shop,
+      reason: "no_locations_permissions_or_staff",
+      counts: {
+        locations: locations.length,
+        permissions: permissions.length,
+        staffMembers: staffMembers.length,
+      },
+    });
+  }
+
   return {
     shop: session.shop,
     currentUser: permissionContext.identity,
-    locations: (locationsData ?? []) as LocationRow[],
-    permissions: (permissionsData ?? []) as PermissionRow[],
-    staffMembers: (staffMembersData ?? []) as StaffMemberRow[],
+    locations,
+    permissions,
+    staffMembers,
   } satisfies LoaderData;
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.permissions.action",
+    shop: session.shop,
+    supabase,
+  });
   await assertAdminAccess({ request, session, supabase });
 
   const formData = await request.formData();
@@ -819,7 +849,7 @@ export default function AdminPermissionsPage() {
                 </div>
                 {locations.length === 0 ? (
                   <p style={{ color: "#616161", fontSize: 13, lineHeight: 1.35 }}>
-                    No locations synced yet. Locations may appear after location sync completes.
+                    Sync locations first to assign location access.
                   </p>
                 ) : null}
                 {locations.length === 0 ? (

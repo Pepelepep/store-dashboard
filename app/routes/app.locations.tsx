@@ -9,6 +9,10 @@ import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
+  ensureShopInitialized,
+  logEmptyDataState,
+} from "../lib/shop/shop-initialization.server";
+import {
   daysBetween,
   formatCurrency,
   formatNumber,
@@ -1025,6 +1029,11 @@ function formatCompactCurrency(value: number) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.locations",
+    shop: session.shop,
+    supabase,
+  });
   const permissions = await assertAdminAccess({ request, session, supabase });
   const url = new URL(request.url);
   const shouldShowDebugInfo =
@@ -1087,7 +1096,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         permissions.allowedLocationIds.has(location.shopify_location_id),
       );
 
-  if (!permissions.isAdmin && accessibleLocations.length === 0) {
+  if (!permissions.isAdmin && allLocations.length > 0 && accessibleLocations.length === 0) {
     throw new Response("Forbidden: no location access configured", {
       status: 403,
     });
@@ -1150,6 +1159,22 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const orderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
   const expenses = (expensesResult.data ?? []) as FixedExpenseDbRow[];
+  if (allLocations.length === 0 || orderLines.length === 0) {
+    logEmptyDataState({
+      route: "app.locations",
+      shop: session.shop,
+      reason:
+        allLocations.length === 0
+          ? "no_synced_locations"
+          : "no_order_lines_for_selected_locations",
+      counts: {
+        locations: allLocations.length,
+        accessibleLocations: accessibleLocations.length,
+        orderLines: orderLines.length,
+        expenses: expenses.length,
+      },
+    });
+  }
   const staffOptions = buildStaffOptions(orderLines);
   const vendorOptions = buildVendorOptions(orderLines);
   const filteredOrderLines = filterOrderLines({

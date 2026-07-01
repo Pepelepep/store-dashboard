@@ -5,6 +5,10 @@ import { useEffect, useState } from "react";
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import {
+  ensureShopInitialized,
+  logEmptyDataState,
+} from "../lib/shop/shop-initialization.server";
 import { AppButton } from "../components/ui/AppButton";
 import { FieldError } from "../components/ui/FieldError";
 import { HelperText } from "../components/ui/HelperText";
@@ -81,6 +85,11 @@ const expenseCategories = [
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.expenses",
+    shop: session.shop,
+    supabase,
+  });
 
   await assertAdminAccess({ request, session, supabase });
 
@@ -105,16 +114,35 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (locationsError) throw new Response(locationsError.message, { status: 500 });
   if (expensesError) throw new Response(expensesError.message, { status: 500 });
 
+  const locations = (locationsData ?? []) as LocationRow[];
+  const expenses = (expensesData ?? []) as ExpenseRow[];
+  if (locations.length === 0 && expenses.length === 0) {
+    logEmptyDataState({
+      route: "app.admin.expenses",
+      shop: session.shop,
+      reason: "no_locations_or_expenses",
+      counts: {
+        locations: locations.length,
+        expenses: expenses.length,
+      },
+    });
+  }
+
   return {
     shop: session.shop,
-    locations: (locationsData ?? []) as LocationRow[],
-    expenses: (expensesData ?? []) as ExpenseRow[],
+    locations,
+    expenses,
   } satisfies LoaderData;
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.admin.expenses.action",
+    shop: session.shop,
+    supabase,
+  });
 
   await assertAdminAccess({ request, session, supabase });
 

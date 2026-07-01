@@ -5,6 +5,10 @@ import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
+import {
+  ensureShopInitialized,
+  logEmptyDataState,
+} from "../lib/shop/shop-initialization.server";
 import { ActiveDrilldownBadge } from "../components/dashboard/ActiveDrilldownBadge";
 import { BestSellersCard } from "../components/dashboard/BestSellersCard";
 import { DashboardHeader } from "../components/dashboard/DashboardHeader";
@@ -214,6 +218,11 @@ function getRecentOrderChips(row: DashboardSalesOrderLineRow) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.db-dashboard",
+    shop: session.shop,
+    supabase,
+  });
   const permissions = await getPermissionContext({
     request,
     session,
@@ -357,6 +366,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const variants = (variantsResult.data ?? []) as VariantDbRow[];
   const products = (productsResult.data ?? []) as ProductDbRow[];
   const expenses = (expensesResult.data ?? []) as FixedExpenseDbRow[];
+  if (allLocations.length === 0 || orderLines.length === 0) {
+    logEmptyDataState({
+      route: "app.db-dashboard",
+      shop: session.shop,
+      reason:
+        allLocations.length === 0
+          ? "no_synced_locations"
+          : "no_order_lines_for_selected_period",
+      counts: {
+        locations: allLocations.length,
+        orderLines: orderLines.length,
+        products: products.length,
+        inventoryRows: inventoryRows.length,
+        expenses: expenses.length,
+      },
+    });
+  }
   const variantsById = new Map(
     variants.map((variant) => [variant.shopify_variant_id, variant]),
   );

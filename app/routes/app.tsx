@@ -12,6 +12,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
 import { getBillingGateState } from "../lib/billing.server";
+import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 
 import { authenticate } from "../shopify.server";
 
@@ -30,13 +31,18 @@ declare global {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
+  const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app",
+    shop: session.shop,
+    supabase,
+  });
   const billing = await getBillingGateState({ admin, shop: session.shop });
 
   if (billing.requiresBilling && url.pathname !== "/app/billing-required") {
     throw redirect(`/app/billing-required${url.search}`);
   }
 
-  const supabase = getSupabaseAdminClient();
   const permissions = await getPermissionContext({ request, session, supabase });
 
   return {
