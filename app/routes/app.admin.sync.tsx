@@ -6,9 +6,11 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
   createManualSyncJob,
+  processSyncJobsBatch,
   type SyncJobRow,
   type SyncJobType,
 } from "../lib/sync/sync-jobs.server";
+import { getOfflineAdminClient } from "../lib/shopify/offline-admin.server";
 import { hasConfiguredScope } from "../lib/shopify/scopes.server";
 import {
   ensureShopInitialized,
@@ -549,6 +551,21 @@ export async function action({ request }: ActionFunctionArgs) {
   await assertAdminAccess({ request, session, supabase });
 
   const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "queue");
+
+  if (intent === "process") {
+    const summary = await processSyncJobsBatch({
+      supabase,
+      limit: 5,
+      getAdminClient: getOfflineAdminClient,
+    });
+
+    return {
+      ok: true,
+      message: `Processed ${summary.processed} sync job batch(es): ${summary.completed} completed, ${summary.failed} failed, ${summary.skipped} skipped.`,
+    } satisfies ActionData;
+  }
+
   const jobType = String(formData.get("jobType") ?? "") as SyncJobType;
   const allowedJobTypes = new Set(manualSyncActions.map((action) => action.jobType));
 
@@ -804,7 +821,7 @@ export default function AdminSyncPage() {
             message="Data may still be preparing. Reports populate after Shopify locations, products, inventory, and orders sync into ShopOps Studio."
             bullets={[
               "This page is for monitoring sync health, freshness, and troubleshooting history.",
-              "No reviewer-facing full sync trigger is available here.",
+              "Manual sync requests are queued and processed automatically by the background sync worker.",
               "When sync completes, Dashboard, Locations, and Data Health will show richer reporting.",
             ]}
             tone="info"
@@ -832,12 +849,14 @@ export default function AdminSyncPage() {
             <div style={{ fontWeight: 800 }}>Manual sync actions</div>
             <HelperText>
               Queue sync jobs for marketplace setup and reviewer-safe onboarding.
+              Manual sync requests are queued and processed automatically by the background sync worker.
               Staff directory sync is skipped when `read_users` is not configured.
             </HelperText>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {manualSyncActions.map((syncAction) => (
               <Form key={syncAction.jobType} method="post">
+                <input type="hidden" name="intent" value="queue" />
                 <input type="hidden" name="jobType" value={syncAction.jobType} />
                 <button
                   type="submit"
@@ -857,6 +876,25 @@ export default function AdminSyncPage() {
                 </button>
               </Form>
             ))}
+            <Form method="post">
+              <input type="hidden" name="intent" value="process" />
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                style={{
+                  background: "white",
+                  border: "1px solid #202223",
+                  borderRadius: 8,
+                  color: "#202223",
+                  cursor: isSubmitting ? "not-allowed" : "pointer",
+                  fontWeight: 700,
+                  opacity: isSubmitting ? 0.65 : 1,
+                  padding: "8px 12px",
+                }}
+              >
+                Process queued jobs now
+              </button>
+            </Form>
           </div>
         </section>
 
@@ -874,8 +912,8 @@ export default function AdminSyncPage() {
           <div>
             <div style={{ fontWeight: 800 }}>Official full refresh command</div>
             <HelperText>
-              Use local refresh for full database reloads. Webhooks keep Shopify
-              changes updated afterward. This page is for monitoring only.
+              The marketplace path should use queued sync jobs for historical
+              data. Webhooks keep future Shopify changes updated afterward.
             </HelperText>
           </div>
           <pre

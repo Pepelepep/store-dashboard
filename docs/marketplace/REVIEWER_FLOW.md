@@ -93,11 +93,13 @@ Expected outcome:
 
 - Sync Center shows sync freshness and recent runs.
 - Staff directory sync is labeled optional/future/custom-only when `read_users` is absent.
-- No manual production full-refresh action is required from the reviewer.
+- Manual sync requests are queued and processed by the background sync worker.
+- Webhooks are for future Shopify changes and are not required to process historical/manual sync data.
 
 Operational note:
 
-- Full refresh is currently an operator command, not a reviewer-facing UI flow.
+- Render Cron must call `/internal/cron/process-sync-jobs` every 5 minutes with `Authorization: Bearer <cron secret>`.
+- Existing webhook processing remains separate at `/internal/cron/process-webhook-events`.
 
 ## Open Dashboard
 
@@ -191,6 +193,7 @@ Expected outcome:
 
 - Sync status is understandable.
 - The route is admin/support diagnostic and does not require reviewer-triggered production sync.
+- Admins can queue manual sync jobs and, when needed for troubleshooting, process queued jobs now.
 
 ## Verify Permissions
 

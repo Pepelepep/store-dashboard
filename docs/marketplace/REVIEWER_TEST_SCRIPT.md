@@ -40,8 +40,8 @@ Expected text:
 Admin expected result:
 
 - Admin can open Sync Center.
-- Sync Center explains it is for monitoring sync health.
-- No reviewer-facing full sync trigger is shown.
+- Sync Center explains that manual sync requests are queued and processed automatically by the background sync worker.
+- Sync Center can queue location, product, inventory, order, and full refresh jobs.
 
 Viewer/no-access expected result:
 
@@ -137,10 +137,11 @@ Steps:
 
 Expected result:
 
-- Sync Center is monitoring-only.
+- Sync Center shows queued/manual sync jobs and background processing status.
 - It shows freshness, history, counts, and troubleshooting status.
 - Staff directory sync is hidden or labeled future/custom-only when `read_users` is absent.
-- It does not expose a reviewer-facing full sync trigger.
+- Admins may use "Process queued jobs now" for troubleshooting.
+- Webhooks are for future Shopify changes and are not required for historical/manual sync data.
 
 ## Permissions
 
@@ -191,3 +192,5 @@ Expected result:
 - `read_users` is not requested for the public App Store app.
 - Advanced Shopify staff sync is future-only for custom/Plus/Advanced implementations.
 - Compliance webhooks validate Shopify HMAC through Shopify webhook authentication. Valid requests return 200; invalid HMAC requests return 401.
+- Render Cron should call `/internal/cron/process-sync-jobs` every 5 minutes with `Authorization: Bearer <cron secret>`.
+- Existing webhook processing is separate at `/internal/cron/process-webhook-events`.

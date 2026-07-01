@@ -97,7 +97,8 @@ Before submission:
 
 - Install app on demo shop.
 - Complete OAuth.
-- Run approved operator sync path for demo data.
+- Queue manual sync jobs from Sync Center for locations, products, inventory, and orders.
+- Confirm `/internal/cron/process-sync-jobs` is running through Render Cron every 5 minutes.
 - Confirm Sync Center shows success/freshness.
 - Confirm Dashboard is populated.
 - Confirm Locations is populated.
@@ -141,6 +142,7 @@ Field safety notes:
 - [ ] Locations page compares multiple locations.
 - [ ] Data Quality has meaningful OK/warning examples.
 - [ ] Sync Center shows successful runs and record counts.
+- [ ] Render Cron processes queued `sync_jobs`.
 - [ ] Permissions page shows manual email entry and location assignments.
 - [ ] Expenses page has demo expenses.
 - [ ] Empty/new-shop test confirms first-run notice.

@@ -27,6 +27,7 @@ export type SyncJobType =
   | "orders"
   | "orders_reconciliation_48h"
   | "financial_backfill_30d"
+  | "full_refresh"
   | "full";
 
 export type SyncJobStatus =
@@ -53,6 +54,14 @@ export type SyncJobRow = {
 };
 
 const fullSyncSteps = ["locations", "products", "inventory", "orders"];
+const marketplaceSyncJobTypes: SyncJobType[] = [
+  "locations",
+  "products",
+  "inventory",
+  "orders",
+  "full",
+  "full_refresh",
+];
 const STALE_ACTIVE_JOB_MS = 30 * 60 * 1000;
 const ORDERS_RECONCILIATION_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ORDERS_RECONCILIATION_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -60,7 +69,9 @@ const FINANCIAL_BACKFILL_RECENT_SUCCESS_MS = 24 * 60 * 60 * 1000;
 const FINANCIAL_BACKFILL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getInitialStep(jobType: SyncJobType) {
-  return jobType === "full" ? fullSyncSteps[0] : jobType;
+  return jobType === "full" || jobType === "full_refresh"
+    ? fullSyncSteps[0]
+    : jobType;
 }
 
 function getNextFullStep(currentStep: string | null) {
@@ -233,10 +244,11 @@ async function getActiveBlockingJob({
   jobType: SyncJobType;
 }) {
   const blockingTypes =
-    jobType === "full"
+    jobType === "full" || jobType === "full_refresh"
       ? [
           ...fullSyncSteps,
           "full",
+          "full_refresh",
           "orders_reconciliation_48h",
           "financial_backfill_30d",
         ]
@@ -586,6 +598,28 @@ export async function getRunnableFinancialBackfill30dJobs({
   return (data ?? []) as SyncJobRow[];
 }
 
+export async function getRunnableMarketplaceSyncJobs({
+  supabase,
+  limit,
+}: {
+  supabase: SupabaseAdminClient;
+  limit: number;
+}) {
+  const { data, error } = await supabase
+    .from("sync_jobs")
+    .select("*")
+    .in("job_type", marketplaceSyncJobTypes)
+    .in("status", ["pending", "running"])
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []) as SyncJobRow[];
+}
+
 async function markStepCompleted({
   supabase,
   shop,
@@ -835,11 +869,15 @@ export async function processManualSyncJobBatch({
     };
     const nextCounts = mergeCounts(claimedJob.counts, step, batchResult.counts);
     const nextStep =
-      batchResult.done && claimedJob.job_type === "full"
+      batchResult.done &&
+      (claimedJob.job_type === "full" || claimedJob.job_type === "full_refresh")
         ? getNextFullStep(step)
         : step;
     const isDone =
-      batchResult.done && (!nextStep || claimedJob.job_type !== "full");
+      batchResult.done &&
+      (!nextStep ||
+        (claimedJob.job_type !== "full" &&
+          claimedJob.job_type !== "full_refresh"));
 
     if (batchResult.done) {
       await markStepCompleted({
@@ -933,4 +971,86 @@ export async function processManualSyncJobBatch({
       processed: true,
     };
   }
+}
+
+export type ProcessSyncJobsSummary = {
+  processed: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  jobs: Array<{
+    id: string;
+    type: string;
+    status: string;
+    processed: boolean;
+    errorMessage?: string | null;
+  }>;
+};
+
+export async function processSyncJobsBatch({
+  supabase,
+  limit = 5,
+  getAdminClient,
+}: {
+  supabase: SupabaseAdminClient;
+  limit?: number;
+  getAdminClient: (shop: string) => Promise<ShopifyAdminClient>;
+}): Promise<ProcessSyncJobsSummary> {
+  const safeLimit =
+    Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 10) : 5;
+  const jobs = await getRunnableMarketplaceSyncJobs({
+    supabase,
+    limit: safeLimit,
+  });
+  const summary: ProcessSyncJobsSummary = {
+    processed: 0,
+    completed: 0,
+    failed: 0,
+    skipped: 0,
+    jobs: [],
+  };
+
+  for (const job of jobs) {
+    try {
+      const admin = await getAdminClient(job.shop_domain);
+      const result = await processManualSyncJobBatch({
+        admin,
+        supabase,
+        shop: job.shop_domain,
+        jobId: job.id,
+      });
+
+      if (result.processed) {
+        summary.processed += 1;
+      } else {
+        summary.skipped += 1;
+      }
+
+      if (result.job.status === "success") {
+        summary.completed += 1;
+      } else if (result.job.status === "error") {
+        summary.failed += 1;
+      }
+
+      summary.jobs.push({
+        id: result.job.id,
+        type: result.job.job_type,
+        status: result.job.status,
+        processed: result.processed,
+        errorMessage: result.job.error_message,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      summary.failed += 1;
+      summary.jobs.push({
+        id: job.id,
+        type: job.job_type,
+        status: "error",
+        processed: false,
+        errorMessage,
+      });
+    }
+  }
+
+  return summary;
 }

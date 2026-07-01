@@ -29,6 +29,16 @@ Draft status: marketplace preparation checklist.
 - [x] Verified compliance webhook design: valid HMAC returns 200, invalid HMAC returns 401.
 - [ ] Confirm Protected Customer Data Draft review with App Store listing.
 
+## Phase 7E Status
+
+- [x] Added internal sync jobs processor route: `/internal/cron/process-sync-jobs`.
+- [x] Reused `CRON_SECRET` bearer authentication for sync jobs processing.
+- [x] Confirmed sync jobs worker uses existing sync job logic and `sync_runs` schema without `created_at`.
+- [x] Updated Sync Center copy for queued manual sync requests and background worker processing.
+- [x] Added admin-only “Process queued jobs now” action in Sync Center.
+- [ ] Configure Render Cron for `/internal/cron/process-sync-jobs` every 5 minutes.
+- [ ] Confirm pending marketplace sync jobs complete in preview.
+
 ## Product Readiness
 
 - [x] Confirm app name: ShopOps Studio.
@@ -133,6 +143,8 @@ Draft status: marketplace preparation checklist.
 - [ ] Confirm Render environment separation.
 - [ ] Confirm Supabase/database environment separation or tenant safeguards.
 - [ ] Confirm `CRON_SECRET` exists and is rotated/stored securely.
+- [ ] Configure Render Cron: `POST /internal/cron/process-sync-jobs` with `Authorization: Bearer <cron secret>` every 5 minutes.
+- [ ] Configure Render Cron: `POST /internal/cron/process-webhook-events` with `Authorization: Bearer <cron secret>` every 5 minutes.
 - [ ] Confirm monitoring and alerting.
 - [ ] Confirm rollback plan.
 - [ ] Confirm no merge to staging/main/prod until approved.

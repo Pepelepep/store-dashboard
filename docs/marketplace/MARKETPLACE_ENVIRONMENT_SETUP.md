@@ -91,6 +91,7 @@ Review note:
 
 `CRON_SECRET` protects:
 
+- `/internal/cron/process-sync-jobs`
 - `/internal/cron/process-webhook-events`
 - `/internal/financial-backfill-30d`
 
@@ -105,7 +106,26 @@ Requirements:
 Cron/review note:
 
 - Marketplace review should not require reviewers to call internal cron endpoints.
-- Sync Center is monitoring-only and must not expose reviewer-facing full sync triggers.
+- Sync Center can queue manual marketplace sync jobs and optionally process queued jobs now for admin troubleshooting.
+- Manual sync requests are processed by the background sync worker; webhooks are only for future Shopify changes after data has synced.
+
+## Render Cron Requirements
+
+Configure Render Cron or an equivalent scheduler:
+
+1. Sync jobs processor
+   - Route: `/internal/cron/process-sync-jobs`
+   - Method: `POST` preferred; `GET` acceptable if matching the existing cron style.
+   - Header: `Authorization: Bearer <cron secret>`
+   - Frequency: every 5 minutes.
+   - Purpose: processes queued `sync_jobs` for manual sync/backfill of locations, products, inventory, orders, and full refresh jobs.
+
+2. Webhook events processor
+   - Route: `/internal/cron/process-webhook-events`
+   - Method: `POST` preferred; `GET` acceptable if matching the existing cron style.
+   - Header: `Authorization: Bearer <cron secret>`
+   - Frequency: every 5 minutes.
+   - Purpose: processes queued Shopify webhook events for future changes.
 
 ## Shopify Config Guidance
 
