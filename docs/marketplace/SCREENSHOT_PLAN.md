@@ -1,26 +1,25 @@
 # Screenshot Plan
 
-Draft status: marketplace listing asset plan.
+Status: Phase 7A first-submission screenshot sequence.
 
-## Rules
+## Capture Rules
 
 - Use demo/fake data only.
 - Do not use current client production data.
 - Do not show real customer names, addresses, phone numbers, emails, or private order details.
 - Capture screenshots from the dedicated marketplace/demo environment.
 - Keep browser zoom and Shopify admin frame consistent across screenshots.
+- Make screenshots match the listing promise: reporting, margin, COGS, refunds, discounts, returns, permissions, and Data Health.
+- Treat reports as merchant-facing and informational; do not show copy that implies accounting, tax, legal, payroll, or financial advice.
 
-## Recommended Screenshot Order
+## Final Screenshot Sequence
 
-1. Dashboard overview.
-2. Dashboard tables and stock alerts.
-3. Sales by Vendor and Sales by Staff.
-4. Locations comparison.
-5. Data Health.
-6. Sync Center only if showing admin/support diagnostics.
-7. Permissions.
-8. Expenses.
-9. First-run/empty state.
+1. Dashboard overview
+2. Location performance
+3. Data Health
+4. Expenses / COGS
+5. Permissions
+6. Billing / onboarding if needed
 
 ## Screenshot Details
 
@@ -28,137 +27,102 @@ Draft status: marketplace listing asset plan.
 
 Show:
 
-- App name/context in embedded Shopify admin.
-- Location selector.
-- Date range filters.
-- KPI cards with non-zero sales.
-- Gross profit/margin context.
+- ShopOps Studio embedded in Shopify admin.
+- Date range and location filters.
+- Sales, net sales, COGS, gross profit, gross margin, discounts, refunds, returns, expenses, and net profit where available.
+- Best sellers, inventory signals, and recent order-line reporting using demo data.
 
 Data requirements:
 
-- At least one selected location with demo orders.
-- COGS populated for margin metrics.
+- At least one selected demo location with non-zero orders.
+- Products with SKUs, vendors, and populated costs.
+- Demo orders that include discounts, refunds, and returns.
 
-### 2. Dashboard Tables and Stock Alerts
-
-Show:
-
-- Best sellers.
-- Soon out of stock.
-- Recent order lines.
-- Discounts/refunds/returns chips or columns where available.
-
-Data requirements:
-
-- Products with SKUs/vendors.
-- Inventory warning/critical examples.
-- Orders with discounts/refunds/returns.
-
-### 3. Sales by Vendor and Sales by Staff
-
-Show:
-
-- Vendor breakdown.
-- Staff breakdown if `read_users` remains enabled.
-
-Data requirements:
-
-- Multiple vendors.
-- Multiple staff attribution examples where Shopify provides data.
-
-Fallback:
-
-- If `read_users` is removed or staff attribution unavailable, capture vendor reporting and omit staff-specific screenshot or label staff attribution as optional.
-
-### 4. Locations Comparison
+### 2. Location Performance
 
 Show:
 
 - Multiple selected locations.
-- Location KPIs.
-- Trend chart.
-- Location table.
+- Location-level sales, COGS, margin, refunds, returns, discounts, expenses, and net profit context where available.
+- Trend or comparison table that makes multi-location reporting clear.
 
 Data requirements:
 
-- At least 3 active locations.
+- At least 3 active demo locations.
 - Sales in each location.
-- Expenses configured for at least some locations.
+- Fixed expenses configured for at least some locations.
+- No client production location names.
 
-### 5. Data Health
+### 3. Data Health
 
 Show:
 
 - Sync freshness.
-- Product/variant/order/inventory checks.
-- Expense coverage.
-- Optional staff attribution check.
-- Copy that explains these checks help show whether reports are ready to trust.
+- Missing cost checks.
+- Product, variant, order, inventory, and location readiness checks.
+- Financial completeness signals for COGS, refunds, returns, discounts, and expenses where available.
+- Clear merchant-facing readiness language.
 
 Data requirements:
 
-- Mix of healthy and warning examples.
-- Avoid scary unresolved failures unless intentional and explained.
+- Mix of healthy and warning demo examples.
+- Avoid unresolved failure states unless intentionally used to demonstrate report readiness checks.
 
-### 6. Sync Center
-
-Show:
-
-- First run status only if demonstrating onboarding.
-- Last successful sync.
-- Sync status cards.
-- Database records.
-- Recent sync history.
-
-Data requirements:
-
-- Successful demo sync runs.
-- Record counts populated.
-
-Important:
-
-- Do not show internal secrets.
-- Do not show any reviewer-facing full sync trigger.
-- Treat this as an admin/support diagnostic screenshot, not a primary marketplace product screen.
-
-### 7. Permissions
+### 4. Expenses / COGS
 
 Show:
 
-- Grant access form.
-- Location checkboxes.
-- Existing demo access rules.
-- Staff dropdown if available.
-
-Data requirements:
-
-- Demo staff and demo locations.
-- Fake staff emails only.
-
-### 8. Expenses
-
-Show:
-
-- Add/edit expense form.
-- Existing fixed expenses table.
-- Location-specific and global examples if useful.
+- Expense management for global and location-specific fixed expenses.
+- Product cost or COGS context where visible in the app.
+- How expenses and COGS support operational profitability reporting.
 
 Data requirements:
 
 - Fake expense names and amounts.
+- Demo products with costs populated.
 - No client production expenses.
 
-### 9. First-Run / Empty State
+### 5. Permissions
 
 Show:
 
-- "Your data is being prepared"
-- Sync Center CTA for admin.
-- Simple next steps.
+- Location-aware access assignment.
+- Staff selector or staff list where `read_users` data is available.
+- Demo access rules for admin, manager, or viewer roles.
 
 Data requirements:
 
-- Empty demo tenant or unsynced demo shop.
+- Demo staff users only.
+- Fake staff emails only.
+- At least 2 locations assigned across demo users.
+
+### 6. Billing / Onboarding If Needed
+
+Use only if the submission flow needs a billing or first-run screenshot.
+
+Show:
+
+- ShopOps Studio plan at `$59.99/month`.
+- 14-day free trial.
+- Shopify managed billing context.
+- First-run state that explains reporting becomes useful after sync completes.
+
+Data requirements:
+
+- Billing must be shown only in a marketplace-safe review environment.
+- If `BILLING_ENABLED=false`, capture first-run/onboarding instead of billing.
+
+## Optional Internal Screenshot
+
+Sync Center may be captured for internal review or support documentation, but it should not be a primary App Store screenshot unless Shopify review specifically asks to see sync diagnostics.
+
+If captured, show:
+
+- Last successful sync.
+- Record counts.
+- Recent sync jobs.
+- No internal secrets.
+- No reviewer-facing production full-refresh action.
 
 ## Dimensions and Assets
 
@@ -177,14 +141,12 @@ Working capture recommendations:
 
 - [ ] App icon.
 - [ ] Dashboard overview screenshot.
-- [ ] Dashboard table/stock alert screenshot.
-- [ ] Vendor/staff screenshot.
-- [ ] Locations screenshot.
+- [ ] Location performance screenshot.
 - [ ] Data Health screenshot.
-- [ ] Sync Center screenshot only if needed for admin/support diagnostics.
+- [ ] Expenses / COGS screenshot.
 - [ ] Permissions screenshot.
-- [ ] Expenses screenshot.
-- [ ] First-run empty state screenshot.
+- [ ] Billing or onboarding screenshot if needed.
+- [ ] Optional Sync Center support screenshot if requested by reviewer.
 - [ ] All screenshots use demo data only.
 - [ ] All screenshots checked for customer personal data.
 - [ ] All screenshots checked for client production data.

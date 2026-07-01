@@ -2,15 +2,28 @@
 
 Draft status: marketplace preparation checklist.
 
+## Phase 7A Status
+
+- [x] Created first-submission-ready listing package for ShopOps Studio.
+- [x] Finalized App Store positioning around Shopify reporting, margin, COGS, refunds, discounts, returns, and Data Health.
+- [x] Added first-submission pricing copy: ShopOps Studio, `$59.99/month`, 14-day free trial.
+- [x] Added support, privacy, terms, and support URLs for marketplace preview.
+- [x] Added reviewer note for `read_orders`, `read_all_orders`, `read_users`, protected customer/order data processing, shop isolation, and no data sale/third-party marketing sharing.
+- [x] Finalized first-submission screenshot sequence.
+- [x] Aligned reviewer flow with finalized listing package.
+- [ ] Confirm Shopify approval for Protected Customer Data, `read_all_orders`, and `read_users`.
+- [ ] Capture final screenshots with demo data only.
+- [ ] Confirm final Shopify App Store screenshot dimensions.
+
 ## Product Readiness
 
-- [ ] Confirm app name: ShopOps Studio.
+- [x] Confirm app name: ShopOps Studio.
 - [ ] Approve target launch strategy: private, unlisted, or public App Store.
 - [ ] Decide whether `/app/locations` should remain admin-only or become viewer-accessible.
 - [ ] Decide first-install onboarding requirements.
-- [ ] Confirm Data Health is the marketplace-facing report trust page.
+- [x] Confirm Data Health is the marketplace-facing report trust page.
 - [ ] Confirm Sync Center remains admin/support diagnostic and hidden from main navigation.
-- [ ] Confirm financial metrics disclaimers.
+- [x] Confirm financial metrics disclaimers.
 - [ ] Confirm historical reporting expectations.
 
 ## UX Readiness
@@ -50,20 +63,20 @@ Draft status: marketplace preparation checklist.
 - [ ] Confirm OAuth redirect URLs for marketplace app.
 - [ ] Confirm webhook subscriptions.
 - [ ] Confirm compliance webhook URLs.
-- [ ] Confirm `read_all_orders` decision.
-- [ ] Confirm `read_users` decision.
-- [ ] Prepare scope justification for Shopify review.
+- [x] Confirm `read_all_orders` decision for first submission.
+- [x] Confirm `read_users` decision for first submission.
+- [x] Prepare scope justification for Shopify review.
 - [ ] Confirm App Store contact metadata.
 - [ ] Do not modify production Shopify config during prep.
 
 ## Billing
 
-- [ ] Decide free, paid, beta, or trial launch strategy.
-- [ ] Design pricing model.
+- [x] Decide free, paid, beta, or trial launch strategy.
+- [x] Design pricing model.
 - [ ] Implement billing in a separate branch only.
 - [ ] Keep billing disabled until tested.
 - [ ] Add cancellation handling.
-- [ ] Add billing reviewer instructions.
+- [x] Add billing reviewer instructions.
 - [ ] Confirm terms include pricing/refund language before paid launch.
 
 ## Listing Assets
@@ -72,14 +85,13 @@ Draft status: marketplace preparation checklist.
 - [ ] Dashboard screenshot.
 - [ ] Locations screenshot.
 - [ ] Data Health screenshot.
-- [ ] Sync Center screenshot only if needed for admin/support diagnostics.
+- [ ] Expenses / COGS screenshot.
 - [ ] Permissions screenshot.
-- [ ] Expenses screenshot.
-- [ ] First-run onboarding screenshot.
-- [ ] Final tagline.
-- [ ] Final short description.
-- [ ] Final long description.
-- [ ] Final FAQ.
+- [ ] Billing or first-run onboarding screenshot if needed.
+- [ ] Optional Sync Center screenshot only if needed for admin/support diagnostics.
+- [x] Final tagline.
+- [x] Final short description.
+- [x] Final long description.
 - [x] Final support URL/email implemented for preview: `https://shopops-marketplace-preview.onrender.com/support`, `support@shopopsstudio.com`.
 - [x] Final privacy policy URL implemented for preview: `https://shopops-marketplace-preview.onrender.com/privacy`.
 - [x] Final terms URL implemented for preview: `https://shopops-marketplace-preview.onrender.com/terms`.

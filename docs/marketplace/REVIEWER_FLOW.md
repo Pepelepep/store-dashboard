@@ -1,6 +1,6 @@
 # Reviewer Flow
 
-Draft status: marketplace preparation draft. Update with final test shop and credentials/process before submission.
+Status: Phase 7A aligned with first-submission listing package. Update with final test shop and credentials/process before submission.
 
 ## Test Shop Requirements
 
@@ -18,6 +18,7 @@ Required demo data:
 - App-configured fixed expenses.
 - At least one successful sync run.
 - Optional: one failed sync run for Data Health visibility.
+- Costs populated for enough products to demonstrate COGS, gross profit, and margin reporting.
 
 Demo seed reference:
 
@@ -48,6 +49,7 @@ Expected outcome:
 - App opens embedded in Shopify admin.
 - Merchant lands in ShopOps Studio.
 - If `BILLING_ENABLED=true` and the shop has no active Shopify managed subscription, the app shows the billing-required state for the ShopOps Studio plan at `$59.99/month` with a 14-day free trial.
+- For first submission, billing code is prepared but disabled by default with `BILLING_ENABLED=false` unless billing review is intentionally enabled.
 - If no synced data exists, the app should show first-run guidance and sync expectations.
 
 ## Open Embedded App
@@ -74,6 +76,7 @@ Expected future outcome:
 - New shops see a clear empty state explaining that data must sync before reports are complete.
 - App explains approximate sync timing and what data is required.
 - Admin users can see where to verify sync health.
+- Onboarding and reporting copy should remain merchant-facing and informational.
 
 ## Run or Verify Sync
 
@@ -111,6 +114,7 @@ Expected outcome:
 - Location selector respects the current user's permissions.
 - Order links point to Shopify admin order pages.
 - Empty states are clear if data is unavailable.
+- Reporting is presented as operational information, not accounting, tax, legal, payroll, or financial advice.
 
 ## Open Locations
 
@@ -147,6 +151,7 @@ Expected outcome:
 - Discounts reduce net sales.
 - Refunds and returns are visible where financial metrics v2 data is available.
 - Reporting copy does not imply accounting/tax finality.
+- The reviewer can see why order and historical order data are needed for reporting across current and prior periods.
 
 ## Verify Data Health
 
@@ -165,6 +170,7 @@ Expected outcome:
 - Issues are grouped clearly.
 - Failed sync indicators are visible when present.
 - The page explains whether reports are ready to trust and links admins to Sync Center for support diagnostics.
+- Data Health supports the App Store listing's positioning around reporting readiness and data completeness.
 
 ## Verify Sync Center
 
@@ -197,6 +203,7 @@ Expected outcome:
 
 - Admin can assign staff to locations.
 - Non-admin users see only permitted dashboard locations.
+- Staff/user access supports staff attribution and staff/location permissions.
 
 ## Verify Expenses
 
@@ -216,9 +223,11 @@ Expected outcome:
 
 ## Reviewer Notes to Include in Submission
 
-- Explain that ShopOps Studio is a reporting app, not accounting/tax/legal advice.
-- Explain that the app does not intentionally store direct customer profiles, customer addresses, customer phone numbers, or customer emails in business reporting tables.
-- Explain why historical order access is requested if `read_all_orders` remains in scope.
-- Explain why staff/user access is requested if `read_users` remains in scope.
+- Explain that ShopOps Studio is a merchant-facing reporting app, not accounting, tax, legal, payroll, or financial advice.
+- Explain that `read_orders` powers sales, line items, products sold, discounts, refunds, returns, transactions, location performance, staff attribution where available, and order-level reporting completeness.
+- Explain that `read_all_orders` supports historical reporting, backfills after install, and period comparisons beyond the recent order access window.
+- Explain that `read_users` supports staff attribution and staff/location permission assignment.
+- Explain that protected customer/order data may be processed because Shopify order records can include customer/order information needed to calculate and validate sales, refund, return, discount, product, location, and margin reports.
+- Explain that data is isolated by shop and is not sold or shared for third-party marketing.
 - Support, privacy, and security contact: `support@shopopsstudio.com`.
 - Expected response time: within 2 business days. Security or privacy requests are prioritized.

@@ -1,123 +1,126 @@
-# Listing Copy Draft
+# ShopOps Studio App Store Listing Package
 
-Draft status: marketplace preparation draft.
+Status: Phase 7A first-submission-ready listing copy.
 
 ## App Name
 
 ShopOps Studio
 
-## Tagline
+## Short Tagline
 
-Location-aware sales, inventory, and margin reporting for Shopify retailers.
+Shopify reporting for margins, COGS, refunds, returns, discounts, and Data Health.
+
+## App Store Subtitle
+
+Merchant-facing reporting for store performance, margins, COGS, and data readiness.
 
 ## Short Description
 
-ShopOps Studio helps multi-location merchants understand sales, margin, inventory, staff attribution, expenses, refunds, returns, and sync health from one embedded Shopify dashboard.
+ShopOps Studio gives Shopify merchants a clearer view of store performance with reporting for sales, margins, COGS, refunds, returns, discounts, inventory, expenses, staff attribution, permissions, and Data Health.
 
-## Long Description
+## Full Description
 
-ShopOps Studio turns Shopify operational data into practical store reporting for retailers that need more than a single top-line sales number.
+ShopOps Studio is a Shopify reporting app for merchants who need operational visibility beyond top-line sales.
 
-Use the dashboard to compare location performance, review best sellers, monitor stock alerts, understand sales by vendor and staff, track refunds and returns, and estimate margins using synced product and inventory cost data. Admin tools help teams manage location-level access, fixed expenses, data quality, and sync visibility.
+Use ShopOps Studio to review location performance, product and vendor trends, COGS, estimated gross profit, gross margin, discounts, refunds, returns, fixed expenses, inventory signals, and staff-attributed sales where Shopify provides staff data. Data Health helps admins understand whether reporting inputs are synced, complete, and ready to review.
 
-ShopOps Studio is designed for merchants who operate physical retail locations, pop-ups, or location-based teams and want clearer day-to-day operational reporting inside Shopify.
+The app is designed for Shopify retailers with physical stores, pop-ups, warehouses, or location-based teams that want merchant-facing reporting inside Shopify. Reports are informational and intended to support operational review. ShopOps Studio does not provide accounting, tax, legal, payroll, or financial advice, and merchants remain responsible for validating reporting outputs with their own systems and advisors.
 
-## Key Features
+## Key Benefits
 
-- Location-level sales and margin dashboard.
-- Product, vendor, SKU, and best-seller reporting.
-- Inventory visibility and stock alert insights.
-- Refund, return, discount, and transaction-aware financial metrics.
-- COGS, gross profit, gross margin, expenses, and net profit reporting.
-- Sales by Staff where staff data is available.
-- Location-based permission controls.
-- Fixed expense management by location or globally.
-- Data Health page for sync freshness, missing costs, financial completeness, recent failures, and reporting gaps.
-- Sync Center for admin/support diagnostics when troubleshooting sync jobs and freshness.
-- Shopify compliance webhook handling for customer/shop data requests.
+- Understand sales, margins, COGS, discounts, refunds, and returns in one Shopify embedded app.
+- Compare performance across locations using synced order, product, inventory, and expense data.
+- Identify margin gaps with product cost and gross profit reporting.
+- Review fixed expenses by location or globally to support operational profitability views.
+- Monitor report readiness with Data Health checks for sync freshness, missing costs, and data gaps.
+- Control internal access with location-aware staff permissions.
+- Keep reporting merchant-facing, operational, and informational.
 
-## Ideal Customer
+## Feature List
 
-ShopOps Studio is built for Shopify merchants that:
+- Dashboard overview with sales, net sales, COGS, gross profit, gross margin, expenses, and net profit metrics.
+- Location performance reporting for stores, pop-ups, warehouses, or other Shopify locations.
+- Product, SKU, vendor, and best-seller reporting.
+- Inventory visibility and low-stock signals.
+- Discount, refund, return, and transaction-aware reporting where synced Shopify data is available.
+- Fixed expense management for global and location-specific expenses.
+- Sales by Staff reporting where staff attribution is available from Shopify.
+- Location-based staff permissions for internal access control.
+- Data Health page for sync freshness, missing product costs, financial completeness, and reporting gaps.
+- Sync Center for admin/support diagnostics during setup and troubleshooting.
+- Shopify compliance webhook handling for customer, shop, and data erasure requests.
 
-- Operate multiple retail locations.
-- Need location-level performance reporting.
-- Track margins and inventory cost.
-- Want vendor, product, and staff sales visibility.
-- Need lightweight operational dashboards inside Shopify.
-- Want admin-controlled access by location.
+## Pricing Copy
 
-## Pricing
+First submission plan:
 
-Initial public plan:
+- Plan name: ShopOps Studio
+- Price: `$59.99/month`
+- Trial: 14 days
+- Billing: Shopify managed app subscription
 
-- ShopOps Studio: `$59.99/month`
-- 14-day free trial
-- Billing through Shopify App Store managed pricing
+Suggested pricing description:
 
-Future pricing draft:
+ShopOps Studio is available for `$59.99/month` after a 14-day free trial. Billing is managed through Shopify. Reports are merchant-facing and informational, and merchants remain responsible for validating financial outputs in their accounting, tax, legal, payroll, or financial systems.
 
-- Starter: `$39.99/month`
-- Growth: `$99.99/month`
-- Pro: `$199.99/month`
+Implementation note:
 
-Billing should remain disabled by default until final review.
+- Billing code is prepared but remains disabled by default with `BILLING_ENABLED=false` until the marketplace submission flow is ready for billing review.
 
-## Onboarding Copy
+## Support Details
 
-1. Connect your store
-2. Sync your data
-3. Trust your reporting
+- Support email: `support@shopopsstudio.com`
+- Expected response time: within 2 business days.
+- Security and privacy requests are prioritized.
+- Merchants should include their shop domain, affected page, issue details, and screenshots when useful.
+- Merchants should avoid sending unnecessary customer personal data in support requests.
 
-## Screenshot List
+## Public URLs
 
-Recommended screenshots:
+- Privacy: `https://shopops-marketplace-preview.onrender.com/privacy`
+- Terms: `https://shopops-marketplace-preview.onrender.com/terms`
+- Support: `https://shopops-marketplace-preview.onrender.com/support`
 
-1. Dashboard overview with KPIs and location selector.
-2. Best sellers, stock alerts, and recent order lines.
-3. Sales by Vendor and Sales by Staff.
-4. Locations comparison page.
-5. Data Health page.
-6. Sync Center only if showing admin/support diagnostics.
-7. Permissions management.
-8. Expenses management.
-9. Empty/first-run onboarding state.
+## Suggested Categories
 
-## FAQ Draft
+- Analytics
+- Reporting
+- Store management
+- Inventory management
+- Finances
 
-### Does ShopOps Studio replace my accounting system?
+## Suggested Search Keywords
 
-No. ShopOps Studio provides operational reporting only. Merchants remain responsible for validating financial reports and using appropriate accounting, tax, legal, or payroll systems.
+- Shopify reporting
+- sales reporting
+- margin reporting
+- COGS
+- cost of goods sold
+- gross profit
+- gross margin
+- refunds
+- returns
+- discounts
+- location reporting
+- store performance
+- inventory reporting
+- Data Health
+- Shopify analytics
+- retail operations
+- staff permissions
+- expense tracking
 
-### Does the app support multiple locations?
+## Reviewer Note
 
-Yes. Location-level reporting and location-based access control are central features.
+ShopOps Studio is a merchant-facing reporting app for Shopify operational data. Reports are informational and do not provide accounting, tax, legal, payroll, or financial advice.
 
-### Does the app store customer profiles?
+Requested data access supports the app's reporting and permission features:
 
-ShopOps Studio does not intentionally store direct customer profiles, customer addresses, customer phone numbers, or customer emails in business reporting tables. Order history and transaction data may still be considered sensitive or protected.
+- `read_orders` is needed to report sales, line items, products sold, discounts, refunds, returns, transactions, location performance, staff attribution where available, and order-level reporting completeness.
+- `read_all_orders` is needed so merchants can review historical trends, backfill reporting after install, and compare performance across reporting periods beyond Shopify's standard recent order access window.
+- `read_users` is needed to identify Shopify staff users for staff attribution and to support staff/location permission assignment inside the app.
+- Protected customer and order data may be processed because Shopify order records can include customer/order information needed to calculate and validate merchant-facing sales, refund, return, discount, product, location, and margin reports.
 
-### Why does the app request order access?
+ShopOps Studio isolates synced data by shop. Data is used to provide reporting, diagnostics, support, compliance, and app functionality for the installing merchant. ShopOps Studio does not sell merchant, customer, or order data and does not share it for third-party marketing.
 
-Order and order line data power sales, margin, refund, return, product, staff, and location reporting.
-
-### Why does the app request historical order access?
-
-Historical order access supports longer-range analytics and backfills. This scope is under review for MVP launch strategy.
-
-### Why does the app request staff/user access?
-
-Staff/user access supports Sales by Staff and location-level permissions. If unavailable, staff reporting and permission assignment may be limited.
-
-### How does sync work?
-
-ShopOps Studio syncs Shopify data into reporting tables and uses webhooks for incremental updates. Admin users can review report readiness in Data Health and use Sync Center for support diagnostics.
-
-### How do I get support?
-
-Contact `[support email placeholder]` with your shop domain, affected page, issue details, and screenshots when available. Do not include unnecessary customer personal data.
-
-## Support Note
-
-Support email: `[support email placeholder]`  
-Emergency contact: `[emergency contact placeholder]`
+Protected Customer Data, `read_all_orders`, and `read_users` approval is still pending for first submission.
