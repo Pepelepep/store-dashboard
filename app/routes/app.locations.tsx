@@ -1358,6 +1358,37 @@ export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
 
+function ConfidenceBadge({
+  status,
+}: {
+  status: "Current" | "Preparing" | "Needs review";
+}) {
+  const tone =
+    status === "Current"
+      ? { background: "#ecfdf3", border: "#abefc6", color: "#067647" }
+      : status === "Preparing"
+        ? { background: "#eff8ff", border: "#b2ddff", color: "#175cd3" }
+        : { background: "#fff8e5", border: "#f4c430", color: "#92400e" };
+
+  return (
+    <span
+      title="Report confidence is based on data availability, sync freshness, and page errors."
+      style={{
+        background: tone.background,
+        border: `1px solid ${tone.border}`,
+        borderRadius: 999,
+        color: tone.color,
+        fontSize: 12,
+        fontWeight: 800,
+        padding: "6px 10px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
 function KpiGrid({
   kpis,
   financialMetricsVersion,
@@ -1371,25 +1402,31 @@ function KpiGrid({
         {
           label: "Net Sales",
           value: formatCurrency(kpis.revenue),
-          title: "Line-level Net Sales for selected locations.",
+          title: "Net Sales: Gross Sales minus Discounts and Returns.",
         },
-        { label: "Gross profit", value: formatCurrency(kpis.grossProfit) },
+        {
+          label: "Gross profit",
+          value: formatCurrency(kpis.grossProfit),
+          title: "Gross Profit: Net Sales minus COGS.",
+        },
         {
           label: "Gross margin",
           value: formatPercent(kpis.grossMarginPct),
-          title: "Gross Margin is based on Net Sales.",
+          title: "Margin: Gross Profit divided by Net Sales.",
         },
         {
           label: "Refunds",
           value: formatCurrency(kpis.refunds ?? 0),
           title:
-            "Refunds are order-level cash movements allocated to locations from matching order lines.",
+            "Refunds: cash refunded on Shopify orders, reported separately from returns.",
         },
         {
           label: "Returns",
           value: `${formatCurrency(kpis.returns ?? 0)} · ${formatNumber(
             kpis.returnedUnits ?? 0,
           )} units`,
+          title:
+            "Returns: returned line-item value used in net sales calculations where available.",
         },
         {
           label: "AOV (Net)",
@@ -1402,9 +1439,22 @@ function KpiGrid({
         { label: "Revenue", value: formatCurrency(kpis.revenue) },
         { label: "Orders", value: formatNumber(kpis.ordersCount) },
         { label: "Units sold", value: formatNumber(kpis.unitsSold) },
-        { label: "COGS", value: formatCurrency(kpis.cogs) },
-        { label: "Gross profit", value: formatCurrency(kpis.grossProfit) },
-        { label: "Gross margin", value: formatPercent(kpis.grossMarginPct) },
+        {
+          label: "COGS",
+          value: formatCurrency(kpis.cogs),
+          title:
+            "COGS: cost of goods sold from synced Shopify inventory item cost data where available.",
+        },
+        {
+          label: "Gross profit",
+          value: formatCurrency(kpis.grossProfit),
+          title: "Gross Profit: Net Sales minus COGS.",
+        },
+        {
+          label: "Gross margin",
+          value: formatPercent(kpis.grossMarginPct),
+          title: "Margin: Gross Profit divided by Net Sales.",
+        },
         { label: "Expenses", value: formatCurrency(kpis.expenses) },
         { label: "Net profit", value: formatCurrency(kpis.netProfit) },
         {
@@ -1415,34 +1465,54 @@ function KpiGrid({
       ];
 
   return (
-    <section
-      style={{
-        display: "grid",
-        gap: 14,
-        gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-        marginBottom: 20,
-      }}
-    >
-      {items.map((item) => (
-        <div
-          key={item.label}
-          title={item.title}
+    <>
+      <section
+        style={{
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          marginBottom: 20,
+        }}
+      >
+        {items.map((item) => (
+          <div
+            key={item.label}
+            title={item.title}
+            style={{
+              background: "white",
+              border: "1px solid #e3e3e3",
+              borderRadius: 14,
+              padding: 16,
+            }}
+          >
+            <div style={{ color: "#616161", fontSize: 12, fontWeight: 800 }}>
+              {item.label}
+            </div>
+            <div style={{ color: "#202223", fontSize: 22, fontWeight: 800 }}>
+              {item.value}
+            </div>
+          </div>
+        ))}
+      </section>
+      {isFinancialMetricsV2 ? (
+        <details
           style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 14,
-            padding: 16,
+            color: "#616161",
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginTop: -8,
+            marginBottom: 20,
           }}
         >
-          <div style={{ color: "#616161", fontSize: 12, fontWeight: 800 }}>
-            {item.label}
+          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+            Metric definitions
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            Gross Sales: product sales before discounts and returns. Discounts: Shopify discount allocations applied to orders and line items. Net Sales: Gross Sales minus Discounts and Returns. COGS: cost of goods sold from synced Shopify inventory item cost data where available. Gross Profit: Net Sales minus COGS. Margin: Gross Profit divided by Net Sales. Refunds: cash refunded on Shopify orders, reported separately from returns. Returns: returned line-item value used in net sales calculations where available.
           </div>
-          <div style={{ color: "#202223", fontSize: 22, fontWeight: 800 }}>
-            {item.value}
-          </div>
-        </div>
-      ))}
-    </section>
+        </details>
+      ) : null}
+    </>
   );
 }
 
@@ -2857,6 +2927,11 @@ export default function LocationsPage() {
   const hasNoSalesForRange =
     !hasNoSyncedLocations && !isDataPreparing && salesRows.length === 0;
   const shouldShowAnalytics = !hasNoSyncedLocations && !isDataPreparing;
+  const confidenceStatus = hasNoSyncedLocations || isDataPreparing
+    ? "Preparing"
+    : errors.length > 0 || hasNoSalesForRange
+      ? "Needs review"
+      : "Current";
 
   return (
     <main
@@ -2878,13 +2953,25 @@ export default function LocationsPage() {
             padding: 20,
           }}
         >
-          <div style={{ marginBottom: 18 }}>
-            <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
-              Locations
-            </h1>
-            <p style={{ color: "#616161", margin: "6px 0 0" }}>
-              Compare sales, margin and expenses across locations.
-            </p>
+          <div
+            style={{
+              alignItems: "flex-start",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 16,
+              justifyContent: "space-between",
+              marginBottom: 18,
+            }}
+          >
+            <div>
+              <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
+                Location Performance
+              </h1>
+              <p style={{ color: "#616161", margin: "6px 0 0" }}>
+                Compare stores by net sales, margin, expenses, discounts, refunds, and inventory health.
+              </p>
+            </div>
+            <ConfidenceBadge status={confidenceStatus} />
           </div>
 
           <Form
@@ -3111,7 +3198,7 @@ export default function LocationsPage() {
         </section>
 
         <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
-          V1 expenses include location-specific active fixed expenses only.
+          Expense estimates include location-specific active fixed expenses.
           Global/unassigned expenses are not allocated
           {hasGlobalExpenses ? " in this view." : "."}
           {financialMetricsVersion === "v2"
@@ -3137,31 +3224,34 @@ export default function LocationsPage() {
         ) : null}
 
         {debugInfo ? (
-          <section
+          <details
             style={{
-              background: "#111827",
-              border: "1px solid #374151",
+              background: "white",
+              border: "1px solid #e3e3e3",
               borderRadius: 12,
-              color: "#f9fafb",
               marginBottom: 20,
               padding: 14,
             }}
           >
-            <strong style={{ display: "block", marginBottom: 8 }}>
-              TEMP DEBUG — admin only
-            </strong>
+            <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+              Support diagnostics
+            </summary>
             <pre
               style={{
+                background: "#111827",
+                borderRadius: 10,
+                color: "#f9fafb",
                 fontSize: 12,
                 lineHeight: 1.45,
-                margin: 0,
+                margin: "10px 0 0",
                 overflowX: "auto",
+                padding: 12,
                 whiteSpace: "pre-wrap",
               }}
             >
               {JSON.stringify(debugInfo, null, 2)}
             </pre>
-          </section>
+          </details>
         ) : null}
 
         {hasNoSyncedLocations ? (
@@ -3169,10 +3259,10 @@ export default function LocationsPage() {
             title="Your data is being prepared"
             message="No locations have synced yet. Location reports appear after Shopify data sync completes."
             bullets={[
-              "Open Sync Center to confirm whether locations, products, inventory, and orders have synced.",
-              "This page remains admin-only while marketplace onboarding is prepared.",
+              "Open Sync Status to confirm whether locations, products, inventory, and orders have synced.",
+              "Location reporting becomes useful once Shopify data is available.",
             ]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
             tone="info"
           />
         ) : isDataPreparing ? (
@@ -3183,7 +3273,7 @@ export default function LocationsPage() {
               "Location comparisons populate after successful sync runs create sales rows.",
               "ShopOps Studio uses synced Shopify data to report sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health.",
             ]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
             tone="info"
           />
         ) : hasNoSalesForRange ? (
@@ -3192,9 +3282,9 @@ export default function LocationsPage() {
             message="Try another date range or confirm sync status."
             bullets={[
               "Filters remain available so admins can review another location, staff member, vendor, or date range.",
-              "If sales should already be available, check Sync Center for freshness or failures.",
+              "If sales should already be available, check Sync Status for freshness or failures.",
             ]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
             tone="neutral"
           />
         ) : null}

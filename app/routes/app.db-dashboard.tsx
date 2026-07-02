@@ -700,7 +700,7 @@ export default function DbDashboardPage() {
     }));
   };
   const syncCenterCta = readiness.canAdmin
-    ? { to: "/app/admin/sync", label: "Open Sync Center" }
+    ? { to: "/app/admin/sync", label: "Open Sync Status" }
     : undefined;
   const isFirstRunPreparing =
     readiness.activeLocationsCount === 0 ||
@@ -712,6 +712,11 @@ export default function DbDashboardPage() {
   const hasProductInventoryGap =
     !isFirstRunPreparing &&
     (readiness.productsCount === 0 || readiness.inventoryRowsCount === 0);
+  const confidenceStatus = isFirstRunPreparing
+    ? "Preparing"
+    : readiness.hasRecentSyncFailure || hasProductInventoryGap
+      ? "Needs review"
+      : "Current";
 
   return (
     <main
@@ -741,12 +746,12 @@ export default function DbDashboardPage() {
             bullets={
               readiness.canAdmin
                 ? [
-                    "Check Sync Center to confirm whether locations, products, inventory, and orders have synced.",
+                    "Check Sync Status to confirm whether locations, products, inventory, and orders have synced.",
                     "Dashboard reports populate automatically once synced Shopify data is available.",
-                    "No billing or reviewer-facing full sync action is required on this page.",
+                    "You can return here once sync finishes to review sales, margins, inventory, and data confidence.",
                   ]
                 : [
-                    "Ask an app admin to confirm sync status in Sync Center.",
+                    "Ask an app admin to confirm sync status.",
                     "If you should see a location, ask an app admin to assign your location access.",
                   ]
             }
@@ -768,6 +773,7 @@ export default function DbDashboardPage() {
           preservedSearchParams={preservedSearchParams}
           lastSuccessfulSync={lastSuccessfulSync}
           selectedDays={selectedDays}
+          confidenceStatus={confidenceStatus}
         />
 
         {errors.length > 0 ? (
@@ -794,7 +800,7 @@ export default function DbDashboardPage() {
             bullets={[
               "Filters remain available so you can review another location, staff member, vendor, or date range.",
               readiness.canAdmin
-                ? "Admins can check Sync Center if sales should already be available."
+                ? "Admins can check Sync Status if sales should already be available."
                 : "Ask an app admin to confirm sync status if sales should already be available.",
             ]}
             cta={syncCenterCta}
@@ -821,8 +827,8 @@ export default function DbDashboardPage() {
             message="Some sync work failed in the last 24 hours, so reports may be incomplete until an admin reviews sync health."
             bullets={[
               readiness.canAdmin
-                ? "Open Sync Center to review failed sync runs and recent jobs."
-                : "Ask an app admin to review Sync Center if reports look incomplete.",
+                ? "Open Sync Status to review failed sync runs and recent jobs."
+                : "Ask an app admin to review sync status if reports look incomplete.",
             ]}
             cta={syncCenterCta}
             tone="warning"

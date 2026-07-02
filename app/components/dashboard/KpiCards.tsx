@@ -10,6 +10,21 @@ import type {
   FinancialMetricsVersion,
 } from "../../lib/dashboard/dashboard-types";
 
+const metricDefinitions = {
+  grossSales: "Gross Sales: product sales before discounts and returns.",
+  discounts:
+    "Discounts: Shopify discount allocations applied to orders and line items.",
+  netSales: "Net Sales: Gross Sales minus Discounts and Returns.",
+  cogs:
+    "COGS: cost of goods sold from synced Shopify inventory item cost data where available.",
+  grossProfit: "Gross Profit: Net Sales minus COGS.",
+  margin: "Margin: Gross Profit divided by Net Sales.",
+  refunds:
+    "Refunds: cash refunded on Shopify orders, reported separately from returns.",
+  returns:
+    "Returns: returned line-item value used in net sales calculations where available.",
+};
+
 function KpiCard({
   title,
   value,
@@ -67,14 +82,15 @@ export function KpiCards({
     grossSales > 0 ? `${((discounts / grossSales) * 100).toFixed(1)}%` : "0.0%";
 
   return (
-    <section
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-        gap: 16,
-        marginBottom: 22,
-      }}
-    >
+    <>
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 16,
+          marginBottom: 12,
+        }}
+      >
       <KpiCard
         title={isFinancialMetricsV2 ? "Net Sales" : "Revenue"}
         value={formatCurrency(kpis.revenue)}
@@ -93,7 +109,7 @@ export function KpiCards({
         }
         explanation={
           isFinancialMetricsV2
-            ? "Net Sales is Gross Sales minus Discounts and Returns. Refunds are tracked separately as cash movement."
+            ? metricDefinitions.netSales
             : "Total synced sales revenue for the selected location and date range."
         }
       />
@@ -114,13 +130,13 @@ export function KpiCards({
                 ) : null}
               </>
             }
-            explanation="Cash refunded during the selected date range based on successful refund transactions. Refunds are not subtracted from Net Sales."
+            explanation={metricDefinitions.refunds}
           />
           <KpiCard
             title="Returns"
             value={formatCurrency(kpis.returns ?? 0)}
             subtitle={`${formatNumber(kpis.returnedQuantity ?? 0)} units · ${formatNumber(kpis.returnedOrdersCount ?? 0)} orders`}
-            explanation="Returned merchandise on sales in selected period."
+            explanation={metricDefinitions.returns}
           />
         </>
       ) : null}
@@ -139,8 +155,8 @@ export function KpiCards({
       <KpiCard
         title="COGS"
         value={formatCurrency(kpis.cogs)}
-        subtitle="Product costs"
-        explanation="COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
+        subtitle="Synced product costs"
+        explanation={metricDefinitions.cogs}
       />
       <KpiCard
         title="Gross profit"
@@ -150,7 +166,7 @@ export function KpiCards({
         }
         explanation={
           isFinancialMetricsV2
-            ? "Net Sales minus COGS. COGS uses cost at sale when available, with legacy COGS fallback."
+            ? metricDefinitions.grossProfit
             : "Revenue minus COGS. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
         }
       />
@@ -164,7 +180,7 @@ export function KpiCards({
         }
         explanation={
           isFinancialMetricsV2
-            ? "Gross profit as a percentage of Net Sales."
+            ? metricDefinitions.margin
             : "Gross profit as a percentage of revenue. COGS uses the latest Shopify Cost per item. Missing costs appear as MISSING_COST."
         }
       />
@@ -188,6 +204,27 @@ export function KpiCards({
         subtitle="Gross profit minus expenses"
         explanation="Gross profit minus configured fixed expenses."
       />
-    </section>
+      </section>
+      {isFinancialMetricsV2 ? (
+        <details
+          style={{
+            color: "#616161",
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginBottom: 22,
+          }}
+        >
+          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+            Metric definitions
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            {metricDefinitions.grossSales} {metricDefinitions.discounts}{" "}
+            {metricDefinitions.netSales} {metricDefinitions.cogs}{" "}
+            {metricDefinitions.grossProfit} {metricDefinitions.margin}{" "}
+            {metricDefinitions.refunds} {metricDefinitions.returns}
+          </div>
+        </details>
+      ) : null}
+    </>
   );
 }

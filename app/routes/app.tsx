@@ -61,12 +61,12 @@ export default function App() {
     <AppProvider embedded apiKey={apiKey}>
       <ui-nav-menu>
         <a href={`/app/db-dashboard${search}`} rel="home">
-          Dashboard
+          Profit Dashboard
         </a>
-        {canAdmin ? <a href={`/app/locations${search}`}>Locations</a> : null}
-        {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expenses</a> : null}
-        {canAdmin ? <a href={`/app/admin/permissions${search}`}>Permissions</a> : null}
-        {canAdmin ? <a href={`/app/data-quality${search}`}>Data Health</a> : null}
+        {canAdmin ? <a href={`/app/locations${search}`}>Location Performance</a> : null}
+        {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expense Setup</a> : null}
+        {canAdmin ? <a href={`/app/admin/permissions${search}`}>Team Access</a> : null}
+        {canAdmin ? <a href={`/app/data-quality${search}`}>Data Confidence</a> : null}
         {billingEnabled ? (
           <a href={`/app/billing-required${search}`}>Billing</a>
         ) : null}

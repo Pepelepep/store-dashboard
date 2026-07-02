@@ -189,6 +189,36 @@ function getFlags({
   return flags;
 }
 
+function isReviewFlag(flag: string) {
+  return !["has_refund", "has_return"].includes(flag);
+}
+
+function getFlagLabel(flag: string) {
+  if (flag === "discount_mismatch") {
+    return "Discount allocations need review";
+  }
+  if (flag === "legacy_line_delta") {
+    return "Legacy line total differs from order total";
+  }
+  if (flag === "incomplete_financial_data") {
+    return "Financial data incomplete";
+  }
+  if (flag === "missing_financials") {
+    return "Financial fields missing";
+  }
+  if (flag === "order_line_delta") {
+    return "Order-line totals need review";
+  }
+  if (flag === "has_refund") {
+    return "Has refund";
+  }
+  if (flag === "has_return") {
+    return "Has return";
+  }
+
+  return flag.replaceAll("_", " ");
+}
+
 async function fetchAllOrders({
   supabase,
   shop,
@@ -579,13 +609,16 @@ function SummaryCard({
   label,
   value,
   tone = "neutral",
+  title,
 }: {
   label: string;
   value: string | number;
   tone?: "neutral" | "warning" | "error";
+  title?: string;
 }) {
   return (
     <div
+      title={title}
       style={{
         background:
           tone === "error"
@@ -616,7 +649,7 @@ function FlagBadge({ flag }: { flag: string }) {
 
   return (
     <StatusBadge variant={variant} style={{ marginRight: 4, marginBottom: 4 }}>
-      {flag}
+      {getFlagLabel(flag)}
     </StatusBadge>
   );
 }
@@ -640,6 +673,14 @@ export default function FinancialQaPage() {
       : (locations.find(
           (location) => location.shopify_location_id === selectedLocationId,
         )?.name ?? "Unknown location");
+  const ordersNeedingReview = orders.filter((order) =>
+    order.flags.some(isReviewFlag),
+  ).length;
+  const hasDiscountIssues = summary.discountMismatches > 0;
+  const hasRefunds = summary.refunds > 0;
+  const hasReturns = summary.returns > 0;
+  const hasOrderLineIssues = Math.abs(summary.orderLineDelta) > 0.01;
+  const hasTaxShippingTotals = summary.taxes > 0 || summary.shipping > 0;
 
   return (
     <main
@@ -653,25 +694,65 @@ export default function FinancialQaPage() {
     >
       <div style={{ maxWidth: 1500, margin: "0 auto" }}>
         <header style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Financial QA</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Report Accuracy</h1>
           <HelperText>
-            {shop} · Financial QA compares order-level and line-level financial
-            totals. Dashboard V2 uses line-level Net Sales.
+            {shop} · Review whether synced Shopify order totals line up with
+            line-level reporting data.
           </HelperText>
         </header>
 
         {orders.length === 0 ? (
           <PageNotice
-            title="Financial QA is waiting for synced orders."
-            message="Financial QA becomes useful after Shopify orders and order lines have synced."
+            title="Report Accuracy is waiting for synced orders."
+            message="Report Accuracy becomes useful after Shopify orders and order lines have synced."
             bullets={[
-              "Use Sync Center to review locations, products, inventory, and orders sync status.",
+              "Use Sync Status to review locations, products, inventory, and orders sync status.",
               "This page will compare order-level and line-level financial totals once order data exists.",
             ]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Center" }}
+            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
             tone="info"
           />
         ) : null}
+
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <SummaryCard label="Orders checked" value={summary.ordersCount} />
+          <SummaryCard
+            label="Need review"
+            value={ordersNeedingReview}
+            tone={ordersNeedingReview > 0 ? "warning" : "neutral"}
+          />
+          <SummaryCard
+            label="Discounts"
+            value={hasDiscountIssues ? "Review" : "OK"}
+            tone={hasDiscountIssues ? "warning" : "neutral"}
+          />
+          <SummaryCard
+            label="Refunds"
+            value={hasRefunds ? "Present" : "None"}
+            tone={hasRefunds ? "warning" : "neutral"}
+          />
+          <SummaryCard
+            label="Returns"
+            value={hasReturns ? "Present" : "None"}
+            tone={hasReturns ? "warning" : "neutral"}
+          />
+          <SummaryCard
+            label="Taxes & shipping"
+            value={hasTaxShippingTotals ? "Present" : "None"}
+          />
+          <SummaryCard
+            label="Order-line totals"
+            value={hasOrderLineIssues ? "Review" : "OK"}
+            tone={hasOrderLineIssues ? "warning" : "neutral"}
+          />
+        </section>
 
         <section
           style={{
@@ -793,10 +874,12 @@ export default function FinancialQaPage() {
           <SummaryCard
             label="Gross sales"
             value={formatCurrency(summary.grossSales)}
+            title="Gross Sales: product sales before discounts and returns."
           />
           <SummaryCard
             label="Discounts"
             value={formatCurrency(summary.discounts)}
+            title="Discounts: Shopify discount allocations applied to orders and line items."
           />
           <SummaryCard
             label="Discount mismatches"
@@ -806,10 +889,12 @@ export default function FinancialQaPage() {
           <SummaryCard
             label="Returns"
             value={formatCurrency(summary.returns)}
+            title="Returns: returned line-item value used in net sales calculations where available."
           />
           <SummaryCard
             label="Order-level Net Sales"
             value={formatCurrency(summary.orderLevelNetSales)}
+            title="Net Sales: Gross Sales minus Discounts and Returns."
           />
           <SummaryCard
             label="Line-level Net Sales"
@@ -825,11 +910,17 @@ export default function FinancialQaPage() {
           <SummaryCard
             label="Refunds"
             value={formatCurrency(summary.refunds)}
+            title="Refunds: cash refunded on Shopify orders, reported separately from returns."
           />
-          <SummaryCard label="Taxes" value={formatCurrency(summary.taxes)} />
+          <SummaryCard
+            label="Taxes"
+            value={formatCurrency(summary.taxes)}
+            title="Taxes: Shopify tax totals, informational reporting only."
+          />
           <SummaryCard
             label="Shipping"
             value={formatCurrency(summary.shipping)}
+            title="Shipping: Shopify shipping totals, tracked separately from product margin."
           />
           <SummaryCard
             label="Total sales"
@@ -839,28 +930,23 @@ export default function FinancialQaPage() {
             label="Transactions total"
             value={formatCurrency(summary.transactionsTotal)}
           />
-          <SummaryCard
-            label="Legacy revenue"
-            value={formatCurrency(summary.legacyRevenue)}
-          />
-          <SummaryCard
-            label="Legacy - Line Net Sales"
-            value={formatCurrency(summary.legacyLineDelta)}
-            tone={
-              Math.abs(summary.legacyLineDelta) > 0.01 ? "warning" : "neutral"
-            }
-          />
         </section>
 
-        <section
+        <details
           style={{
             background: "white",
             border: "1px solid #e3e3e3",
             borderRadius: 12,
-            overflow: "hidden",
+            padding: 14,
           }}
         >
-          <div style={{ overflowX: "auto" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+            Advanced order diagnostics
+          </summary>
+          <HelperText>
+            Raw order-level and line-level totals for support review.
+          </HelperText>
+          <div style={{ overflowX: "auto", marginTop: 12 }}>
             <table
               style={{
                 borderCollapse: "collapse",
@@ -1034,7 +1120,7 @@ export default function FinancialQaPage() {
               </tbody>
             </table>
           </div>
-        </section>
+        </details>
       </div>
     </main>
   );

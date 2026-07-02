@@ -339,9 +339,9 @@ export default function AdminExpensesPage() {
     >
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <header style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Expenses</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Expense Setup</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Manage fixed expenses by location.
+            Add fixed monthly costs so ShopOps can estimate location-level profitability.
           </p>
         </header>
 

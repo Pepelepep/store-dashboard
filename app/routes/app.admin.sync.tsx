@@ -805,14 +805,10 @@ export default function AdminSyncPage() {
     >
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <header style={{ marginBottom: 28 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Sync Center</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Sync Status</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Admin/support diagnostic view for sync jobs, freshness, and
-            troubleshooting.
+            See when Shopify data last updated and whether reports are current.
           </p>
-          <div style={{ color: "#8a8f93", fontSize: 12, marginTop: 8 }}>
-            Shop: {shop}
-          </div>
         </header>
 
         {shouldShowFirstRunStatus ? (
@@ -820,9 +816,9 @@ export default function AdminSyncPage() {
             title="First run status"
             message="Data may still be preparing. Reports populate after Shopify locations, products, inventory, and orders sync into ShopOps Studio."
             bullets={[
-              "This page is for monitoring sync health, freshness, and troubleshooting history.",
+              "Use this page to confirm report freshness and first-run progress.",
               "Manual sync requests are queued and processed automatically by the background sync worker.",
-              "When sync completes, Dashboard, Locations, and Data Health will show richer reporting.",
+              "When sync completes, Profit Dashboard, Location Performance, and Data Confidence will show richer reporting.",
             ]}
             tone="info"
           />
@@ -850,9 +846,6 @@ export default function AdminSyncPage() {
             <HelperText>
               Manual sync requests are queued and processed automatically by the background sync worker.
             </HelperText>
-            <HelperText>
-              Use the process-now button for testing/support. Production runs through Render Cron every 5 minutes.
-            </HelperText>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {manualSyncActions.map((syncAction) => (
@@ -877,6 +870,25 @@ export default function AdminSyncPage() {
                 </button>
               </Form>
             ))}
+          </div>
+        </section>
+
+        <details
+          style={{
+            background: "white",
+            border: "1px solid #e3e3e3",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 20,
+          }}
+        >
+          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+            Advanced diagnostics
+          </summary>
+          <div style={{ display: "grid", gap: 16, marginTop: 14 }}>
+            <HelperText>
+              Support-only tools for testing queued jobs, local support refreshes, and raw record counts.
+            </HelperText>
             <Form method="post">
               <input type="hidden" name="intent" value="process" />
               <button
@@ -896,40 +908,59 @@ export default function AdminSyncPage() {
                 Process queued jobs now
               </button>
             </Form>
+            <div>
+              <div style={{ fontWeight: 800 }}>Local support refresh</div>
+              <HelperText>
+                Local refresh is for development/support only. The marketplace path should use queued sync jobs for historical data.
+              </HelperText>
+              <pre
+                style={{
+                  background: "#202223",
+                  borderRadius: 10,
+                  color: "white",
+                  margin: "10px 0 0",
+                  overflowX: "auto",
+                  padding: 12,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {fullRefreshCommand}
+              </pre>
+            </div>
+            <div>
+              <div style={{ fontWeight: 800 }}>Database records</div>
+              <HelperText>
+                Current stored records for support and troubleshooting.
+              </HelperText>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginTop: 12,
+                }}
+              >
+                {counts.map((row) => (
+                  <div
+                    key={row.table}
+                    title={row.error}
+                    style={{
+                      background: row.error ? "#fff4f4" : "#f6f6f7",
+                      border: `1px solid ${row.error ? "#f2b8b5" : "#e3e3e3"}`,
+                      borderRadius: 999,
+                      color: row.error ? "#b42318" : "#202223",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      padding: "6px 10px",
+                    }}
+                  >
+                    {row.table}: {row.error ? "Error" : row.count}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        </section>
-
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 12,
-            padding: 16,
-            marginBottom: 20,
-            display: "grid",
-            gap: 10,
-          }}
-        >
-          <div>
-            <div style={{ fontWeight: 800 }}>Local support refresh</div>
-            <HelperText>
-              Local refresh is for development/support only. The marketplace path should use queued sync jobs for historical data.
-            </HelperText>
-          </div>
-          <pre
-            style={{
-              background: "#202223",
-              borderRadius: 10,
-              color: "white",
-              margin: 0,
-              overflowX: "auto",
-              padding: 12,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {fullRefreshCommand}
-          </pre>
-        </section>
+        </details>
 
         <section
           style={{
@@ -1041,43 +1072,9 @@ export default function AdminSyncPage() {
           </section>
         ) : null}
 
-        <Card title="Database records">
-          <HelperText>
-            Current stored records for support and troubleshooting.
-          </HelperText>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-              marginTop: 12,
-            }}
-          >
-            {counts.map((row) => (
-              <div
-                key={row.table}
-                title={row.error}
-                style={{
-                  background: row.error ? "#fff4f4" : "#f6f6f7",
-                  border: `1px solid ${row.error ? "#f2b8b5" : "#e3e3e3"}`,
-                  borderRadius: 999,
-                  color: row.error ? "#b42318" : "#202223",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  padding: "6px 10px",
-                }}
-              >
-                {row.table}: {row.error ? "Error" : row.count}
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <div style={{ height: 24 }} />
-
         <Card title="Recent sync jobs">
           <HelperText>
-            Legacy/manual job status retained for troubleshooting history.
+            Queued sync requests and their latest status.
           </HelperText>
           <div style={{ overflowX: "auto", marginTop: 12 }}>
             <table
@@ -1153,8 +1150,7 @@ export default function AdminSyncPage() {
 
         <Card title="Recent sync history">
           <HelperText>
-            Recent sync history for troubleshooting. Showing the 20 most recent
-            runs.
+            Recent sync history. Showing the 20 most recent runs.
           </HelperText>
           <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
             <table

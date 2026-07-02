@@ -66,6 +66,8 @@ type LoaderData = {
   isFirstRun: boolean;
 };
 
+type ConfidenceStatus = "Current" | "Preparing" | "Needs review";
+
 const sampleLimit = 10;
 const freshnessMs = 24 * 60 * 60 * 1000;
 const syncTypes = ["locations", "products", "inventory", "orders"];
@@ -396,6 +398,75 @@ export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
 
+function getConfidenceStatus({
+  isFirstRun,
+  errors,
+  syncHealth,
+  issues,
+}: {
+  isFirstRun: boolean;
+  errors: string[];
+  syncHealth: SyncHealth;
+  issues: QualityIssue[];
+}): ConfidenceStatus {
+  if (isFirstRun) return "Preparing";
+  if (
+    errors.length > 0 ||
+    syncHealth.failedLast24h > 0 ||
+    issues.some((issue) => issue.status === "Critical" && issue.count > 0)
+  ) {
+    return "Needs review";
+  }
+
+  return "Current";
+}
+
+function getVerdictCopy(status: ConfidenceStatus) {
+  if (status === "Preparing") return "Reports are preparing";
+  if (status === "Needs review") return "Some reports need review";
+  return "Reports are ready";
+}
+
+function ConfidenceBadge({ status }: { status: ConfidenceStatus }) {
+  const tone =
+    status === "Current"
+      ? { background: "#ecfdf3", border: "#abefc6", color: "#067647" }
+      : status === "Preparing"
+        ? { background: "#eff8ff", border: "#b2ddff", color: "#175cd3" }
+        : { background: "#fff8e5", border: "#f4c430", color: "#92400e" };
+
+  return (
+    <span
+      style={{
+        background: tone.background,
+        border: `1px solid ${tone.border}`,
+        borderRadius: 999,
+        color: tone.color,
+        fontSize: 12,
+        fontWeight: 800,
+        padding: "6px 10px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
+function getIssueCta(issue: QualityIssue, preservedSearch: string) {
+  if (
+    issue.key === "orderLinesMissingCogs" ||
+    issue.key === "variantsMissingUnitCost" ||
+    issue.key === "orderLinesUsingFallbackCost"
+  ) {
+    return { to: `/app/data-quality${preservedSearch}`, label: "Fix Missing COGS" };
+  }
+  if (issue.key === "ordersWithoutOrderLines") {
+    return { to: `/app/admin/financial-qa${preservedSearch}`, label: "Review Report Accuracy" };
+  }
+  return { to: `/app/admin/sync${preservedSearch}`, label: "Open Sync Status" };
+}
+
 function SummaryMetric({
   label,
   value,
@@ -464,10 +535,14 @@ function SyncHealthSection({ syncHealth }: { syncHealth: SyncHealth }) {
 function QualityIssueSection({
   issue,
   shop,
+  preservedSearch,
 }: {
   issue: QualityIssue;
   shop: string;
+  preservedSearch: string;
 }) {
+  const cta = getIssueCta(issue, preservedSearch);
+
   return (
     <section style={cardStyle}>
       <div style={sectionHeaderStyle}>
@@ -486,6 +561,13 @@ function QualityIssueSection({
       <div style={metricGridStyle}>
         <SummaryMetric label="Affected rows" value={formatNumber(issue.count)} />
       </div>
+      {issue.count > 0 ? (
+        <div style={{ marginBottom: 12 }}>
+          <AppButtonLink to={cta.to} compact>
+            {cta.label}
+          </AppButtonLink>
+        </div>
+      ) : null}
 
       <SampleTable rows={issue.samples} shop={shop} />
     </section>
@@ -580,7 +662,7 @@ function ExpensesCoverageSection({
           </HelperText>
         </div>
         <AppButtonLink to={`/app/admin/expenses${preservedSearch}`} compact>
-          Open Expenses
+          Open Expense Setup
         </AppButtonLink>
       </div>
 
@@ -635,7 +717,7 @@ function SyncFreshnessSection({
           </HelperText>
         </div>
         <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
-          Open Sync Center
+          Open Sync Status
         </AppButtonLink>
       </div>
 
@@ -744,6 +826,12 @@ export default function DataQualityPage() {
     errors,
     isFirstRun,
   } = useLoaderData<LoaderData>();
+  const confidenceStatus = getConfidenceStatus({
+    isFirstRun,
+    errors,
+    syncHealth,
+    issues,
+  });
 
   return (
     <main
@@ -766,16 +854,26 @@ export default function DataQualityPage() {
           }}
         >
           <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
-            Data Health
+            Data Confidence
           </h1>
           <p style={{ color: "#616161", margin: "6px 0 0" }}>
-            These checks help explain whether reports are ready to trust.
-            Review sync freshness, missing costs, reporting gaps, financial
-            completeness where available, and recent sync failures.
+            See whether your reports are complete enough to trust and what needs attention.
           </p>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 10,
+              marginTop: 12,
+            }}
+          >
+            <ConfidenceBadge status={confidenceStatus} />
+            <strong>{getVerdictCopy(confidenceStatus)}</strong>
+          </div>
           <div style={{ marginTop: 14 }}>
             <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
-              Open Sync Center
+              Open Sync Status
             </AppButtonLink>
             <span
               style={{
@@ -787,8 +885,7 @@ export default function DataQualityPage() {
                 verticalAlign: "middle",
               }}
             >
-              Admin/support diagnostic view for sync jobs, freshness, and
-              troubleshooting.
+              Review sync freshness and recent import status.
             </span>
           </div>
         </section>
@@ -812,15 +909,15 @@ export default function DataQualityPage() {
 
         {isFirstRun ? (
           <PageNotice
-            title="Data Health is waiting for synced data."
-            message="Data Health becomes useful after Shopify locations, products, inventory, and orders have synced."
+            title="Data Confidence is waiting for synced data."
+            message="Data Confidence becomes useful after Shopify locations, products, inventory, and orders have synced."
             bullets={[
-              "Use Sync Center as an admin/support diagnostic view for sync freshness and recent failures.",
+              "Use Sync Status to confirm sync freshness and recent failures.",
               "Once data is available, this page checks costs, orders, variants, inventory joins, financial completeness, staff attribution, and expenses.",
             ]}
             cta={{
               to: `/app/admin/sync${preservedSearch}`,
-              label: "Open Sync Center",
+              label: "Open Sync Status",
             }}
             tone="info"
           />
@@ -833,7 +930,12 @@ export default function DataQualityPage() {
             preservedSearch={preservedSearch}
           />
           {issues.map((issue) => (
-            <QualityIssueSection key={issue.key} issue={issue} shop={shop} />
+            <QualityIssueSection
+              key={issue.key}
+              issue={issue}
+              shop={shop}
+              preservedSearch={preservedSearch}
+            />
           ))}
           <ExpensesCoverageSection
             rows={expenseCoverage.rows}
@@ -841,7 +943,12 @@ export default function DataQualityPage() {
             preservedSearch={preservedSearch}
           />
           {optionalIssues.map((issue) => (
-            <QualityIssueSection key={issue.key} issue={issue} shop={shop} />
+            <QualityIssueSection
+              key={issue.key}
+              issue={issue}
+              shop={shop}
+              preservedSearch={preservedSearch}
+            />
           ))}
         </div>
       </div>

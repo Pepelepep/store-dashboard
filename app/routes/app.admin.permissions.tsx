@@ -700,9 +700,9 @@ export default function AdminPermissionsPage() {
     <main style={{ minHeight: "100vh", background: "#f6f6f7", padding: 28, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <header style={{ marginBottom: 28 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Permissions</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Team Access</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Manage access by staff email and location.
+            Control which team members can view each location.
           </p>
         </header>
 
@@ -855,7 +855,7 @@ export default function AdminPermissionsPage() {
                 {locations.length === 0 ? (
                   <div>
                     <AppButtonLink to="/app/admin/sync" compact>
-                      Open Sync Center
+                      Open Sync Status
                     </AppButtonLink>
                   </div>
                 ) : null}
@@ -931,11 +931,6 @@ export default function AdminPermissionsPage() {
                               {group.user_email}
                             </div>
                           ) : null}
-                          {group.shopify_user_id ? (
-                            <div style={{ color: "#8a8f93", fontSize: 12 }}>
-                              Shopify user {group.shopify_user_id}
-                            </div>
-                          ) : null}
                         </td>
                         <td style={{ padding: 10, borderBottom: "1px solid #eee", textTransform: "capitalize" }}>
                           {group.role}
@@ -1002,11 +997,16 @@ export default function AdminPermissionsPage() {
             </div>
           </Card>
 
-          <div style={{ color: "#8a8f93", fontSize: 12, lineHeight: 1.5 }}>
-            Environment details: {shop}. Current admin: {currentUser.displayName}
-            {currentUser.email ? ` (${currentUser.email})` : ""}
-            {currentUser.shopifyUserId ? ` · Shopify user ${currentUser.shopifyUserId}` : ""}
-          </div>
+          <details style={{ color: "#8a8f93", fontSize: 12, lineHeight: 1.5 }}>
+            <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+              Support diagnostics
+            </summary>
+            <div style={{ marginTop: 8 }}>
+              Shop: {shop}. Current admin: {currentUser.displayName}
+              {currentUser.email ? ` (${currentUser.email})` : ""}
+              {currentUser.shopifyUserId ? ` · Shopify user ${currentUser.shopifyUserId}` : ""}
+            </div>
+          </details>
         </div>
       </div>
     </main>
