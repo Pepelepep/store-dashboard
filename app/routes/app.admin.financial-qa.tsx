@@ -7,6 +7,7 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
+  buildShopifyOrderUrl,
   daysBetween,
   formatStoreDateTime,
   getLineNetSales,
@@ -652,6 +653,7 @@ function FlagBadge({ flag }: { flag: string }) {
 
 export default function FinancialQaPage() {
   const {
+    shop,
     startDate,
     endDate,
     selectedDays,
@@ -711,79 +713,85 @@ export default function FinancialQaPage() {
             Advanced diagnostics
           </summary>
           <div style={{ marginTop: 16 }}>
-          <Form
-            method="get"
-            style={{ display: "flex", gap: 16, flexWrap: "wrap" }}
-          >
-            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              Sale Date Start
-              <input name="startDate" type="date" defaultValue={startDate} />
-            </label>
-            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              Sale Date End
-              <input name="endDate" type="date" defaultValue={endDate} />
-            </label>
-            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              Location
-              <select name="locationId" defaultValue={selectedLocationId}>
-                <option value={ALL_LOCATIONS_VALUE}>All locations</option>
-                {locations.map((location) => (
-                  <option
-                    key={location.shopify_location_id}
-                    value={location.shopify_location_id}
-                  >
-                    {location.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ display: "flex", gap: 8, alignItems: "end" }}>
-              <input
-                name="incomplete"
-                type="checkbox"
-                value="1"
-                defaultChecked={filters.incompleteOnly}
-              />
-              Incomplete only
-            </label>
-            <label style={{ display: "flex", gap: 8, alignItems: "end" }}>
-              <input
-                name="refundsOrReturns"
-                type="checkbox"
-                value="1"
-                defaultChecked={filters.refundsOrReturnsOnly}
-              />
-              Refunds or returns
-            </label>
-            <label style={{ display: "flex", gap: 8, alignItems: "end" }}>
-              <input
-                name="delta"
-                type="checkbox"
-                value="1"
-                defaultChecked={filters.deltaOnly}
-              />
-              Delta only
-            </label>
-            <button
-              type="submit"
+            <Form
+              method="get"
               style={{
-                alignSelf: "end",
-                background: "#2563eb",
-                border: "1px solid #2563eb",
-                borderRadius: 8,
-                color: "white",
-                fontWeight: 800,
-                padding: "8px 14px",
+                alignItems: "end",
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                marginBottom: 10,
               }}
             >
-              Apply
-            </button>
-          </Form>
-          <HelperText>
-            Sale Date range uses store timezone. End date is inclusive in the
-            UI. Current comparison: {selectedLocationName}, {selectedDays}{" "}
-            {selectedDays > 1 ? "days" : "day"}.
-          </HelperText>
+              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                Sale Date Start
+                <input name="startDate" type="date" defaultValue={startDate} />
+              </label>
+              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                Sale Date End
+                <input name="endDate" type="date" defaultValue={endDate} />
+              </label>
+              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                Location
+                <select name="locationId" defaultValue={selectedLocationId}>
+                  <option value={ALL_LOCATIONS_VALUE}>All locations</option>
+                  {locations.map((location) => (
+                    <option
+                      key={location.shopify_location_id}
+                      value={location.shopify_location_id}
+                    >
+                      {location.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  name="incomplete"
+                  type="checkbox"
+                  value="1"
+                  defaultChecked={filters.incompleteOnly}
+                />
+                Incomplete only
+              </label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  name="refundsOrReturns"
+                  type="checkbox"
+                  value="1"
+                  defaultChecked={filters.refundsOrReturnsOnly}
+                />
+                Refunds or returns
+              </label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  name="delta"
+                  type="checkbox"
+                  value="1"
+                  defaultChecked={filters.deltaOnly}
+                />
+                Delta only
+              </label>
+              <button
+                type="submit"
+                style={{
+                  background: "#2563eb",
+                  border: "1px solid #2563eb",
+                  borderRadius: 8,
+                  color: "white",
+                  fontWeight: 800,
+                  minHeight: 38,
+                  padding: "8px 14px",
+                }}
+              >
+                Apply
+              </button>
+            </Form>
+            <HelperText>
+              Sale Date range uses store timezone. End date is inclusive in the
+              UI. Current comparison: {selectedLocationName}, {selectedDays}{" "}
+              {selectedDays > 1 ? "days" : "day"}.
+            </HelperText>
           </div>
 
         {errors.length > 0 ? (
@@ -895,6 +903,7 @@ export default function FinancialQaPage() {
                 <tr style={{ background: "#f6f6f7", textAlign: "left" }}>
                   {[
                     "Order",
+                    "Action",
                     "Created",
                     "Status",
                     "Gross",
@@ -928,8 +937,32 @@ export default function FinancialQaPage() {
                     <td
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
                     >
-                      <div style={{ fontWeight: 800 }}>{order.order_name}</div>
+                      <a
+                        href={buildShopifyOrderUrl(shop, order.shopify_order_id)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: "#2563eb", fontWeight: 800 }}
+                      >
+                        {order.order_name}
+                      </a>
                       <HelperText>{order.shopify_order_id}</HelperText>
+                    </td>
+                    <td
+                      style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
+                    >
+                      <a
+                        href={buildShopifyOrderUrl(shop, order.shopify_order_id)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          color: "#2563eb",
+                          fontSize: 13,
+                          fontWeight: 800,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        View order
+                      </a>
                     </td>
                     <td
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
@@ -1035,7 +1068,7 @@ export default function FinancialQaPage() {
                 {orders.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={18}
+                      colSpan={19}
                       style={{ padding: 18, textAlign: "center" }}
                     >
                       No orders match the selected QA filters.

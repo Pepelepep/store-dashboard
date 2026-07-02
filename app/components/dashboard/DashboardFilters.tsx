@@ -74,30 +74,13 @@ export function DashboardFilters({
 
       <div
         style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: 24,
-          flexWrap: "wrap",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 14,
+          alignItems: "end",
         }}
       >
-        <div style={{ minWidth: 260, flex: "1 1 420px" }}>
-          <h1 style={{ margin: 0, fontSize: 34, fontWeight: 850 }}>
-            Store dashboard
-          </h1>
-
-          <p style={{ marginTop: 8, color: "#6b7280", fontSize: 16 }}>
-            Monitor sales, margin and operational risks by location.
-          </p>
-        </div>
-
-        <div
-          style={{
-            width: 360,
-            maxWidth: "100%",
-            flex: "0 1 360px",
-          }}
-        >
+        <div style={{ minWidth: 0 }}>
           <label
             htmlFor="locationId"
             style={{
@@ -153,7 +136,7 @@ export function DashboardFilters({
 
       <div
         style={{
-          marginTop: 22,
+          marginTop: 14,
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(160px, 220px))",
           gap: 14,
