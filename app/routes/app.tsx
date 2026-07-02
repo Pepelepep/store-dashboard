@@ -66,7 +66,7 @@ export default function App() {
         {canAdmin ? <a href={`/app/locations${search}`}>Location Performance</a> : null}
         {canAdmin ? <a href={`/app/admin/expenses${search}`}>Expense Setup</a> : null}
         {canAdmin ? <a href={`/app/admin/permissions${search}`}>Team Access</a> : null}
-        {canAdmin ? <a href={`/app/data-quality${search}`}>Data Confidence</a> : null}
+        {canAdmin ? <a href={`/app/data-quality${search}`}>Sync Status</a> : null}
         {billingEnabled ? (
           <a href={`/app/billing-required${search}`}>Billing</a>
         ) : null}

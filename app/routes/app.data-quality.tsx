@@ -66,8 +66,6 @@ type LoaderData = {
   isFirstRun: boolean;
 };
 
-type ConfidenceStatus = "Current" | "Preparing" | "Needs review";
-
 const sampleLimit = 10;
 const freshnessMs = 24 * 60 * 60 * 1000;
 const syncTypes = ["locations", "products", "inventory", "orders"];
@@ -398,71 +396,16 @@ export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
 
-function getConfidenceStatus({
-  isFirstRun,
-  errors,
-  syncHealth,
-  issues,
-}: {
-  isFirstRun: boolean;
-  errors: string[];
-  syncHealth: SyncHealth;
-  issues: QualityIssue[];
-}): ConfidenceStatus {
-  if (isFirstRun) return "Preparing";
-  if (
-    errors.length > 0 ||
-    syncHealth.failedLast24h > 0 ||
-    issues.some((issue) => issue.status === "Critical" && issue.count > 0)
-  ) {
-    return "Needs review";
-  }
-
-  return "Current";
-}
-
-function getVerdictCopy(status: ConfidenceStatus) {
-  if (status === "Preparing") return "Reports are preparing";
-  if (status === "Needs review") return "Some reports need review";
-  return "Reports are ready";
-}
-
-function ConfidenceBadge({ status }: { status: ConfidenceStatus }) {
-  const tone =
-    status === "Current"
-      ? { background: "#ecfdf3", border: "#abefc6", color: "#067647" }
-      : status === "Preparing"
-        ? { background: "#eff8ff", border: "#b2ddff", color: "#175cd3" }
-        : { background: "#fff8e5", border: "#f4c430", color: "#92400e" };
-
-  return (
-    <span
-      style={{
-        background: tone.background,
-        border: `1px solid ${tone.border}`,
-        borderRadius: 999,
-        color: tone.color,
-        fontSize: 12,
-        fontWeight: 800,
-        padding: "6px 10px",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {status}
-    </span>
-  );
-}
-
 function getIssueCta(issue: QualityIssue, preservedSearch: string) {
   if (
     issue.key === "orderLinesMissingCogs" ||
     issue.key === "variantsMissingUnitCost" ||
     issue.key === "orderLinesUsingFallbackCost"
   ) {
-    return { to: `/app/data-quality${preservedSearch}`, label: "Fix Missing COGS" };
+    return { to: `/app/admin/sync${preservedSearch}`, label: "Open Sync Status" };
   }
   if (issue.key === "ordersWithoutOrderLines") {
-    return { to: `/app/admin/financial-qa${preservedSearch}`, label: "Review Report Accuracy" };
+    return { to: `/app/admin/financial-qa${preservedSearch}`, label: "Open order diagnostics" };
   }
   return { to: `/app/admin/sync${preservedSearch}`, label: "Open Sync Status" };
 }
@@ -512,8 +455,8 @@ function SyncHealthSection({ syncHealth }: { syncHealth: SyncHealth }) {
     <section style={cardStyle}>
       <div style={sectionHeaderStyle}>
         <div>
-          <h2 style={sectionTitleStyle}>Sync failures</h2>
-          <HelperText>Failed sync runs should be reviewed before trusting reports.</HelperText>
+          <h2 style={sectionTitleStyle}>Failed syncs</h2>
+          <HelperText>Recent failed sync attempts, if any.</HelperText>
         </div>
       </div>
       <div style={metricGridStyle}>
@@ -713,7 +656,7 @@ function SyncFreshnessSection({
         <div>
           <h2 style={sectionTitleStyle}>Sync freshness</h2>
           <HelperText>
-            Fresh means the last successful sync finished within 24 hours.
+            Last successful Shopify import by data type.
           </HelperText>
         </div>
         <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
@@ -726,8 +669,8 @@ function SyncFreshnessSection({
           <thead>
             <tr>
               <th style={thStyle}>Data type</th>
-              <th style={thStyle}>Status</th>
-              <th style={thStyle}>Last successful sync</th>
+              <th style={thStyle}>Sync</th>
+              <th style={thStyle}>Last synced</th>
             </tr>
           </thead>
           <tbody>
@@ -735,8 +678,8 @@ function SyncFreshnessSection({
               <tr key={row.label}>
                 <td style={tdStyle}>{row.label}</td>
                 <td style={tdStyle}>
-                  <StatusBadge variant={statusVariant(row.status)}>
-                    {row.status}
+                  <StatusBadge variant={row.finishedAt ? "success" : "neutral"}>
+                    {row.finishedAt ? "Synced" : "Not synced"}
                   </StatusBadge>
                 </td>
                 <td style={tdStyle}>
@@ -826,12 +769,11 @@ export default function DataQualityPage() {
     errors,
     isFirstRun,
   } = useLoaderData<LoaderData>();
-  const confidenceStatus = getConfidenceStatus({
-    isFirstRun,
-    errors,
-    syncHealth,
-    issues,
-  });
+  const lastSuccessfulSync = syncFreshness
+    .map((row) => row.finishedAt)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1);
 
   return (
     <main
@@ -854,23 +796,15 @@ export default function DataQualityPage() {
           }}
         >
           <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
-            Data Confidence
+            Sync Status
           </h1>
           <p style={{ color: "#616161", margin: "6px 0 0" }}>
-            See whether your reports are complete enough to trust and what needs attention.
+            See when Shopify data last synced for locations, products, inventory, and orders.
           </p>
-          <div
-            style={{
-              alignItems: "center",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 10,
-              marginTop: 12,
-            }}
-          >
-            <ConfidenceBadge status={confidenceStatus} />
-            <strong>{getVerdictCopy(confidenceStatus)}</strong>
-          </div>
+          <HelperText>
+            Last synced:{" "}
+            {lastSuccessfulSync ? formatStoreDateTime(lastSuccessfulSync) : "No sync yet"}
+          </HelperText>
           <div style={{ marginTop: 14 }}>
             <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
               Open Sync Status
@@ -909,15 +843,15 @@ export default function DataQualityPage() {
 
         {isFirstRun ? (
           <PageNotice
-            title="Data Confidence is waiting for synced data."
-            message="Data Confidence becomes useful after Shopify locations, products, inventory, and orders have synced."
+            title="No data yet"
+            message="Run the first sync to import Shopify locations, products, inventory, and orders."
             bullets={[
-              "Use Sync Status to confirm sync freshness and recent failures.",
-              "Once data is available, this page checks costs, orders, variants, inventory joins, financial completeness, staff attribution, and expenses.",
+              "Manual sync requests are queued and processed by the background worker.",
+              "After sync finishes, Profit Dashboard and Location Performance will show Shopify reporting data.",
             ]}
             cta={{
               to: `/app/admin/sync${preservedSearch}`,
-              label: "Open Sync Status",
+              label: "Run first sync",
             }}
             tone="info"
           />
@@ -929,27 +863,34 @@ export default function DataQualityPage() {
             rows={syncFreshness}
             preservedSearch={preservedSearch}
           />
-          {issues.map((issue) => (
-            <QualityIssueSection
-              key={issue.key}
-              issue={issue}
-              shop={shop}
-              preservedSearch={preservedSearch}
-            />
-          ))}
-          <ExpensesCoverageSection
-            rows={expenseCoverage.rows}
-            missing={expenseCoverage.missing}
-            preservedSearch={preservedSearch}
-          />
-          {optionalIssues.map((issue) => (
-            <QualityIssueSection
-              key={issue.key}
-              issue={issue}
-              shop={shop}
-              preservedSearch={preservedSearch}
-            />
-          ))}
+          <details style={cardStyle}>
+            <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+              Support diagnostics
+            </summary>
+            <div style={{ display: "grid", gap: 20, marginTop: 16 }}>
+              {issues.map((issue) => (
+                <QualityIssueSection
+                  key={issue.key}
+                  issue={issue}
+                  shop={shop}
+                  preservedSearch={preservedSearch}
+                />
+              ))}
+              <ExpensesCoverageSection
+                rows={expenseCoverage.rows}
+                missing={expenseCoverage.missing}
+                preservedSearch={preservedSearch}
+              />
+              {optionalIssues.map((issue) => (
+                <QualityIssueSection
+                  key={issue.key}
+                  issue={issue}
+                  shop={shop}
+                  preservedSearch={preservedSearch}
+                />
+              ))}
+            </div>
+          </details>
         </div>
       </div>
     </main>

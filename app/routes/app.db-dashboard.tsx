@@ -709,14 +709,6 @@ export default function DbDashboardPage() {
     !isFirstRunPreparing &&
     readiness.accessibleLocationsCount > 0 &&
     readiness.orderLinesForSelectedPeriod === 0;
-  const hasProductInventoryGap =
-    !isFirstRunPreparing &&
-    (readiness.productsCount === 0 || readiness.inventoryRowsCount === 0);
-  const confidenceStatus = isFirstRunPreparing
-    ? "Preparing"
-    : readiness.hasRecentSyncFailure || hasProductInventoryGap
-      ? "Needs review"
-      : "Current";
 
   return (
     <main
@@ -748,7 +740,7 @@ export default function DbDashboardPage() {
                 ? [
                     "Check Sync Status to confirm whether locations, products, inventory, and orders have synced.",
                     "Dashboard reports populate automatically once synced Shopify data is available.",
-                    "You can return here once sync finishes to review sales, margins, inventory, and data confidence.",
+                    "You can return here once sync finishes to review sales, margins, and inventory.",
                   ]
                 : [
                     "Ask an app admin to confirm sync status.",
@@ -773,7 +765,6 @@ export default function DbDashboardPage() {
           preservedSearchParams={preservedSearchParams}
           lastSuccessfulSync={lastSuccessfulSync}
           selectedDays={selectedDays}
-          confidenceStatus={confidenceStatus}
         />
 
         {errors.length > 0 ? (
@@ -805,19 +796,6 @@ export default function DbDashboardPage() {
             ]}
             cta={syncCenterCta}
             tone="neutral"
-          />
-        ) : null}
-
-        {!readiness.noAssignedLocations && hasProductInventoryGap ? (
-          <PageNotice
-            title="Inventory and margin context may still be preparing."
-            message="Inventory and margin context may appear after product and inventory sync completes."
-            bullets={[
-              "Sales reporting can appear before every product, variant, or inventory row is available.",
-              "Stock alerts and cost context may be limited until product and inventory syncs finish.",
-            ]}
-            cta={syncCenterCta}
-            tone="warning"
           />
         ) : null}
 

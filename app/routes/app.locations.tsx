@@ -1358,37 +1358,6 @@ export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
 
-function ConfidenceBadge({
-  status,
-}: {
-  status: "Current" | "Preparing" | "Needs review";
-}) {
-  const tone =
-    status === "Current"
-      ? { background: "#ecfdf3", border: "#abefc6", color: "#067647" }
-      : status === "Preparing"
-        ? { background: "#eff8ff", border: "#b2ddff", color: "#175cd3" }
-        : { background: "#fff8e5", border: "#f4c430", color: "#92400e" };
-
-  return (
-    <span
-      title="Report confidence is based on data availability, sync freshness, and page errors."
-      style={{
-        background: tone.background,
-        border: `1px solid ${tone.border}`,
-        borderRadius: 999,
-        color: tone.color,
-        fontSize: 12,
-        fontWeight: 800,
-        padding: "6px 10px",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {status}
-    </span>
-  );
-}
-
 function KpiGrid({
   kpis,
   financialMetricsVersion,
@@ -2927,11 +2896,6 @@ export default function LocationsPage() {
   const hasNoSalesForRange =
     !hasNoSyncedLocations && !isDataPreparing && salesRows.length === 0;
   const shouldShowAnalytics = !hasNoSyncedLocations && !isDataPreparing;
-  const confidenceStatus = hasNoSyncedLocations || isDataPreparing
-    ? "Preparing"
-    : errors.length > 0 || hasNoSalesForRange
-      ? "Needs review"
-      : "Current";
 
   return (
     <main
@@ -2953,16 +2917,7 @@ export default function LocationsPage() {
             padding: 20,
           }}
         >
-          <div
-            style={{
-              alignItems: "flex-start",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 16,
-              justifyContent: "space-between",
-              marginBottom: 18,
-            }}
-          >
+          <div style={{ marginBottom: 18 }}>
             <div>
               <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
                 Location Performance
@@ -2971,7 +2926,6 @@ export default function LocationsPage() {
                 Compare stores by net sales, margin, expenses, discounts, refunds, and inventory health.
               </p>
             </div>
-            <ConfidenceBadge status={confidenceStatus} />
           </div>
 
           <Form

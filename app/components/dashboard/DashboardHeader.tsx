@@ -18,7 +18,6 @@ export function DashboardHeader({
   preservedSearchParams,
   lastSuccessfulSync,
   selectedDays,
-  confidenceStatus,
 }: {
   locations: LocationRow[];
   selectedLocationId: string | null;
@@ -32,15 +31,7 @@ export function DashboardHeader({
   preservedSearchParams: Array<{ name: string; value: string }>;
   lastSuccessfulSync: string | null;
   selectedDays: number;
-  confidenceStatus: "Current" | "Preparing" | "Needs review";
 }) {
-  const confidenceTone =
-    confidenceStatus === "Current"
-      ? { background: "#ecfdf3", border: "#abefc6", color: "#067647" }
-      : confidenceStatus === "Preparing"
-        ? { background: "#eff8ff", border: "#b2ddff", color: "#175cd3" }
-        : { background: "#fff8e5", border: "#f4c430", color: "#92400e" };
-
   return (
     <header
       style={{
@@ -52,16 +43,7 @@ export function DashboardHeader({
         boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
       }}
     >
-      <div
-        style={{
-          alignItems: "flex-start",
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 16,
-          justifyContent: "space-between",
-          marginBottom: 18,
-        }}
-      >
+      <div style={{ marginBottom: 18 }}>
         <div>
           <h1 style={{ fontSize: 32, lineHeight: 1.15, margin: 0 }}>
             Profit Dashboard
@@ -70,21 +52,6 @@ export function DashboardHeader({
             Track Shopify sales, discounts, refunds, COGS, margins, and inventory risk from synced store data.
           </p>
         </div>
-        <span
-          title="Report confidence is based on sync freshness, empty-state readiness, and recent sync errors."
-          style={{
-            background: confidenceTone.background,
-            border: `1px solid ${confidenceTone.border}`,
-            borderRadius: 999,
-            color: confidenceTone.color,
-            fontSize: 12,
-            fontWeight: 800,
-            padding: "6px 10px",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {confidenceStatus}
-        </span>
       </div>
       <DashboardFilters
         locations={locations}

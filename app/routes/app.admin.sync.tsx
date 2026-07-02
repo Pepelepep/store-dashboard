@@ -814,11 +814,11 @@ export default function AdminSyncPage() {
         {shouldShowFirstRunStatus ? (
           <PageNotice
             title="First run status"
-            message="Data may still be preparing. Reports populate after Shopify locations, products, inventory, and orders sync into ShopOps Studio."
+            message="No data yet. Run the first sync to import Shopify locations, products, inventory, and orders."
             bullets={[
               "Use this page to confirm report freshness and first-run progress.",
               "Manual sync requests are queued and processed automatically by the background sync worker.",
-              "When sync completes, Profit Dashboard, Location Performance, and Data Confidence will show richer reporting.",
+              "When sync completes, Profit Dashboard and Location Performance will show Shopify reporting data.",
             ]}
             tone="info"
           />

@@ -189,16 +189,12 @@ function getFlags({
   return flags;
 }
 
-function isReviewFlag(flag: string) {
-  return !["has_refund", "has_return"].includes(flag);
-}
-
 function getFlagLabel(flag: string) {
   if (flag === "discount_mismatch") {
     return "Discount allocations need review";
   }
   if (flag === "legacy_line_delta") {
-    return "Legacy line total differs from order total";
+    return "Line total differs from order total";
   }
   if (flag === "incomplete_financial_data") {
     return "Financial data incomplete";
@@ -656,7 +652,6 @@ function FlagBadge({ flag }: { flag: string }) {
 
 export default function FinancialQaPage() {
   const {
-    shop,
     startDate,
     endDate,
     selectedDays,
@@ -673,15 +668,6 @@ export default function FinancialQaPage() {
       : (locations.find(
           (location) => location.shopify_location_id === selectedLocationId,
         )?.name ?? "Unknown location");
-  const ordersNeedingReview = orders.filter((order) =>
-    order.flags.some(isReviewFlag),
-  ).length;
-  const hasDiscountIssues = summary.discountMismatches > 0;
-  const hasRefunds = summary.refunds > 0;
-  const hasReturns = summary.returns > 0;
-  const hasOrderLineIssues = Math.abs(summary.orderLineDelta) > 0.01;
-  const hasTaxShippingTotals = summary.taxes > 0 || summary.shipping > 0;
-
   return (
     <main
       style={{
@@ -694,67 +680,25 @@ export default function FinancialQaPage() {
     >
       <div style={{ maxWidth: 1500, margin: "0 auto" }}>
         <header style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Report Accuracy</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Support diagnostics</h1>
           <HelperText>
-            {shop} · Review whether synced Shopify order totals line up with
-            line-level reporting data.
+            Use this page to investigate order-level and line-level reporting differences.
           </HelperText>
         </header>
 
         {orders.length === 0 ? (
           <PageNotice
-            title="Report Accuracy is waiting for synced orders."
-            message="Report Accuracy becomes useful after Shopify orders and order lines have synced."
+            title="No synced orders yet."
+            message="Order diagnostics become available after Shopify orders and order lines have synced."
             bullets={[
-              "Use Sync Status to review locations, products, inventory, and orders sync status.",
-              "This page will compare order-level and line-level financial totals once order data exists.",
+              "Use Sync Status to run or review orders sync.",
             ]}
             cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
             tone="info"
           />
         ) : null}
 
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 12,
-            marginBottom: 20,
-          }}
-        >
-          <SummaryCard label="Orders checked" value={summary.ordersCount} />
-          <SummaryCard
-            label="Need review"
-            value={ordersNeedingReview}
-            tone={ordersNeedingReview > 0 ? "warning" : "neutral"}
-          />
-          <SummaryCard
-            label="Discounts"
-            value={hasDiscountIssues ? "Review" : "OK"}
-            tone={hasDiscountIssues ? "warning" : "neutral"}
-          />
-          <SummaryCard
-            label="Refunds"
-            value={hasRefunds ? "Present" : "None"}
-            tone={hasRefunds ? "warning" : "neutral"}
-          />
-          <SummaryCard
-            label="Returns"
-            value={hasReturns ? "Present" : "None"}
-            tone={hasReturns ? "warning" : "neutral"}
-          />
-          <SummaryCard
-            label="Taxes & shipping"
-            value={hasTaxShippingTotals ? "Present" : "None"}
-          />
-          <SummaryCard
-            label="Order-line totals"
-            value={hasOrderLineIssues ? "Review" : "OK"}
-            tone={hasOrderLineIssues ? "warning" : "neutral"}
-          />
-        </section>
-
-        <section
+        <details
           style={{
             background: "white",
             border: "1px solid #e3e3e3",
@@ -763,6 +707,10 @@ export default function FinancialQaPage() {
             marginBottom: 20,
           }}
         >
+          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+            Advanced diagnostics
+          </summary>
+          <div style={{ marginTop: 16 }}>
           <Form
             method="get"
             style={{ display: "flex", gap: 16, flexWrap: "wrap" }}
@@ -836,7 +784,7 @@ export default function FinancialQaPage() {
             UI. Current comparison: {selectedLocationName}, {selectedDays}{" "}
             {selectedDays > 1 ? "days" : "day"}.
           </HelperText>
-        </section>
+          </div>
 
         {errors.length > 0 ? (
           <section
@@ -932,17 +880,6 @@ export default function FinancialQaPage() {
           />
         </section>
 
-        <details
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 12,
-            padding: 14,
-          }}
-        >
-          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-            Advanced order diagnostics
-          </summary>
           <HelperText>
             Raw order-level and line-level totals for support review.
           </HelperText>
@@ -972,8 +909,6 @@ export default function FinancialQaPage() {
                     "Shipping",
                     "Total",
                     "Transactions",
-                    "Legacy revenue",
-                    "Legacy - Line",
                     "Complete",
                     "Reason",
                     "Flags",
@@ -1071,16 +1006,6 @@ export default function FinancialQaPage() {
                     <td
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
                     >
-                      {formatCurrency(order.legacyRevenue)}
-                    </td>
-                    <td
-                      style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
-                    >
-                      {formatCurrency(order.legacyLineDelta)}
-                    </td>
-                    <td
-                      style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
-                    >
                       <StatusBadge
                         variant={
                           order.financial_data_complete === false
@@ -1110,7 +1035,7 @@ export default function FinancialQaPage() {
                 {orders.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={20}
+                      colSpan={18}
                       style={{ padding: 18, textAlign: "center" }}
                     >
                       No orders match the selected QA filters.
