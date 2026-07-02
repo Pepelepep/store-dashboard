@@ -169,6 +169,10 @@ type MoneySet = {
     amount?: string | null;
     currencyCode?: string | null;
   } | null;
+  presentmentMoney?: {
+    amount?: string | null;
+    currencyCode?: string | null;
+  } | null;
 };
 
 type ShopifyConnection<T> = {
@@ -177,6 +181,34 @@ type ShopifyConnection<T> = {
     endCursor?: string | null;
   } | null;
   edges?: Array<{ node: T }>;
+};
+
+type DiscountValueNode =
+  | {
+      __typename?: "MoneyV2";
+      amount?: string | null;
+      currencyCode?: string | null;
+    }
+  | {
+      __typename?: "PricingPercentageValue";
+      percentage?: number | string | null;
+    };
+
+type DiscountApplicationNode = {
+  __typename?: string | null;
+  index?: number | null;
+  targetType?: string | null;
+  targetSelection?: string | null;
+  allocationMethod?: string | null;
+  value?: DiscountValueNode | null;
+  code?: string | null;
+  title?: string | null;
+  description?: string | null;
+};
+
+type DiscountAllocationNode = {
+  allocatedAmountSet?: MoneySet | null;
+  discountApplication?: DiscountApplicationNode | null;
 };
 
 type OrderLineItemNode = {
@@ -196,9 +228,11 @@ type OrderLineItemNode = {
     } | null;
   } | null;
   originalUnitPriceSet?: MoneySet | null;
+  originalTotalSet?: MoneySet | null;
   discountedUnitPriceSet?: MoneySet | null;
   discountedTotalSet?: MoneySet | null;
   totalDiscountSet?: MoneySet | null;
+  discountAllocations?: DiscountAllocationNode[] | null;
   taxLines?: Array<{
     priceSet?: MoneySet | null;
   }> | null;
@@ -282,6 +316,7 @@ type OrderNode = {
   currentTotalTaxSet?: MoneySet | null;
   totalShippingPriceSet?: MoneySet | null;
   currentShippingPriceSet?: MoneySet | null;
+  discountApplications?: ShopifyConnection<DiscountApplicationNode> | null;
   totalPriceSet?: MoneySet | null;
   currentTotalPriceSet?: MoneySet | null;
   totalRefundedSet?: MoneySet | null;
@@ -390,6 +425,40 @@ function getEndCursor<T>(connection?: ShopifyConnection<T> | null) {
   return connection?.pageInfo?.endCursor ?? null;
 }
 
+function getFinancialQueryDiscountApplicationFields() {
+  return `
+    __typename
+    index
+    targetType
+    targetSelection
+    allocationMethod
+    value {
+      __typename
+      ... on MoneyV2 {
+        amount
+        currencyCode
+      }
+      ... on PricingPercentageValue {
+        percentage
+      }
+    }
+    ... on DiscountCodeApplication {
+      code
+      title
+    }
+    ... on AutomaticDiscountApplication {
+      title
+    }
+    ... on ManualDiscountApplication {
+      title
+      description
+    }
+    ... on ScriptDiscountApplication {
+      title
+    }
+  `;
+}
+
 function getFinancialQueryLineItemFields(includeStaffAttribution: boolean) {
   return `
     id
@@ -423,6 +492,12 @@ function getFinancialQueryLineItemFields(includeStaffAttribution: boolean) {
         currencyCode
       }
     }
+    originalTotalSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+    }
     discountedUnitPriceSet {
       shopMoney {
         amount
@@ -439,6 +514,21 @@ function getFinancialQueryLineItemFields(includeStaffAttribution: boolean) {
       shopMoney {
         amount
         currencyCode
+      }
+    }
+    discountAllocations {
+      allocatedAmountSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+      discountApplication {
+        ${getFinancialQueryDiscountApplicationFields()}
       }
     }
     taxLines {
@@ -918,6 +1008,85 @@ function getOrderCurrency(order: OrderNode) {
   );
 }
 
+function getDiscountValueSummary(value?: DiscountValueNode | null) {
+  if (!value) return null;
+
+  if (value.__typename === "MoneyV2") {
+    return {
+      type: value.__typename,
+      amount: getNumericAmount(value.amount),
+      currencyCode: value.currencyCode ?? null,
+    };
+  }
+
+  if (value.__typename === "PricingPercentageValue") {
+    return {
+      type: value.__typename,
+      percentage: getNumericAmount(String(value.percentage ?? 0)),
+    };
+  }
+
+  return {
+    type: value.__typename ?? "unknown",
+  };
+}
+
+function getDiscountApplicationSummary(
+  application?: DiscountApplicationNode | null,
+) {
+  if (!application) return null;
+
+  return {
+    type: application.__typename ?? "unknown",
+    index: application.index ?? null,
+    targetType: application.targetType ?? null,
+    targetSelection: application.targetSelection ?? null,
+    allocationMethod: application.allocationMethod ?? null,
+    value: getDiscountValueSummary(application.value),
+    code: application.code ?? null,
+    title: application.title ?? null,
+    description: application.description ?? null,
+  };
+}
+
+function getOrderDiscountApplications(order: OrderNode) {
+  return getConnectionNodes(order.discountApplications)
+    .map(getDiscountApplicationSummary)
+    .filter((application) => application !== null);
+}
+
+function getOrderDiscountCodes(order: OrderNode) {
+  return getOrderDiscountApplications(order)
+    .filter((application) => application.code)
+    .map((application) => ({
+      code: application.code,
+      title: application.title,
+      type: application.type,
+    }));
+}
+
+function getLineDiscountAllocations(lineItem: OrderLineItemNode) {
+  return getArrayItems(lineItem.discountAllocations).map((allocation) => ({
+    amount: getShopMoneyAmount(allocation.allocatedAmountSet),
+    currencyCode: getShopMoneyCurrency(allocation.allocatedAmountSet),
+    presentmentAmount: getNumericAmount(
+      allocation.allocatedAmountSet?.presentmentMoney?.amount,
+    ),
+    presentmentCurrencyCode:
+      allocation.allocatedAmountSet?.presentmentMoney?.currencyCode ?? null,
+    discountApplication: getDiscountApplicationSummary(
+      allocation.discountApplication,
+    ),
+  }));
+}
+
+function getLineDiscountAllocationTotal(lineItem: OrderLineItemNode) {
+  return getArrayItems(lineItem.discountAllocations).reduce(
+    (sum, allocation) => sum + getShopMoneyAmount(allocation.allocatedAmountSet),
+    0,
+  );
+}
+
 function getLineFinancials({
   lineItem,
   refundLineItemsByLineItemId,
@@ -933,19 +1102,25 @@ function getLineFinancials({
   >;
 }) {
   const grossSales =
+    getShopMoneyAmount(lineItem.originalTotalSet) ||
     getShopMoneyAmount(lineItem.originalUnitPriceSet) *
-    Number(lineItem.quantity ?? 0);
+      Number(lineItem.quantity ?? 0);
   const discountedTotal = getShopMoneyAmount(lineItem.discountedTotalSet);
+  const allocationDiscounts = getLineDiscountAllocationTotal(lineItem);
   const explicitDiscounts = getShopMoneyAmount(lineItem.totalDiscountSet);
   const discounts =
-    explicitDiscounts || Math.max(0, grossSales - discountedTotal);
+    allocationDiscounts ||
+    explicitDiscounts ||
+    Math.max(0, grossSales - discountedTotal);
   const refundSummary = refundLineItemsByLineItemId.get(lineItem.id) ?? {
     returnedQuantity: 0,
     returns: 0,
     refundedAmount: 0,
   };
   const returns = refundSummary.returns;
-  const netSales = grossSales - discounts - returns;
+  const netSalesBeforeReturns =
+    discountedTotal || Math.max(0, grossSales - discounts);
+  const netSales = netSalesBeforeReturns - returns;
 
   return {
     grossSales,
@@ -955,6 +1130,7 @@ function getLineFinancials({
     refundedAmount: refundSummary.refundedAmount || returns,
     taxes: getLineTaxTotal(lineItem),
     returnedQuantity: refundSummary.returnedQuantity,
+    discountAllocations: getLineDiscountAllocations(lineItem),
   };
 }
 
@@ -996,9 +1172,24 @@ function getOrderFinancials({
     0,
   );
   const grossSales =
-    getShopMoneyAmount(order.subtotalPriceSet) || lineGrossSales;
+    lineGrossSales ||
+    getShopMoneyAmount(order.currentSubtotalPriceSet) ||
+    getShopMoneyAmount(order.subtotalPriceSet) ||
+    0;
+  const totalDiscountAmount = getShopMoneyAmount(order.totalDiscountsSet);
+  const currentTotalDiscountAmount = getShopMoneyAmount(
+    order.currentTotalDiscountsSet,
+  );
   const discounts =
-    getShopMoneyAmount(order.totalDiscountsSet) || lineDiscounts;
+    currentTotalDiscountAmount || totalDiscountAmount || lineDiscounts;
+  const totalShipping = getShopMoneyAmount(order.totalShippingPriceSet);
+  const currentShipping = getShopMoneyAmount(order.currentShippingPriceSet);
+  const shippingDiscounts =
+    totalShipping > currentShipping ? totalShipping - currentShipping : 0;
+  const discountApplications = getOrderDiscountApplications(order);
+  const discountCodes = getOrderDiscountCodes(order);
+  const discountReconciliationDelta =
+    lineDiscounts + shippingDiscounts - discounts;
   const netSales = grossSales - discounts - returns;
   const taxes = getShopMoneyAmount(order.currentTotalTaxSet);
   const shipping = getShopMoneyAmount(order.currentShippingPriceSet);
@@ -1014,6 +1205,13 @@ function getOrderFinancials({
       currencyCode: getOrderCurrency(order),
       grossSales,
       discounts,
+      totalDiscountAmount,
+      currentTotalDiscountAmount,
+      lineDiscountAmount: lineDiscounts,
+      shippingDiscountAmount: shippingDiscounts,
+      discountApplications,
+      discountCodes,
+      discountReconciliationDelta,
       returns,
       netSales,
       refunds: getOrderRefundTotal({ order, transactions }),
@@ -1030,6 +1228,18 @@ function getOrderFinancials({
         orderRefundsLimit: 50,
         orderTransactionsReturned,
         orderRefundsReturned,
+        discountReconciliation: {
+          orderDiscountTotal: discounts,
+          totalDiscountAmount,
+          currentTotalDiscountAmount,
+          lineDiscountAmount: lineDiscounts,
+          shippingDiscountAmount: shippingDiscounts,
+          delta: discountReconciliationDelta,
+          warning:
+            Math.abs(discountReconciliationDelta) > 0.02
+              ? "Line discount allocations plus shipping discounts do not match the order discount total."
+              : null,
+        },
         sourceTotals: {
           subtotalPriceSet: order.subtotalPriceSet ?? null,
           currentSubtotalPriceSet: order.currentSubtotalPriceSet ?? null,
@@ -1043,6 +1253,8 @@ function getOrderFinancials({
           currentTotalPriceSet: order.currentTotalPriceSet ?? null,
           totalRefundedSet: order.totalRefundedSet ?? null,
         },
+        discountApplications,
+        discountCodes,
         refunds,
         transactions,
       },
@@ -3918,6 +4130,12 @@ async function upsertOrderNodes({
       currency_code: orderFinancials.currencyCode,
       gross_sales: orderFinancials.grossSales,
       discounts: orderFinancials.discounts,
+      total_discount_amount: orderFinancials.totalDiscountAmount,
+      current_total_discount_amount: orderFinancials.currentTotalDiscountAmount,
+      line_discount_amount: orderFinancials.lineDiscountAmount,
+      shipping_discount_amount: orderFinancials.shippingDiscountAmount,
+      discount_applications: orderFinancials.discountApplications,
+      discount_codes: orderFinancials.discountCodes,
       returns: orderFinancials.returns,
       net_sales: orderFinancials.netSales,
       refunds: orderFinancials.refunds,
@@ -3988,6 +4206,8 @@ async function upsertOrderNodes({
         cost_source: costInfo.costSource,
         gross_sales: lineFinancials?.grossSales ?? null,
         discounts: lineFinancials?.discounts ?? null,
+        discount_amount: lineFinancials?.discounts ?? null,
+        discount_allocations: lineFinancials?.discountAllocations ?? null,
         returns: lineFinancials?.returns ?? null,
         net_sales: lineFinancials?.netSales ?? null,
         refunded_amount: lineFinancials?.refundedAmount ?? null,
@@ -4163,6 +4383,13 @@ async function syncOrdersPage({
                 shopMoney {
                   amount
                   currencyCode
+                }
+              }
+              discountApplications(first: 20) {
+                edges {
+                  node {
+                    ${getFinancialQueryDiscountApplicationFields()}
+                  }
                 }
               }
               totalPriceSet {
@@ -4580,6 +4807,13 @@ async function fetchOrderByIdForSync({
               shopMoney {
                 amount
                 currencyCode
+              }
+            }
+            discountApplications(first: 20) {
+              edges {
+                node {
+                  ${getFinancialQueryDiscountApplicationFields()}
+                }
               }
             }
             totalPriceSet {

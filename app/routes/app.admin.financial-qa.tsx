@@ -34,6 +34,10 @@ type OrderFinancialRow = {
   financial_status: string | null;
   gross_sales: number | null;
   discounts: number | null;
+  total_discount_amount: number | null;
+  current_total_discount_amount: number | null;
+  line_discount_amount: number | null;
+  shipping_discount_amount: number | null;
   returns: number | null;
   net_sales: number | null;
   refunds: number | null;
@@ -49,6 +53,7 @@ type QaOrderRow = OrderFinancialRow & {
   legacyRevenue: number;
   lineLevelNetSales: number;
   orderLineDelta: number | null;
+  discountReconciliationDelta: number;
   legacyLineDelta: number;
   flags: string[];
 };
@@ -66,6 +71,7 @@ type Summary = {
   shipping: number;
   totalSales: number;
   transactionsTotal: number;
+  discountMismatches: number;
   legacyRevenue: number;
   orderLevelNetSales: number;
   lineLevelNetSales: number;
@@ -106,6 +112,8 @@ const MONEY_FIELDS: Array<keyof OrderFinancialRow> = [
   "total_sales",
   "transactions_total",
 ];
+
+const DISCOUNT_RECONCILIATION_TOLERANCE = 0.02;
 
 function getDefaultDateRange() {
   const today = getTodayStoreDate();
@@ -149,10 +157,12 @@ function getLegacyLineDelta({
 function getFlags({
   order,
   orderLineDelta,
+  discountReconciliationDelta,
   legacyLineDelta,
 }: {
   order: OrderFinancialRow;
   orderLineDelta: number | null;
+  discountReconciliationDelta: number;
   legacyLineDelta: number;
 }) {
   const flags: string[] = [];
@@ -165,6 +175,12 @@ function getFlags({
   if (numberValue(order.returns) > 0) flags.push("has_return");
   if (orderLineDelta !== null && Math.abs(orderLineDelta) > 0.01) {
     flags.push("order_line_delta");
+  }
+  if (
+    numberValue(order.discounts) > 0 &&
+    Math.abs(discountReconciliationDelta) > DISCOUNT_RECONCILIATION_TOLERANCE
+  ) {
+    flags.push("discount_mismatch");
   }
   if (Math.abs(legacyLineDelta) > 0.01) {
     flags.push("legacy_line_delta");
@@ -193,7 +209,7 @@ async function fetchAllOrders({
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "shopify_order_id, order_name, created_at_shopify, financial_status, gross_sales, discounts, returns, net_sales, refunds, taxes, shipping, total_sales, transactions_total, financial_data_complete, financial_incomplete_reason",
+        "shopify_order_id, order_name, created_at_shopify, financial_status, gross_sales, discounts, total_discount_amount, current_total_discount_amount, line_discount_amount, shipping_discount_amount, returns, net_sales, refunds, taxes, shipping, total_sales, transactions_total, financial_data_complete, financial_incomplete_reason",
       )
       .eq("shop_domain", shop)
       .gte("created_at_shopify", startDateUtc)
@@ -310,6 +326,9 @@ function getSummary(orders: QaOrderRow[]): Summary {
       summary.shipping += numberValue(order.shipping);
       summary.totalSales += numberValue(order.total_sales);
       summary.transactionsTotal += numberValue(order.transactions_total);
+      if (order.flags.includes("discount_mismatch")) {
+        summary.discountMismatches += 1;
+      }
       summary.legacyRevenue += order.legacyRevenue;
       summary.orderLevelNetSales += numberValue(order.net_sales);
       summary.lineLevelNetSales += order.lineLevelNetSales;
@@ -331,6 +350,7 @@ function getSummary(orders: QaOrderRow[]): Summary {
       shipping: 0,
       totalSales: 0,
       transactionsTotal: 0,
+      discountMismatches: 0,
       legacyRevenue: 0,
       orderLevelNetSales: 0,
       lineLevelNetSales: 0,
@@ -446,9 +466,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
       legacyRevenue: lineSummary.legacyRevenue,
       lineLevelNetSales: lineSummary.lineLevelNetSales,
     });
+    const discountReconciliationDelta =
+      numberValue(order.line_discount_amount) +
+      numberValue(order.shipping_discount_amount) -
+      numberValue(order.discounts);
     const flags = getFlags({
       order,
       orderLineDelta,
+      discountReconciliationDelta,
       legacyLineDelta,
     });
 
@@ -457,6 +482,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       legacyRevenue: lineSummary.legacyRevenue,
       lineLevelNetSales: lineSummary.lineLevelNetSales,
       orderLineDelta,
+      discountReconciliationDelta,
       legacyLineDelta,
       flags,
     };
@@ -478,6 +504,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       financial_status: null,
       gross_sales: null,
       discounts: null,
+      total_discount_amount: null,
+      current_total_discount_amount: null,
+      line_discount_amount: null,
+      shipping_discount_amount: null,
       returns: null,
       net_sales: null,
       refunds: null,
@@ -490,6 +520,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       legacyRevenue: lineSummary.legacyRevenue,
       lineLevelNetSales: lineSummary.lineLevelNetSales,
       orderLineDelta: null,
+      discountReconciliationDelta: 0,
       legacyLineDelta,
       flags: ["missing_financials"],
     });
@@ -514,6 +545,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     if (
       filters.deltaOnly &&
       !order.flags.includes("order_line_delta") &&
+      !order.flags.includes("discount_mismatch") &&
       !order.flags.includes("legacy_line_delta")
     ) {
       return false;
@@ -576,7 +608,9 @@ function FlagBadge({ flag }: { flag: string }) {
   const variant =
     flag === "missing_financials" || flag === "incomplete_financial_data"
       ? "error"
-      : flag === "order_line_delta" || flag === "legacy_line_delta"
+      : flag === "order_line_delta" ||
+          flag === "discount_mismatch" ||
+          flag === "legacy_line_delta"
         ? "warning"
         : "info";
 
@@ -765,6 +799,11 @@ export default function FinancialQaPage() {
             value={formatCurrency(summary.discounts)}
           />
           <SummaryCard
+            label="Discount mismatches"
+            value={summary.discountMismatches}
+            tone={summary.discountMismatches > 0 ? "warning" : "neutral"}
+          />
+          <SummaryCard
             label="Returns"
             value={formatCurrency(summary.returns)}
           />
@@ -837,6 +876,7 @@ export default function FinancialQaPage() {
                     "Status",
                     "Gross",
                     "Discounts",
+                    "Discount Delta",
                     "Returns",
                     "Order Net",
                     "Line Net",
@@ -889,6 +929,11 @@ export default function FinancialQaPage() {
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
                     >
                       {formatCurrency(order.discounts)}
+                    </td>
+                    <td
+                      style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
+                    >
+                      {formatCurrency(order.discountReconciliationDelta)}
                     </td>
                     <td
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
@@ -979,7 +1024,7 @@ export default function FinancialQaPage() {
                 {orders.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={19}
+                      colSpan={20}
                       style={{ padding: 18, textAlign: "center" }}
                     >
                       No orders match the selected QA filters.
