@@ -444,7 +444,6 @@ function getFinancialQueryDiscountApplicationFields() {
     }
     ... on DiscountCodeApplication {
       code
-      title
     }
     ... on AutomaticDiscountApplication {
       title
@@ -1035,16 +1034,22 @@ function getDiscountApplicationSummary(
   application?: DiscountApplicationNode | null,
 ) {
   if (!application) return null;
+  const type = application.__typename ?? "unknown";
+  const discountCode = application.code ?? null;
+  const title = application.title ?? null;
+  const label = title ?? discountCode ?? type;
 
   return {
-    type: application.__typename ?? "unknown",
+    type,
     index: application.index ?? null,
     targetType: application.targetType ?? null,
     targetSelection: application.targetSelection ?? null,
     allocationMethod: application.allocationMethod ?? null,
     value: getDiscountValueSummary(application.value),
-    code: application.code ?? null,
-    title: application.title ?? null,
+    code: discountCode,
+    discountCode,
+    discountLabel: label,
+    title,
     description: application.description ?? null,
   };
 }
@@ -1060,7 +1065,8 @@ function getOrderDiscountCodes(order: OrderNode) {
     .filter((application) => application.code)
     .map((application) => ({
       code: application.code,
-      title: application.title,
+      title: application.title ?? application.discountLabel,
+      label: application.discountLabel,
       type: application.type,
     }));
 }
