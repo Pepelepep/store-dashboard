@@ -70,6 +70,7 @@ const marketplaceSyncJobTypes: SyncJobType[] = [
 ];
 const STALE_ACTIVE_JOB_MS = 15 * 60 * 1000;
 const MAX_STALE_RETRY_COUNT = 3;
+const MAX_STEP_BATCHES_PER_JOB = 100;
 const ORDERS_RECONCILIATION_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ORDERS_RECONCILIATION_WINDOW_MS = 48 * 60 * 60 * 1000;
 const FINANCIAL_BACKFILL_RECENT_SUCCESS_MS = 24 * 60 * 60 * 1000;
@@ -100,6 +101,24 @@ function setStepCounts(
     ...(existing ?? {}),
     [step]: batchCounts,
   };
+}
+
+function addBatchCounts(
+  existing: Record<string, unknown>,
+  batchCounts: Record<string, unknown>,
+) {
+  const next = { ...existing };
+
+  for (const [key, value] of Object.entries(batchCounts)) {
+    if (typeof value === "number") {
+      next[key] = Number(next[key] ?? 0) + value;
+      continue;
+    }
+
+    next[key] = value;
+  }
+
+  return next;
 }
 
 function getErrorDetails(error: unknown) {
@@ -193,16 +212,37 @@ function summarizeCounts(counts: Record<string, unknown> | null | undefined) {
   return summary;
 }
 
+function hasCounts(counts: Record<string, unknown> | null | undefined) {
+  return Object.keys(counts ?? {}).length > 0;
+}
+
+function hasContinuationProgress(job: SyncJobRow) {
+  const step = job.current_step ?? getInitialStep(job.job_type);
+  const progress = getProgressForStep(job, step);
+
+  if (typeof progress.cursor === "string" && progress.cursor) {
+    return true;
+  }
+
+  if (typeof progress.offset === "number" && progress.offset > 0) {
+    return true;
+  }
+
+  return false;
+}
+
 function logJobTransition({
   job,
   previousStatus,
   finalStatus,
   startedAtMs,
+  finalized = false,
 }: {
   job: SyncJobRow;
   previousStatus: string;
   finalStatus: string;
   startedAtMs: number;
+  finalized?: boolean;
 }) {
   console.info("[sync-jobs] job transition", {
     jobId: job.id,
@@ -211,6 +251,7 @@ function logJobTransition({
     previousStatus,
     finalStatus,
     durationMs: Date.now() - startedAtMs,
+    finalized,
     counts: summarizeCounts(job.counts),
   });
 }
@@ -821,6 +862,53 @@ async function runStepBatch({
   throw new Error(`Unknown sync job step: ${step}`);
 }
 
+async function runStepToCompletion({
+  admin,
+  shop,
+  supabase,
+  step,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  step: string;
+  progress: Record<string, unknown> | null;
+}) {
+  let currentProgress = progress;
+  let accumulatedCounts: Record<string, unknown> = {};
+  let batchesProcessed = 0;
+
+  while (batchesProcessed < MAX_STEP_BATCHES_PER_JOB) {
+    const batchResult = await runStepBatch({
+      admin,
+      shop,
+      supabase,
+      step,
+      progress: {
+        [step]: currentProgress,
+      },
+    });
+
+    batchesProcessed += 1;
+    currentProgress = batchResult.progress;
+    accumulatedCounts = addBatchCounts(accumulatedCounts, batchResult.counts);
+
+    if (batchResult.done) {
+      return {
+        done: true,
+        progress: currentProgress,
+        counts: accumulatedCounts,
+        batchesProcessed,
+      };
+    }
+  }
+
+  throw new Error(
+    `Sync job step ${step} exceeded ${MAX_STEP_BATCHES_PER_JOB} batches without completing.`,
+  );
+}
+
 export async function processManualSyncJobBatch({
   admin,
   supabase,
@@ -872,6 +960,49 @@ export async function processManualSyncJobBatch({
         ? 1
         : 0;
 
+  if (
+    isStaleRetry &&
+    hasCounts(job.counts) &&
+    !job.error_message &&
+    !hasContinuationProgress(job)
+  ) {
+    const { data: finalizedJob, error: finalizedJobError } = await supabase
+      .from("sync_jobs")
+      .update({
+        status: "success",
+        error_message: null,
+        details: {
+          ...(job.details ?? {}),
+          finalized: true,
+          finalizedFromStaleRunning: true,
+        },
+        updated_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      })
+      .eq("shop_domain", shop)
+      .eq("id", job.id)
+      .select("*")
+      .single();
+
+    if (finalizedJobError) {
+      throw new Error(finalizedJobError.message);
+    }
+
+    const finalJob = finalizedJob as SyncJobRow;
+    logJobTransition({
+      job: finalJob,
+      previousStatus,
+      finalStatus: finalJob.status,
+      startedAtMs: processingStartedAtMs,
+      finalized: true,
+    });
+
+    return {
+      job: finalJob,
+      processed: true,
+    };
+  }
+
   if (isStaleRetry && staleRetryCount > MAX_STALE_RETRY_COUNT) {
     const { data: failedJob, error: failedJobError } = await supabase
       .from("sync_jobs")
@@ -901,6 +1032,7 @@ export async function processManualSyncJobBatch({
       previousStatus,
       finalStatus: finalJob.status,
       startedAtMs: processingStartedAtMs,
+      finalized: finalJob.status === "success",
     });
 
     return {
@@ -959,59 +1091,66 @@ export async function processManualSyncJobBatch({
   }
 
   const step = claimedJob.current_step ?? getInitialStep(claimedJob.job_type);
+  let failedStep = step;
 
   try {
-    const batchResult = await runStepBatch({
-      admin,
-      shop,
-      supabase,
-      step,
-      progress: claimedJob.progress ?? {},
-    });
-    const nextProgress = {
-      ...(claimedJob.progress ?? {}),
-      [step]: batchResult.progress,
-    };
-    const nextCounts = setStepCounts(claimedJob.counts, step, batchResult.counts);
-    const nextStep =
-      batchResult.done &&
-      (claimedJob.job_type === "full" || claimedJob.job_type === "full_refresh")
-        ? getNextFullStep(step)
-        : step;
-    const isDone =
-      batchResult.done &&
-      (!nextStep ||
-        (claimedJob.job_type !== "full" &&
-          claimedJob.job_type !== "full_refresh"));
+    let currentStep: string | null = step;
+    let nextProgress = { ...(claimedJob.progress ?? {}) };
+    let nextCounts = { ...(claimedJob.counts ?? {}) };
+    const completedSteps: string[] = [];
 
-    if (batchResult.done) {
+    while (currentStep) {
+      failedStep = currentStep;
+      const stepResult = await runStepToCompletion({
+        admin,
+        shop,
+        supabase,
+        step: currentStep,
+        progress: getProgressForStep(
+          { ...claimedJob, progress: nextProgress },
+          currentStep,
+        ),
+      });
+
+      nextProgress = {
+        ...nextProgress,
+        [currentStep]: stepResult.progress,
+      };
+      nextCounts = setStepCounts(nextCounts, currentStep, {
+        ...stepResult.counts,
+        batchesProcessed: stepResult.batchesProcessed,
+      });
+      completedSteps.push(currentStep);
+
       await markStepCompleted({
         supabase,
         shop,
         job: claimedJob,
-        step,
-        counts: (nextCounts[step] as Record<string, unknown>) ?? {},
+        step: currentStep,
+        counts: (nextCounts[currentStep] as Record<string, unknown>) ?? {},
       });
+
+      currentStep =
+        claimedJob.job_type === "full" || claimedJob.job_type === "full_refresh"
+          ? getNextFullStep(currentStep)
+          : null;
     }
 
     const { data: updatedJob, error: updateError } = await supabase
       .from("sync_jobs")
       .update({
-        status: isDone ? "success" : "running",
-        current_step: isDone ? step : nextStep,
+        status: "success",
+        current_step: completedSteps.at(-1) ?? step,
         progress: nextProgress,
         counts: nextCounts,
         details: {
           ...(claimedJob.details ?? {}),
-          lastBatch: {
-            step,
-            done: batchResult.done,
-            counts: batchResult.counts,
-          },
+          completedSteps,
+          finalized: true,
         },
         started_at: startedAt,
         updated_at: new Date().toISOString(),
-        finished_at: isDone ? new Date().toISOString() : null,
+        finished_at: new Date().toISOString(),
         error_message: null,
       })
       .eq("shop_domain", shop)
@@ -1029,6 +1168,7 @@ export async function processManualSyncJobBatch({
       previousStatus,
       finalStatus: finalJob.status,
       startedAtMs: processingStartedAtMs,
+      finalized: true,
     });
 
     return {
@@ -1042,7 +1182,7 @@ export async function processManualSyncJobBatch({
     await insertSyncRun({
       supabase,
       shop,
-      syncType: step,
+      syncType: failedStep,
       status: "error",
       source: getSyncJobSource(claimedJob),
       startedAt,
@@ -1050,8 +1190,8 @@ export async function processManualSyncJobBatch({
       details: {
         jobId: claimedJob.id,
         batchJobType: claimedJob.job_type,
-        failedStep: step,
-        ...getProgressForStep(claimedJob, step),
+        failedStep,
+        ...getProgressForStep(claimedJob, failedStep),
         errorDetails,
       },
     });
@@ -1060,11 +1200,11 @@ export async function processManualSyncJobBatch({
       .from("sync_jobs")
       .update({
         status: "error",
-        current_step: step,
+        current_step: failedStep,
         error_message: errorMessage,
         details: {
           ...(claimedJob.details ?? {}),
-          failedStep: step,
+          failedStep,
           errorDetails,
         },
         started_at: startedAt,
