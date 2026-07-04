@@ -180,10 +180,10 @@ Reason:
 Permissions flow:
 
 - ShopOps Studio uses the currently logged-in Shopify staff identity from the embedded app session where available.
-- Merchant admins manage role and location assignments by manually entering Shopify account emails or Shopify user IDs in ShopOps Studio.
+- Merchant admins manage role and location assignments manually. Email is the main identity; Shopify user IDs are optional aliases for Shopify/POS contexts.
 - Assignments are stored in `user_location_access`.
 - `user_location_access.user_email` is an app permission identity field, not a customer email field.
-- Shopify user IDs from the current session may be stored when available to support identity matching.
+- Multiple Shopify user IDs can be linked to one person. `access_label` is display-only for recognizing ID-only access and is not used for authorization matching.
 
 Staff attribution flow:
 

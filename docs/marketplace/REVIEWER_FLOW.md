@@ -209,9 +209,10 @@ Steps:
 
 Expected outcome:
 
-- Admin can assign staff identities to locations without a synced Shopify staff list.
+- Admin can assign staff identities without a synced Shopify staff list. Email is the main identity; Shopify user IDs are aliases.
 - Non-admin users see only permitted dashboard locations.
 - Blocked users can send the Shopify user ID shown on the Access required page to an admin.
+- Multiple Shopify user IDs can be linked to one person. Access label is only for recognizing ID-only access and is not used for authorization matching.
 - Permissions use the current Shopify session identity plus ShopOps Studio database assignments in `user_location_access`.
 - `user_location_access.user_email` is an app permission identity field, not a customer email field. `user_location_access.shopify_user_id` may also be used when Shopify provides a current user ID.
 
@@ -237,7 +238,7 @@ Expected outcome:
 - Explain that the public app does not request `read_users` because Shopify Partner Support confirmed it is unavailable for public App Store apps.
 - Explain that `read_orders` powers sales, line items, products sold, discounts, refunds, returns, transactions, location performance, staff attribution where available, and order-level reporting completeness.
 - Explain that `read_all_orders` supports historical reporting, backfills after install, and period comparisons beyond the recent order access window.
-- Explain that permissions use current Shopify session identity plus ShopOps Studio DB assignments, and merchant admins manage access by email or Shopify user ID.
+- Explain that permissions use current Shopify session identity plus ShopOps Studio DB assignments. Email is the main identity, Shopify user IDs are aliases, and access labels are display-only.
 - Explain that staff sales attribution is best-effort based on available order/session data. If Shopify blocks `staffMember`, the app falls back to location/source reporting and financial totals remain accurate.
 - Explain that advanced Shopify staff directory sync is future-only for custom/Plus/Advanced implementations.
 - Explain that protected customer/order data may be processed because Shopify order records can include customer/order information needed to calculate and validate sales, refund, return, discount, product, location, and margin reports.

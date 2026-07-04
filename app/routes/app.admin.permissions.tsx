@@ -23,6 +23,7 @@ type LocationNameRow = Pick<LocationRow, "shopify_location_id" | "name">;
 type PermissionRow = {
   id: string;
   shop_domain: string;
+  access_label: string | null;
   user_email: string | null;
   shopify_user_id: string | null;
   shopify_location_id: string | null;
@@ -63,6 +64,7 @@ type ActionData = {
   ok: boolean;
   message: string;
   fieldErrors?: {
+    access_label?: string;
     staff?: string;
     user_email?: string;
     shopify_user_id?: string;
@@ -72,8 +74,10 @@ type ActionData = {
 };
 
 type AccessFormState = {
+  access_label: string;
   user_email: string;
   shopify_user_id: string;
+  linkedShopifyUserIds: string[];
   role: string;
   locationIds: string[];
   selectedStaffId: string;
@@ -81,8 +85,9 @@ type AccessFormState = {
 
 type PermissionGroup = {
   key: string;
+  access_label: string;
   user_email: string;
-  shopify_user_id: string;
+  shopifyUserIds: string[];
   role: string;
   locationIds: string[];
   locationNames: string[];
@@ -92,8 +97,10 @@ type PermissionGroup = {
 type ButtonVariant = "primary" | "secondary" | "danger";
 
 const emptyAccessForm: AccessFormState = {
+  access_label: "",
   user_email: "",
   shopify_user_id: "",
+  linkedShopifyUserIds: [],
   role: "viewer",
   locationIds: [],
   selectedStaffId: "",
@@ -164,6 +171,14 @@ function normalizeEmailOrNull(email: string | null | undefined) {
   return normalizeEmail(email) || null;
 }
 
+function normalizeText(value: string | null | undefined) {
+  return value?.trim() ?? "";
+}
+
+function normalizeTextOrNull(value: string | null | undefined) {
+  return normalizeText(value) || null;
+}
+
 function getButtonStyle({
   variant,
   disabled,
@@ -232,7 +247,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       supabase
         .from("user_location_access")
         .select(
-          "id, shop_domain, user_email, shopify_user_id, shopify_location_id, location_name, role, can_view, can_manage, created_at",
+          "id, shop_domain, access_label, user_email, shopify_user_id, shopify_location_id, location_name, role, can_view, can_manage, created_at",
         )
         .eq("shop_domain", session.shop)
         .order("user_email", { ascending: true }),
@@ -292,9 +307,17 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (intent === "delete") {
     const email = normalizeEmailOrNull(String(formData.get("user_email") ?? ""));
+    const shopifyUserIds = formData
+      .getAll("shopify_user_ids")
+      .map((value) => normalizeText(String(value)))
+      .filter(Boolean);
     const shopifyUserId =
       String(formData.get("shopify_user_id") ?? "").trim() || null;
-    if (!email && !shopifyUserId) {
+    const userIdsToDelete = Array.from(
+      new Set([...shopifyUserIds, ...(shopifyUserId ? [shopifyUserId] : [])]),
+    );
+
+    if (!email && userIdsToDelete.length === 0) {
       return {
         ok: false,
         message: "Missing identity.",
@@ -312,13 +335,13 @@ export async function action({ request }: ActionFunctionArgs) {
             .eq("shop_domain", session.shop)
             .eq("user_email", email)
         : Promise.resolve({ error: null }),
-      shopifyUserId
-        ? supabase
-            .from("user_location_access")
-            .delete()
-            .eq("shop_domain", session.shop)
-            .eq("shopify_user_id", shopifyUserId)
-        : Promise.resolve({ error: null }),
+      ...userIdsToDelete.map((userId) =>
+        supabase
+          .from("user_location_access")
+          .delete()
+          .eq("shop_domain", session.shop)
+          .eq("shopify_user_id", userId),
+      ),
     ]);
     const error = deleteResults.find((result) => result.error)?.error;
     if (error) {
@@ -334,6 +357,9 @@ export async function action({ request }: ActionFunctionArgs) {
     } satisfies ActionData;
   }
 
+  const accessLabel = normalizeTextOrNull(
+    String(formData.get("access_label") ?? ""),
+  );
   const email = normalizeEmailOrNull(String(formData.get("user_email") ?? ""));
   const shopifyUserId = String(formData.get("shopify_user_id") ?? "").trim() || null;
   const role = String(formData.get("role") ?? "viewer");
@@ -345,6 +371,16 @@ export async function action({ request }: ActionFunctionArgs) {
       message: "Email or Shopify user ID is required.",
       fieldErrors: {
         user_email: "Enter the staff member's Shopify account email or Shopify user ID.",
+      },
+    } satisfies ActionData;
+  }
+
+  if (!email && !accessLabel) {
+    return {
+      ok: false,
+      message: "Access label is required when email is empty.",
+      fieldErrors: {
+        access_label: "Add a label so you can recognize this access.",
       },
     } satisfies ActionData;
   }
@@ -388,6 +424,42 @@ export async function action({ request }: ActionFunctionArgs) {
     ]),
   );
 
+  const existingShopifyUserIdsFromForm = formData
+    .getAll("linked_shopify_user_ids")
+    .map((value) => normalizeText(String(value)))
+    .filter(Boolean);
+  const { data: existingRowsData, error: existingRowsError } = email
+    ? await supabase
+        .from("user_location_access")
+        .select("shopify_user_id")
+        .eq("shop_domain", session.shop)
+        .eq("user_email", email)
+    : { data: [], error: null };
+
+  if (existingRowsError) {
+    return {
+      ok: false,
+      message: existingRowsError.message,
+    } satisfies ActionData;
+  }
+
+  const linkedShopifyUserIds = Array.from(
+    new Set(
+      [
+        ...existingShopifyUserIdsFromForm,
+        ...((existingRowsData ?? []) as Array<{ shopify_user_id: string | null }>)
+          .map((row) => normalizeText(row.shopify_user_id))
+          .filter(Boolean),
+        ...(shopifyUserId ? [shopifyUserId] : []),
+      ].filter(Boolean),
+    ),
+  );
+  const aliasesForRows = email
+    ? linkedShopifyUserIds.length > 0
+      ? linkedShopifyUserIds
+      : [null]
+    : linkedShopifyUserIds;
+
   const deleteExistingResults = await Promise.all([
     email
       ? supabase
@@ -396,13 +468,13 @@ export async function action({ request }: ActionFunctionArgs) {
           .eq("shop_domain", session.shop)
           .eq("user_email", email)
       : Promise.resolve({ error: null }),
-    shopifyUserId
-      ? supabase
-          .from("user_location_access")
-          .delete()
-          .eq("shop_domain", session.shop)
-          .eq("shopify_user_id", shopifyUserId)
-      : Promise.resolve({ error: null }),
+    ...linkedShopifyUserIds.map((userId) =>
+      supabase
+        .from("user_location_access")
+        .delete()
+        .eq("shop_domain", session.shop)
+        .eq("shopify_user_id", userId),
+    ),
   ]);
   const deleteExistingError = deleteExistingResults.find(
     (result) => result.error,
@@ -414,29 +486,33 @@ export async function action({ request }: ActionFunctionArgs) {
     } satisfies ActionData;
   }
 
-  const rows = role === "admin"
-    ? [
-        {
+  const rows = aliasesForRows.flatMap((aliasShopifyUserId) =>
+    role === "admin"
+      ? [
+          {
+            access_label: accessLabel,
+            shop_domain: session.shop,
+            user_email: email,
+            shopify_user_id: aliasShopifyUserId,
+            shopify_location_id: "*",
+            location_name: "All locations",
+            role: "admin",
+            can_view: true,
+            can_manage: true,
+          },
+        ]
+      : locationIds.map((locationId) => ({
+          access_label: accessLabel,
           shop_domain: session.shop,
           user_email: email,
-          shopify_user_id: shopifyUserId,
-          shopify_location_id: "*",
-          location_name: "All locations",
-          role: "admin",
+          shopify_user_id: aliasShopifyUserId,
+          shopify_location_id: locationId,
+          location_name: String(locationsById.get(locationId) ?? locationId),
+          role,
           can_view: true,
-          can_manage: true,
-        },
-      ]
-    : locationIds.map((locationId) => ({
-        shop_domain: session.shop,
-        user_email: email,
-        shopify_user_id: shopifyUserId,
-        shopify_location_id: locationId,
-        location_name: String(locationsById.get(locationId) ?? locationId),
-        role,
-        can_view: true,
-        can_manage: role === "manager",
-      }));
+          can_manage: role === "manager",
+        })),
+  );
 
   const { error: insertError } = await supabase.from("user_location_access").insert(rows);
   if (insertError) {
@@ -504,20 +580,25 @@ function groupPermissions(permissions: PermissionRow[]) {
 
   for (const row of permissions) {
     const canonicalEmail = normalizeEmail(row.user_email);
+    const accessLabel = normalizeText(row.access_label);
     const key = canonicalEmail
       ? `email:${canonicalEmail}`
-      : row.shopify_user_id
-        ? `shopify:${row.shopify_user_id}`
-        : `missing-${row.id}`;
+      : accessLabel
+        ? `label:${accessLabel.toLowerCase()}`
+        : row.shopify_user_id
+          ? `shopify:${row.shopify_user_id}`
+          : `missing-${row.id}`;
     const existing = groups.get(key);
     const isAdmin = row.role === "admin" || row.shopify_location_id === "*";
     const role = isAdmin ? "admin" : row.role || "viewer";
+    const shopifyUserId = normalizeText(row.shopify_user_id);
 
     if (!existing) {
       groups.set(key, {
         key,
+        access_label: accessLabel,
         user_email: canonicalEmail,
-        shopify_user_id: row.shopify_user_id ?? "",
+        shopifyUserIds: shopifyUserId ? [shopifyUserId] : [],
         role,
         locationIds:
           isAdmin || !row.shopify_location_id ? [] : [row.shopify_location_id],
@@ -531,12 +612,16 @@ function groupPermissions(permissions: PermissionRow[]) {
       continue;
     }
 
+    if (!existing.access_label && accessLabel) {
+      existing.access_label = accessLabel;
+    }
+
     if (!existing.user_email && canonicalEmail) {
       existing.user_email = canonicalEmail;
     }
 
-    if (!existing.shopify_user_id && row.shopify_user_id) {
-      existing.shopify_user_id = row.shopify_user_id;
+    if (shopifyUserId && !existing.shopifyUserIds.includes(shopifyUserId)) {
+      existing.shopifyUserIds.push(shopifyUserId);
     }
 
     if (isAdmin) {
@@ -562,8 +647,8 @@ function groupPermissions(permissions: PermissionRow[]) {
   }
 
   return Array.from(groups.values()).sort((a, b) =>
-    (a.user_email || a.shopify_user_id).localeCompare(
-      b.user_email || b.shopify_user_id,
+    (a.user_email || a.access_label || a.shopifyUserIds[0] || "").localeCompare(
+      b.user_email || b.access_label || b.shopifyUserIds[0] || "",
     ),
   );
 }
@@ -578,17 +663,6 @@ function getStaffLabel(staffMember: StaffMemberRow) {
   return `${label}${detail}`;
 }
 
-function getStaffDisplayName(staffMember?: StaffMemberRow) {
-  if (!staffMember) return null;
-
-  return (
-    staffMember.name ||
-    [staffMember.first_name, staffMember.last_name].filter(Boolean).join(" ") ||
-    staffMember.email ||
-    null
-  );
-}
-
 export default function AdminPermissionsPage() {
   const { shop, currentUser, currentAccess, locations, permissions, staffMembers } =
     useLoaderData<LoaderData>();
@@ -597,25 +671,6 @@ export default function AdminPermissionsPage() {
   const permissionGroups = useMemo(
     () => groupPermissions(permissions),
     [permissions],
-  );
-  const staffById = useMemo(
-    () =>
-      new Map(
-        staffMembers.map((staffMember) => [
-          staffMember.shopify_staff_id,
-          staffMember,
-        ]),
-      ),
-    [staffMembers],
-  );
-  const staffByEmail = useMemo(
-    () =>
-      new Map(
-        staffMembers
-          .map((staffMember) => [normalizeEmail(staffMember.email), staffMember] as const)
-          .filter(([email]) => Boolean(email)),
-      ),
-    [staffMembers],
   );
   const [formState, setFormState] = useState<AccessFormState>(emptyAccessForm);
   const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
@@ -629,6 +684,7 @@ export default function AdminPermissionsPage() {
   const visibleActionData = isActionFeedbackHidden ? undefined : actionData;
   const fieldErrors = visibleActionData?.ok ? undefined : visibleActionData?.fieldErrors;
   const hasStaffError = Boolean(fieldErrors?.staff || fieldErrors?.user_email);
+  const accessLabelFieldBorder = fieldErrors?.access_label ? "1px solid #d92d20" : "1px solid #c9cccf";
   const emailFieldBorder = fieldErrors?.user_email ? "1px solid #d92d20" : "1px solid #c9cccf";
   const staffFieldBorder = hasStaffError ? "1px solid #d92d20" : "1px solid #c9cccf";
   const roleFieldBorder = fieldErrors?.role ? "1px solid #d92d20" : "1px solid #c9cccf";
@@ -684,17 +740,13 @@ export default function AdminPermissionsPage() {
   function editGroup(group: PermissionGroup) {
     clearActionFeedback();
     setFormState({
+      access_label: group.access_label,
       user_email: group.user_email,
-      shopify_user_id: group.shopify_user_id,
+      shopify_user_id: group.shopifyUserIds[0] ?? "",
+      linkedShopifyUserIds: group.shopifyUserIds,
       role: group.role,
       locationIds: group.role === "admin" ? [] : group.locationIds,
-      selectedStaffId:
-        staffByEmail.get(group.user_email)?.shopify_staff_id ||
-        (staffMembers.some(
-          (staffMember) => staffMember.shopify_staff_id === group.shopify_user_id,
-        )
-          ? group.shopify_user_id
-          : ""),
+      selectedStaffId: "",
     });
   }
 
@@ -711,6 +763,7 @@ export default function AdminPermissionsPage() {
         ...current,
         selectedStaffId: "",
         shopify_user_id: "",
+        linkedShopifyUserIds: [],
         user_email: "",
       }));
       return;
@@ -722,12 +775,14 @@ export default function AdminPermissionsPage() {
     const staffEmail = normalizeEmail(staffMember?.email);
     const existingAccess =
       permissionGroups.find((group) => group.user_email === staffEmail) ??
-      permissionGroups.find((group) => group.shopify_user_id === staffId);
+      permissionGroups.find((group) => group.shopifyUserIds.includes(staffId));
 
     setFormState((current) => ({
       ...current,
       selectedStaffId: staffId,
+      access_label: existingAccess?.access_label ?? current.access_label,
       shopify_user_id: staffMember?.shopify_staff_id ?? current.shopify_user_id,
+      linkedShopifyUserIds: existingAccess?.shopifyUserIds ?? current.linkedShopifyUserIds,
       user_email: existingAccess?.user_email || staffEmail || current.user_email,
       role: existingAccess?.role ?? emptyAccessForm.role,
       locationIds:
@@ -774,6 +829,14 @@ export default function AdminPermissionsPage() {
           <Card title="Grant access">
             <Form method="post" style={{ display: "grid", gap: 18 }}>
               <input type="hidden" name="intent" value="save" />
+              {formState.linkedShopifyUserIds.map((userId) => (
+                <input
+                  key={userId}
+                  type="hidden"
+                  name="linked_shopify_user_ids"
+                  value={userId}
+                />
+              ))}
 
               <div style={{ display: "grid", gap: 10 }}>
                 <div>
@@ -782,12 +845,27 @@ export default function AdminPermissionsPage() {
                   </div>
                   <div style={{ fontWeight: 800, fontSize: 18 }}>Team member identity</div>
                   <FieldHelp>
-                    Add a team member using their Shopify account email or Shopify user ID.
-                  </FieldHelp>
-                  <FieldHelp>
-                    If they do not know their Shopify user ID, ask them to open ShopOps Studio and send you the ID shown on the Access required page.
+                    Use email as the main identity. Add Shopify user IDs only when a team member uses different Shopify/POS identities. If email is unavailable, add a label so you can recognize the access later.
                   </FieldHelp>
                 </div>
+
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Access label
+                  <input
+                    name="access_label"
+                    placeholder="Maya - POS Laval"
+                    value={formState.access_label}
+                    onChange={(event) => {
+                      clearActionFeedback();
+                      setFormState((current) => ({
+                        ...current,
+                        access_label: event.target.value,
+                      }));
+                    }}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: accessLabelFieldBorder }}
+                  />
+                  <FieldError>{fieldErrors?.access_label}</FieldError>
+                </label>
 
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
                   Shopify account email
@@ -982,11 +1060,14 @@ export default function AdminPermissionsPage() {
                 </thead>
                 <tbody>
                   {permissionGroups.map((group) => {
-                    const staffMember =
-                      staffByEmail.get(group.user_email) ?? staffById.get(group.shopify_user_id);
-                    const displayName = getStaffDisplayName(staffMember);
                     const primaryLabel =
-                      displayName || group.user_email || "Manual user";
+                      group.user_email ||
+                      group.access_label ||
+                      "Unlabeled access";
+                    const userIdsLabel =
+                      group.shopifyUserIds.length > 0
+                        ? group.shopifyUserIds.join(", ")
+                        : "None";
 
                     return (
                       <tr key={group.key}>
@@ -994,16 +1075,12 @@ export default function AdminPermissionsPage() {
                           <div style={{ fontWeight: 800 }}>
                             {primaryLabel}
                           </div>
-                          {group.user_email && group.user_email !== primaryLabel ? (
-                            <div style={{ color: "#616161", fontSize: 13 }}>
-                              {group.user_email}
-                            </div>
-                          ) : null}
-                          {group.shopify_user_id ? (
-                            <div style={{ color: "#616161", fontSize: 13 }}>
-                              Shopify user {group.shopify_user_id}
-                            </div>
-                          ) : null}
+                          <div style={{ color: "#616161", fontSize: 13 }}>
+                            Email: {group.user_email || "Not provided"}
+                          </div>
+                          <div style={{ color: "#616161", fontSize: 13 }}>
+                            Shopify user IDs: {userIdsLabel}
+                          </div>
                         </td>
                         <td style={{ padding: 10, borderBottom: "1px solid #eee", textTransform: "capitalize" }}>
                           {group.role}
@@ -1032,7 +1109,10 @@ export default function AdminPermissionsPage() {
                             <Form
                               method="post"
                               onSubmit={(event) => {
-                                const userLabel = group.user_email || "this user";
+                                const userLabel =
+                                  group.user_email ||
+                                  group.access_label ||
+                                  "this access";
                                 if (!window.confirm(`Delete access for ${userLabel}?`)) {
                                   event.preventDefault();
                                 }
@@ -1040,14 +1120,21 @@ export default function AdminPermissionsPage() {
                             >
                               <input type="hidden" name="intent" value="delete" />
                               <input type="hidden" name="user_email" value={group.user_email} />
-                              <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
+                              {group.shopifyUserIds.map((userId) => (
+                                <input
+                                  key={userId}
+                                  type="hidden"
+                                  name="shopify_user_ids"
+                                  value={userId}
+                                />
+                              ))}
                               <button
-                                disabled={isSubmitting || (!group.user_email && !group.shopify_user_id)}
+                                disabled={isSubmitting || (!group.user_email && group.shopifyUserIds.length === 0)}
                                 type="submit"
                                 {...getButtonProps({
                                   id: `delete-${group.key}`,
                                   variant: "danger",
-                                  disabled: isSubmitting || (!group.user_email && !group.shopify_user_id),
+                                  disabled: isSubmitting || (!group.user_email && group.shopifyUserIds.length === 0),
                                   compact: true,
                                 })}
                               >

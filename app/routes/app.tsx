@@ -95,7 +95,7 @@ export default function App() {
           >
             <h1 style={{ margin: 0, fontSize: 28 }}>Access required</h1>
             <p style={{ color: "#616161", margin: "8px 0 20px" }}>
-              Ask your ShopOps Studio admin to add you in Team Access.
+              Ask your admin to add your email or link this Shopify user ID to your existing Team Access.
             </p>
 
             <dl style={{ display: "grid", gap: 12, margin: 0 }}>
@@ -103,14 +103,14 @@ export default function App() {
                 <dt style={{ color: "#616161", fontWeight: 800 }}>Shop</dt>
                 <dd style={{ margin: 0 }}>{accessIdentity.shop}</dd>
               </div>
-              <div>
-                <dt style={{ color: "#616161", fontWeight: 800 }}>
-                  Shopify user ID
-                </dt>
-                <dd style={{ margin: 0 }}>
-                  {accessIdentity.shopifyUserId ?? "Unavailable"}
-                </dd>
-              </div>
+              {accessIdentity.shopifyUserId ? (
+                <div>
+                  <dt style={{ color: "#616161", fontWeight: 800 }}>
+                    Shopify user ID
+                  </dt>
+                  <dd style={{ margin: 0 }}>{accessIdentity.shopifyUserId}</dd>
+                </div>
+              ) : null}
               {accessIdentity.email ? (
                 <div>
                   <dt style={{ color: "#616161", fontWeight: 800 }}>Email</dt>
@@ -120,7 +120,9 @@ export default function App() {
             </dl>
 
             <p style={{ color: "#616161", margin: "20px 0 0" }}>
-              Send this information to your admin.
+              If no email is shown, send the Shopify user ID to your admin.
+              They can add an access label like{" "}
+              <span>Maya - POS Laval</span>.
             </p>
           </section>
         </main>

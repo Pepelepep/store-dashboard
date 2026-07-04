@@ -160,8 +160,9 @@ Expected result:
 
 - Admin can assign staff/location access without a synced Shopify staff list.
 - Permissions use the current Shopify session identity where available plus ShopOps Studio DB assignments.
-- Hints explain that manual email or Shopify user ID entry is the public app flow.
+- Hints explain that email is the main identity and Shopify user IDs are aliases.
 - Blocked users can send the Shopify user ID shown on the Access required page to an admin.
+- Multiple Shopify user IDs can be linked to one person. Access label is display-only for recognizing ID-only access and is not used for authorization matching.
 - `user_location_access.user_email` is a staff/app permission field, not a customer email field. `shopify_user_id` may be used for session identity matching.
 
 ## Expenses

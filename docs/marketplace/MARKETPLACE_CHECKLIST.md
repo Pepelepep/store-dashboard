@@ -19,7 +19,7 @@ Draft status: marketplace preparation checklist.
 
 - [x] Removed `read_users` from public marketplace scope package.
 - [x] Confirmed public App Store permissions use current Shopify session identity plus ShopOps Studio DB assignments.
-- [x] Confirmed merchant admins manage access by manual staff email or Shopify user ID entry.
+- [x] Confirmed merchant admins manage access manually with email as the main identity, Shopify user IDs as aliases, and display-only access labels for ID-only access.
 - [x] Confirmed staff sales attribution is best-effort based on available order/session data.
 - [x] Confirmed staff attribution failures fall back to location/source reporting and do not affect financial totals.
 - [x] Kept `staff_members` and staff attribution fields for future custom/Plus support.
