@@ -253,7 +253,7 @@ export function getStaffDisplayLabel(row: DashboardSalesOrderLineRow) {
     row.staff_member_name ||
     row.staff_member_email ||
     row.staff_member_id ||
-    "Unknown staff"
+    "Unassigned / unavailable"
   );
 }
 

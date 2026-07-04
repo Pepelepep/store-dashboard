@@ -60,6 +60,7 @@ export type DashboardSalesOrderLineRow = Pick<
   | "staff_member_id"
   | "staff_member_name"
   | "staff_member_email"
+  | "staff_source"
 >;
 
 export type ActiveDrilldowns = {
@@ -232,5 +233,6 @@ export type DashboardLoaderData = {
   };
   stockAlerts: StockAlertRow[];
   salesOrderLines: DashboardSalesOrderLineRow[];
+  staffAttributionAvailable: boolean;
   errors: string[];
 };

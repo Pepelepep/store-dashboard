@@ -114,11 +114,13 @@ function SalesTable({
 export function SalesByStaffCard({
   salesByStaff,
   financialMetricsVersion,
+  staffAttributionAvailable,
   selectedStaffKey,
   onSelectStaff,
 }: {
   salesByStaff: StaffSalesRow[];
   financialMetricsVersion: FinancialMetricsVersion;
+  staffAttributionAvailable: boolean;
   selectedStaffKey?: string | null;
   onSelectStaff?: (row: StaffSalesRow) => void;
 }) {
@@ -146,6 +148,21 @@ export function SalesByStaffCard({
           : undefined
       }
     >
+      {!staffAttributionAvailable ? (
+        <div
+          style={{
+            border: "1px solid #e5e7eb",
+            borderRadius: 12,
+            color: "#616161",
+            padding: 12,
+            marginBottom: 12,
+            background: "#fafafa",
+            lineHeight: 1.4,
+          }}
+        >
+          Staff attribution is unavailable for this store. Sales remain grouped by location/source.
+        </div>
+      ) : null}
       {salesByStaff.length > 0 ? (
         <SalesTable
           headers={["Staff", "Units", revenueLabel]}

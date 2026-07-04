@@ -120,7 +120,7 @@ Expected outcome:
 - Order links point to Shopify admin order pages.
 - Empty states are clear if data is unavailable.
 - Reporting is presented as operational information, not accounting, tax, legal, payroll, or financial advice.
-- Staff sales attribution is best-effort. If staff names/emails are unavailable, reporting uses safe fallbacks such as `Unknown staff` or `Unassigned`.
+- Staff sales attribution is best-effort. If staff names/emails are unavailable, reporting uses safe fallbacks such as `Unassigned / unavailable`, location, and source where available.
 
 ## Open Locations
 
@@ -202,17 +202,17 @@ Route: `/app/admin/permissions`
 Steps:
 
 1. Open Permissions as admin.
-2. Enter a staff email manually.
+2. Enter a Shopify account email or Shopify user ID manually.
 3. Assign a role and one or more locations.
 4. Review optional staff suggestions only if existing `staff_members` data is present.
 5. Create or inspect a viewer/manager permission in a test shop only.
 
 Expected outcome:
 
-- Admin can assign staff email identities to locations without a synced Shopify staff list.
+- Admin can assign staff identities to locations without a synced Shopify staff list.
 - Non-admin users see only permitted dashboard locations.
-- Permissions use the currently logged-in Shopify staff identity from the embedded app session where available plus ShopOps Studio database assignments in `user_location_access`.
-- `user_location_access.user_email` is an app permission identity field, not a customer email field.
+- Permissions use the current Shopify session identity plus ShopOps Studio database assignments in `user_location_access`.
+- `user_location_access.user_email` is an app permission identity field, not a customer email field. `user_location_access.shopify_user_id` may also be used when Shopify provides a current user ID.
 
 ## Verify Expenses
 
@@ -236,8 +236,8 @@ Expected outcome:
 - Explain that the public app does not request `read_users` because Shopify Partner Support confirmed it is unavailable for public App Store apps.
 - Explain that `read_orders` powers sales, line items, products sold, discounts, refunds, returns, transactions, location performance, staff attribution where available, and order-level reporting completeness.
 - Explain that `read_all_orders` supports historical reporting, backfills after install, and period comparisons beyond the recent order access window.
-- Explain that permissions use current embedded-session staff identity plus ShopOps Studio DB assignments, and merchant admins manage access by email.
-- Explain that staff sales attribution is best-effort based on available order/session data.
+- Explain that permissions use current Shopify session identity plus ShopOps Studio DB assignments, and merchant admins manage access by email or Shopify user ID.
+- Explain that staff sales attribution is best-effort based on available order/session data. If Shopify blocks `staffMember`, the app falls back to location/source reporting and financial totals remain accurate.
 - Explain that advanced Shopify staff directory sync is future-only for custom/Plus/Advanced implementations.
 - Explain that protected customer/order data may be processed because Shopify order records can include customer/order information needed to calculate and validate sales, refund, return, discount, product, location, and margin reports.
 - Explain that no individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored.

@@ -84,7 +84,7 @@ function buildStaffOptions(orderLines: OrderLineDbRow[]) {
   if (hasUnknownStaff) {
     sortedOptions.push({
       value: UNKNOWN_STAFF_FILTER_VALUE,
-      label: "Unknown staff",
+      label: "Unassigned / unavailable",
     });
   }
 
@@ -536,8 +536,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
       staff_member_id: row.staff_member_id,
       staff_member_name: row.staff_member_name,
       staff_member_email: row.staff_member_email,
+      staff_source: row.staff_source,
     }),
   );
+  const staffAttributionAvailable =
+    salesOrderLines.length === 0 ||
+    salesOrderLines.some(
+      (row) =>
+        row.staff_member_id ||
+        row.staff_member_name ||
+        row.staff_member_email ||
+        (row.staff_source && row.staff_source !== "unavailable"),
+    );
 
   return {
     shop: session.shop,
@@ -589,6 +599,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     },
     stockAlerts,
     salesOrderLines,
+    staffAttributionAvailable,
     errors,
   } satisfies LoaderData;
 }
@@ -652,6 +663,7 @@ export default function DbDashboardPage() {
     kpis,
     stockAlerts,
     salesOrderLines,
+    staffAttributionAvailable,
     errors,
   } = useLoaderData<LoaderData>();
   const [activeDrilldowns, setActiveDrilldowns] =
@@ -877,6 +889,7 @@ export default function DbDashboardPage() {
               <SalesByStaffCard
                 salesByStaff={drilldownSalesByStaff}
                 financialMetricsVersion={financialMetricsVersion}
+                staffAttributionAvailable={staffAttributionAvailable}
                 selectedStaffKey={selectedStaffKey}
                 onSelectStaff={(row) =>
                   toggleDrilldown("staff", {

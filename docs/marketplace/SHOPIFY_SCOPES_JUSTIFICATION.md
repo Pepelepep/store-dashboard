@@ -180,7 +180,7 @@ Reason:
 Permissions flow:
 
 - ShopOps Studio uses the currently logged-in Shopify staff identity from the embedded app session where available.
-- Merchant admins manage role and location assignments by manually entering staff emails in ShopOps Studio.
+- Merchant admins manage role and location assignments by manually entering Shopify account emails or Shopify user IDs in ShopOps Studio.
 - Assignments are stored in `user_location_access`.
 - `user_location_access.user_email` is an app permission identity field, not a customer email field.
 - Shopify user IDs from the current session may be stored when available to support identity matching.
@@ -189,7 +189,8 @@ Staff attribution flow:
 
 - Staff sales attribution remains best-effort.
 - If Shopify order data includes staff attribution without `read_users`, ShopOps Studio may store nullable `staff_member_id`, `staff_member_name`, and `staff_member_email` values.
-- If staff names/emails are unavailable, reporting should display safe fallbacks such as `Unknown staff` or `Unassigned`.
+- If Shopify blocks `staffMember` or staff names/emails are unavailable, order sync continues without staff fields, reporting displays safe fallbacks such as `Unassigned / unavailable`, and sales remain grouped by location/source where available.
+- Missing staff attribution does not affect revenue, refund, return, COGS, margin, or other financial totals.
 - `orders.staff_member_email` and `order_lines.staff_member_email` are staff attribution fields, not customer email fields.
 
 Future/custom support:

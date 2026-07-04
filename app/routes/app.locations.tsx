@@ -419,7 +419,7 @@ function buildStaffOptions(orderLines: OrderLineDbRow[]) {
   if (hasUnknownStaff) {
     sortedOptions.push({
       value: UNKNOWN_STAFF_FILTER_VALUE,
-      label: "Unknown staff",
+      label: "Unassigned / unavailable",
     });
   }
 
@@ -513,7 +513,7 @@ function getStaffDrilldownValue(row: LocationsSalesRow) {
     row.staff_member_id ||
     row.staff_member_email ||
     row.staff_member_name ||
-    "Unknown staff"
+    "Unassigned / unavailable"
   );
 }
 
@@ -522,7 +522,7 @@ function getStaffDrilldownLabel(row: LocationsSalesRow) {
     row.staff_member_name ||
     row.staff_member_email ||
     row.staff_member_id ||
-    "Unknown staff"
+    "Unassigned / unavailable"
   );
 }
 

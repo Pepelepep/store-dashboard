@@ -68,7 +68,7 @@ Expected result:
 - Dashboard shows operational reporting for the selected location/date range.
 - Discounts, refunds, returns, COGS, gross profit, and margin context appear where demo data supports them.
 - Tables remain shop-scoped and permission-filtered.
-- Staff attribution is best-effort. If staff names/emails are unavailable, safe fallbacks such as `Unknown staff` or `Unassigned` are acceptable.
+- Staff attribution is best-effort. If staff names/emails are unavailable, safe fallbacks such as `Unassigned / unavailable`, location, and source where available are acceptable.
 
 ## No Sales Date Range
 
@@ -151,7 +151,7 @@ Steps:
 
 1. Open Permissions as admin.
 2. Confirm locations appear after location sync.
-3. Enter a staff email manually.
+3. Enter a Shopify account email or Shopify user ID manually.
 4. Assign a role and one or more locations.
 5. Review optional staff suggestions only if existing `staff_members` data is present.
 6. Review existing access rules or create a demo-only viewer/manager assignment.
@@ -159,9 +159,9 @@ Steps:
 Expected result:
 
 - Admin can assign staff/location access without a synced Shopify staff list.
-- Permissions use the current embedded Shopify staff identity where available plus ShopOps Studio DB assignments.
-- Hints explain that manual email entry is the primary public app flow.
-- `user_location_access.user_email` is a staff/app permission field, not a customer email field.
+- Permissions use the current Shopify session identity where available plus ShopOps Studio DB assignments.
+- Hints explain that manual email or Shopify user ID entry is the public app flow.
+- `user_location_access.user_email` is a staff/app permission field, not a customer email field. `shopify_user_id` may be used for session identity matching.
 
 ## Expenses
 
@@ -190,6 +190,7 @@ Expected result:
 - `orders.staff_member_email` and `order_lines.staff_member_email` are staff attribution fields, not customer email fields.
 - `read_all_orders` is included for historical reporting and backfills.
 - `read_users` is not requested for the public App Store app.
+- Staff attribution is best-effort. If Shopify blocks `staffMember`, ShopOps Studio falls back to location/source reporting and financial totals remain accurate.
 - Advanced Shopify staff sync is future-only for custom/Plus/Advanced implementations.
 - Compliance webhooks validate Shopify HMAC through Shopify webhook authentication. Valid requests return 200; invalid HMAC requests return 401.
 - Render Cron should call `/internal/cron/process-sync-jobs` every 5 minutes with `Authorization: Bearer <cron secret>`.

@@ -18,9 +18,10 @@ Draft status: marketplace preparation checklist.
 ## Phase 7B Status
 
 - [x] Removed `read_users` from public marketplace scope package.
-- [x] Confirmed public App Store permissions use current embedded-session staff identity plus ShopOps Studio DB assignments.
-- [x] Confirmed merchant admins manage access by manual staff email entry.
+- [x] Confirmed public App Store permissions use current Shopify session identity plus ShopOps Studio DB assignments.
+- [x] Confirmed merchant admins manage access by manual staff email or Shopify user ID entry.
 - [x] Confirmed staff sales attribution is best-effort based on available order/session data.
+- [x] Confirmed staff attribution failures fall back to location/source reporting and do not affect financial totals.
 - [x] Kept `staff_members` and staff attribution fields for future custom/Plus support.
 - [x] Documented advanced Shopify staff sync as future/custom-only.
 - [x] Documented no individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored.

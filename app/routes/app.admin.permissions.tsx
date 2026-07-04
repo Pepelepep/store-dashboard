@@ -49,6 +49,11 @@ type LoaderData = {
     shopifyUserId: string | null;
     displayName: string;
   };
+  currentAccess: {
+    role: string | null;
+    isAdmin: boolean;
+    source: string;
+  };
   locations: LocationRow[];
   permissions: PermissionRow[];
   staffMembers: StaffMemberRow[];
@@ -155,6 +160,10 @@ function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() ?? "";
 }
 
+function normalizeEmailOrNull(email: string | null | undefined) {
+  return normalizeEmail(email) || null;
+}
+
 function getButtonStyle({
   variant,
   disabled,
@@ -257,6 +266,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return {
     shop: session.shop,
     currentUser: permissionContext.identity,
+    currentAccess: {
+      role: permissionContext.role,
+      isAdmin: permissionContext.isAdmin,
+      source: permissionContext.accessSource,
+    },
     locations,
     permissions,
     staffMembers,
@@ -277,23 +291,36 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(formData.get("intent") ?? "save");
 
   if (intent === "delete") {
-    const email = normalizeEmail(String(formData.get("user_email") ?? ""));
-    if (!email) {
+    const email = normalizeEmailOrNull(String(formData.get("user_email") ?? ""));
+    const shopifyUserId =
+      String(formData.get("shopify_user_id") ?? "").trim() || null;
+    if (!email && !shopifyUserId) {
       return {
         ok: false,
-        message: "Missing email.",
+        message: "Missing identity.",
         fieldErrors: {
-          user_email: "Email is required to delete access.",
+          user_email: "Email or Shopify user ID is required to delete access.",
         },
       } satisfies ActionData;
     }
 
-    const { error } = await supabase
-      .from("user_location_access")
-      .delete()
-      .eq("shop_domain", session.shop)
-      .eq("user_email", email);
-
+    const deleteResults = await Promise.all([
+      email
+        ? supabase
+            .from("user_location_access")
+            .delete()
+            .eq("shop_domain", session.shop)
+            .eq("user_email", email)
+        : Promise.resolve({ error: null }),
+      shopifyUserId
+        ? supabase
+            .from("user_location_access")
+            .delete()
+            .eq("shop_domain", session.shop)
+            .eq("shopify_user_id", shopifyUserId)
+        : Promise.resolve({ error: null }),
+    ]);
+    const error = deleteResults.find((result) => result.error)?.error;
     if (error) {
       return {
         ok: false,
@@ -307,17 +334,17 @@ export async function action({ request }: ActionFunctionArgs) {
     } satisfies ActionData;
   }
 
-  const email = normalizeEmail(String(formData.get("user_email") ?? ""));
+  const email = normalizeEmailOrNull(String(formData.get("user_email") ?? ""));
   const shopifyUserId = String(formData.get("shopify_user_id") ?? "").trim() || null;
   const role = String(formData.get("role") ?? "viewer");
   const locationIds = formData.getAll("locationIds").map(String).filter(Boolean);
 
-  if (!email) {
+  if (!email && !shopifyUserId) {
     return {
       ok: false,
-      message: "Email is required.",
+      message: "Email or Shopify user ID is required.",
       fieldErrors: {
-        user_email: "Enter the staff member's Shopify account email.",
+        user_email: "Enter the staff member's Shopify account email or Shopify user ID.",
       },
     } satisfies ActionData;
   }
@@ -361,15 +388,29 @@ export async function action({ request }: ActionFunctionArgs) {
     ]),
   );
 
-  const { error: deleteError } = await supabase
-    .from("user_location_access")
-    .delete()
-    .eq("shop_domain", session.shop)
-    .eq("user_email", email);
-  if (deleteError) {
+  const deleteExistingResults = await Promise.all([
+    email
+      ? supabase
+          .from("user_location_access")
+          .delete()
+          .eq("shop_domain", session.shop)
+          .eq("user_email", email)
+      : Promise.resolve({ error: null }),
+    shopifyUserId
+      ? supabase
+          .from("user_location_access")
+          .delete()
+          .eq("shop_domain", session.shop)
+          .eq("shopify_user_id", shopifyUserId)
+      : Promise.resolve({ error: null }),
+  ]);
+  const deleteExistingError = deleteExistingResults.find(
+    (result) => result.error,
+  )?.error;
+  if (deleteExistingError) {
     return {
       ok: false,
-      message: deleteError.message,
+      message: deleteExistingError.message,
     } satisfies ActionData;
   }
 
@@ -549,7 +590,7 @@ function getStaffDisplayName(staffMember?: StaffMemberRow) {
 }
 
 export default function AdminPermissionsPage() {
-  const { shop, currentUser, locations, permissions, staffMembers } =
+  const { shop, currentUser, currentAccess, locations, permissions, staffMembers } =
     useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
@@ -702,34 +743,53 @@ export default function AdminPermissionsPage() {
         <header style={{ marginBottom: 28 }}>
           <h1 style={{ margin: 0, fontSize: 32 }}>Team Access</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Control which team members can view each location.
+            Add a team member by Shopify account email or Shopify user ID, then assign locations.
           </p>
         </header>
 
         <div style={{ display: "grid", gap: 20 }}>
+          <Card title="Current detected identity">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, fontSize: 14 }}>
+              <div>
+                <div style={{ color: "#616161", fontWeight: 800 }}>Shopify user ID</div>
+                <div style={{ fontWeight: 700 }}>{currentUser.shopifyUserId ?? "Unavailable"}</div>
+              </div>
+              <div>
+                <div style={{ color: "#616161", fontWeight: 800 }}>Email</div>
+                <div style={{ fontWeight: 700 }}>{currentUser.email ?? "Unavailable"}</div>
+              </div>
+              <div>
+                <div style={{ color: "#616161", fontWeight: 800 }}>Role</div>
+                <div style={{ fontWeight: 700 }}>{currentAccess.role ?? "No assigned role"}</div>
+              </div>
+              <div>
+                <div style={{ color: "#616161", fontWeight: 800 }}>Access source</div>
+                <div style={{ fontWeight: 700 }}>
+                  {currentAccess.isAdmin ? "Admin" : "Non-admin"} · {currentAccess.source}
+                </div>
+              </div>
+            </div>
+          </Card>
+
           <Card title="Grant access">
             <Form method="post" style={{ display: "grid", gap: 18 }}>
               <input type="hidden" name="intent" value="save" />
-              <input type="hidden" name="shopify_user_id" value={formState.shopify_user_id} />
 
               <div style={{ display: "grid", gap: 10 }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 800, color: "#616161", textTransform: "uppercase" }}>
                     Step 1
                   </div>
-                  <div style={{ fontWeight: 800, fontSize: 18 }}>User email</div>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>Team member identity</div>
                   <FieldHelp>
-                    Enter the Shopify account email for the staff member. ShopOps Studio
-                    uses this email with its own location access rules for the
-                    public app.
+                    Add a team member by Shopify account email or Shopify user ID, then assign locations.
                   </FieldHelp>
                 </div>
 
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Staff email
+                  Shopify account email
                   <input
                     name="user_email"
-                    required
                     placeholder="manager@example.com"
                     value={formState.user_email}
                     onChange={(event) => {
@@ -737,18 +797,37 @@ export default function AdminPermissionsPage() {
                       setFormState((current) => ({
                         ...current,
                         selectedStaffId: "",
-                        shopify_user_id: "",
                         user_email: event.target.value,
                       }));
                     }}
                     style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: emailFieldBorder }}
                   />
                   <FieldHelp>
-                    The user should sign in to Shopify with this email. Existing
-                    staff-directory data is optional and is not required for
-                    permissions.
+                    Stored in lower case for matching when Shopify exposes an email in the embedded app session.
                   </FieldHelp>
                   <FieldError>{fieldErrors?.user_email}</FieldError>
+                </label>
+
+                <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
+                  Shopify user ID
+                  <input
+                    name="shopify_user_id"
+                    placeholder="Optional"
+                    value={formState.shopify_user_id}
+                    onChange={(event) => {
+                      clearActionFeedback();
+                      setFormState((current) => ({
+                        ...current,
+                        selectedStaffId: "",
+                        shopify_user_id: event.target.value,
+                      }));
+                    }}
+                    style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: fieldErrors?.shopify_user_id ? "1px solid #d92d20" : "1px solid #c9cccf" }}
+                  />
+                  <FieldHelp>
+                    Optional. Use this when Shopify provides a user ID but no email for the current session.
+                  </FieldHelp>
+                  <FieldError>{fieldErrors?.shopify_user_id}</FieldError>
                 </label>
 
                 {staffMembers.length > 0 ? (
@@ -770,9 +849,7 @@ export default function AdminPermissionsPage() {
                       ))}
                     </select>
                     <FieldHelp>
-                      Suggestions can fill the email when available in existing
-                      staff data. Public App Store permissions do not require a
-                      synced Shopify staff list.
+                      Suggestions use any existing staff data already present. Public App Store permissions do not require a Shopify staff directory sync.
                     </FieldHelp>
                     <FieldError>{fieldErrors?.staff}</FieldError>
                   </label>
@@ -931,6 +1008,11 @@ export default function AdminPermissionsPage() {
                               {group.user_email}
                             </div>
                           ) : null}
+                          {group.shopify_user_id ? (
+                            <div style={{ color: "#616161", fontSize: 13 }}>
+                              Shopify user {group.shopify_user_id}
+                            </div>
+                          ) : null}
                         </td>
                         <td style={{ padding: 10, borderBottom: "1px solid #eee", textTransform: "capitalize" }}>
                           {group.role}
@@ -967,13 +1049,14 @@ export default function AdminPermissionsPage() {
                             >
                               <input type="hidden" name="intent" value="delete" />
                               <input type="hidden" name="user_email" value={group.user_email} />
+                              <input type="hidden" name="shopify_user_id" value={group.shopify_user_id} />
                               <button
-                                disabled={isSubmitting || !group.user_email}
+                                disabled={isSubmitting || (!group.user_email && !group.shopify_user_id)}
                                 type="submit"
                                 {...getButtonProps({
                                   id: `delete-${group.key}`,
                                   variant: "danger",
-                                  disabled: isSubmitting || !group.user_email,
+                                  disabled: isSubmitting || (!group.user_email && !group.shopify_user_id),
                                   compact: true,
                                 })}
                               >

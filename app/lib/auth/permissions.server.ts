@@ -23,6 +23,7 @@ export type PermissionContext = {
   identity: CurrentUserIdentity;
   isAdmin: boolean;
   role: string | null;
+  accessSource: "env_user_id" | "env_email" | "db_rule" | "fresh_install" | "none";
   allowedLocationIds: Set<string>;
 };
 
@@ -33,10 +34,6 @@ type PermissionRow = {
   role: string | null;
   can_view: boolean | null;
   can_manage: boolean | null;
-};
-
-type StaffMemberEmailRow = {
-  email: string | null;
 };
 
 function parseCsvEnv(value: string | undefined) {
@@ -73,6 +70,10 @@ function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() || null;
 }
 
+function normalizeShopifyUserId(userId: string | null | undefined) {
+  return userId?.trim() || null;
+}
+
 export function getCurrentUserIdentity({
   request,
   session,
@@ -85,12 +86,13 @@ export function getCurrentUserIdentity({
   const associatedUser = session.onlineAccessInfo?.associated_user;
 
   const email = normalizeEmail(associatedUser?.email);
-  const shopifyUserId =
+  const shopifyUserId = normalizeShopifyUserId(
     associatedUser?.id !== undefined && associatedUser?.id !== null
       ? String(associatedUser.id)
       : idTokenPayload?.sub !== undefined && idTokenPayload?.sub !== null
         ? String(idTokenPayload.sub)
-        : null;
+        : null,
+  );
 
   const nameParts = [associatedUser?.first_name, associatedUser?.last_name]
     .map((part) => part?.trim())
@@ -105,30 +107,6 @@ export function getCurrentUserIdentity({
   };
 }
 
-async function getStaffMemberEmail({
-  identity,
-  session,
-  supabase,
-}: {
-  identity: CurrentUserIdentity;
-  session: ShopifySessionLike;
-  supabase: SupabaseClient;
-}) {
-  if (identity.email || !identity.shopifyUserId) return null;
-
-  const { data, error } = await supabase
-    .from("staff_members")
-    .select("email")
-    .eq("shop_domain", session.shop)
-    .eq("shopify_staff_id", identity.shopifyUserId)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (error) throw new Response(error.message, { status: 500 });
-
-  return normalizeEmail((data as StaffMemberEmailRow | null)?.email);
-}
-
 export async function getPermissionContext({
   request,
   session,
@@ -139,18 +117,6 @@ export async function getPermissionContext({
   supabase: SupabaseClient;
 }): Promise<PermissionContext> {
   const identity = getCurrentUserIdentity({ request, session });
-  const staffMemberEmail = await getStaffMemberEmail({
-    identity,
-    session,
-    supabase,
-  });
-  if (staffMemberEmail) {
-    identity.email = staffMemberEmail;
-    if (identity.displayName === identity.shopifyUserId) {
-      identity.displayName = staffMemberEmail;
-    }
-  }
-
   const adminEmails = parseCsvEnv(process.env.ADMIN_EMAILS);
   const adminShopifyUserIds = parseCsvEnv(process.env.ADMIN_SHOPIFY_USER_IDS);
 
@@ -166,29 +132,29 @@ export async function getPermissionContext({
     if (countError) throw new Response(countError.message, { status: 500 });
     shopPermissionRuleCount = count ?? 0;
 
-    let query = supabase
+    const { data, error } = await supabase
       .from("user_location_access")
       .select(
         "user_email, shopify_user_id, shopify_location_id, role, can_view, can_manage",
       )
       .eq("shop_domain", session.shop);
-
-    if (identity.email) {
-      query = query.eq("user_email", identity.email);
-    } else if (identity.shopifyUserId) {
-      query = query.eq("shopify_user_id", identity.shopifyUserId);
-    }
-
-    const { data, error } = await query;
     if (error) throw new Response(error.message, { status: 500 });
-    rows = (data ?? []) as PermissionRow[];
+    rows = ((data ?? []) as PermissionRow[]).filter((row) => {
+      const rowEmail = normalizeEmail(row.user_email);
+      const rowShopifyUserId = normalizeShopifyUserId(row.shopify_user_id);
+
+      return (
+        (identity.email && rowEmail === identity.email) ||
+        (identity.shopifyUserId && rowShopifyUserId === identity.shopifyUserId)
+      );
+    });
   }
 
-  const isBootstrapAdmin =
-    (identity.email ? adminEmails.has(identity.email) : false) ||
-    (identity.shopifyUserId
-      ? adminShopifyUserIds.has(identity.shopifyUserId.toLowerCase())
-      : false);
+  const isEnvUserIdAdmin = identity.shopifyUserId
+    ? adminShopifyUserIds.has(identity.shopifyUserId.toLowerCase())
+    : false;
+  const isEnvEmailAdmin = identity.email ? adminEmails.has(identity.email) : false;
+  const isBootstrapAdmin = isEnvUserIdAdmin || isEnvEmailAdmin;
   const isFreshInstallSetupAdmin =
     shopPermissionRuleCount === 0 &&
     Boolean(identity.email || identity.shopifyUserId);
@@ -201,7 +167,26 @@ export async function getPermissionContext({
   }
 
   const isDbAdmin = rows.some((row) => row.role === "admin");
+  const hasDbRule = rows.length > 0;
   const isAdmin = isBootstrapAdmin || isDbAdmin || isFreshInstallSetupAdmin;
+  const accessSource: PermissionContext["accessSource"] = isEnvUserIdAdmin
+    ? "env_user_id"
+    : isEnvEmailAdmin
+      ? "env_email"
+      : isDbAdmin
+        ? "db_rule"
+        : isFreshInstallSetupAdmin
+          ? "fresh_install"
+          : hasDbRule
+            ? "db_rule"
+            : "none";
+
+  console.info("[permissions] access evaluated", {
+    shop: session.shop,
+    shopify_user_id_present: Boolean(identity.shopifyUserId),
+    email_present: Boolean(identity.email),
+    admin_source: accessSource,
+  });
 
   const allowedLocationIds = new Set<string>();
   for (const row of rows) {
@@ -228,6 +213,7 @@ export async function getPermissionContext({
     identity,
     isAdmin,
     role,
+    accessSource,
     allowedLocationIds,
   };
 }
@@ -238,6 +224,13 @@ export async function assertAdminAccess(args: {
   supabase: SupabaseClient;
 }) {
   const permissions = await getPermissionContext(args);
+
+  if (!permissions.identity.email && !permissions.identity.shopifyUserId) {
+    throw new Response(
+      "Forbidden: ShopOps Studio could not detect your Shopify session identity. Reopen the app from Shopify admin and ask an app admin to confirm your access.",
+      { status: 403 },
+    );
+  }
 
   if (!permissions.isAdmin) {
     throw new Response("Forbidden: admin access required", { status: 403 });
