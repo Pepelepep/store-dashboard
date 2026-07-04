@@ -689,6 +689,22 @@ export default function AdminPermissionsPage() {
   const staffFieldBorder = hasStaffError ? "1px solid #d92d20" : "1px solid #c9cccf";
   const roleFieldBorder = fieldErrors?.role ? "1px solid #d92d20" : "1px solid #c9cccf";
   const locationsBorder = fieldErrors?.locations ? "1px solid #d92d20" : "1px solid transparent";
+  const formShopifyUserIds = Array.from(
+    new Set(
+      [
+        ...formState.linkedShopifyUserIds,
+        normalizeText(formState.shopify_user_id),
+      ].filter(Boolean),
+    ),
+  );
+  const formPrimaryLabel =
+    normalizeText(formState.access_label) ||
+    normalizeEmail(formState.user_email) ||
+    formShopifyUserIds[0] ||
+    "Unlabeled access";
+  const formEmailLabel = normalizeEmail(formState.user_email) || "Not provided";
+  const formUserIdsLabel =
+    formShopifyUserIds.length > 0 ? formShopifyUserIds.join(", ") : "None";
 
   useEffect(() => {
     setIsActionFeedbackHidden(false);
@@ -905,6 +921,23 @@ export default function AdminPermissionsPage() {
                   <FieldError>{fieldErrors?.shopify_user_id}</FieldError>
                 </label>
 
+                <div
+                  style={{
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 8,
+                    padding: 12,
+                    background: "#fafafa",
+                  }}
+                >
+                  <div style={{ fontWeight: 800 }}>{formPrimaryLabel}</div>
+                  <div style={{ color: "#616161", fontSize: 13 }}>
+                    Email: {formEmailLabel}
+                  </div>
+                  <div style={{ color: "#616161", fontSize: 13 }}>
+                    Shopify user IDs: {formUserIdsLabel}
+                  </div>
+                </div>
+
                 {staffMembers.length > 0 ? (
                   <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
                     Optional staff suggestion
@@ -1061,8 +1094,9 @@ export default function AdminPermissionsPage() {
                 <tbody>
                   {permissionGroups.map((group) => {
                     const primaryLabel =
-                      group.user_email ||
                       group.access_label ||
+                      group.user_email ||
+                      group.shopifyUserIds[0] ||
                       "Unlabeled access";
                     const userIdsLabel =
                       group.shopifyUserIds.length > 0
