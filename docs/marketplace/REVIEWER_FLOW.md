@@ -211,6 +211,7 @@ Expected outcome:
 
 - Admin can assign staff identities to locations without a synced Shopify staff list.
 - Non-admin users see only permitted dashboard locations.
+- Blocked users can send the Shopify user ID shown on the Access required page to an admin.
 - Permissions use the current Shopify session identity plus ShopOps Studio database assignments in `user_location_access`.
 - `user_location_access.user_email` is an app permission identity field, not a customer email field. `user_location_access.shopify_user_id` may also be used when Shopify provides a current user ID.
 

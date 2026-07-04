@@ -743,7 +743,7 @@ export default function AdminPermissionsPage() {
         <header style={{ marginBottom: 28 }}>
           <h1 style={{ margin: 0, fontSize: 32 }}>Team Access</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Add a team member by Shopify account email or Shopify user ID, then assign locations.
+            Add users manually by email or Shopify user ID.
           </p>
         </header>
 
@@ -782,7 +782,10 @@ export default function AdminPermissionsPage() {
                   </div>
                   <div style={{ fontWeight: 800, fontSize: 18 }}>Team member identity</div>
                   <FieldHelp>
-                    Add a team member by Shopify account email or Shopify user ID, then assign locations.
+                    Add a team member using their Shopify account email or Shopify user ID.
+                  </FieldHelp>
+                  <FieldHelp>
+                    If they do not know their Shopify user ID, ask them to open ShopOps Studio and send you the ID shown on the Access required page.
                   </FieldHelp>
                 </div>
 
@@ -802,14 +805,11 @@ export default function AdminPermissionsPage() {
                     }}
                     style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: emailFieldBorder }}
                   />
-                  <FieldHelp>
-                    Stored in lower case for matching when Shopify exposes an email in the embedded app session.
-                  </FieldHelp>
                   <FieldError>{fieldErrors?.user_email}</FieldError>
                 </label>
 
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
-                  Shopify user ID
+                  Shopify user ID optional
                   <input
                     name="shopify_user_id"
                     placeholder="Optional"
@@ -824,9 +824,6 @@ export default function AdminPermissionsPage() {
                     }}
                     style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: fieldErrors?.shopify_user_id ? "1px solid #d92d20" : "1px solid #c9cccf" }}
                   />
-                  <FieldHelp>
-                    Optional. Use this when Shopify provides a user ID but no email for the current session.
-                  </FieldHelp>
                   <FieldError>{fieldErrors?.shopify_user_id}</FieldError>
                 </label>
 
@@ -849,7 +846,7 @@ export default function AdminPermissionsPage() {
                       ))}
                     </select>
                     <FieldHelp>
-                      Suggestions use any existing staff data already present. Public App Store permissions do not require a Shopify staff directory sync.
+                      Optional suggestions only.
                     </FieldHelp>
                     <FieldError>{fieldErrors?.staff}</FieldError>
                   </label>
@@ -862,9 +859,6 @@ export default function AdminPermissionsPage() {
                     Step 2
                   </div>
                   <div style={{ fontWeight: 800, fontSize: 18 }}>Role</div>
-                  <FieldHelp>
-                    Choose what this user can do.
-                  </FieldHelp>
                 </div>
 
                 <label style={{ display: "grid", gap: 6, fontWeight: 700, minWidth: 0 }}>
@@ -899,9 +893,6 @@ export default function AdminPermissionsPage() {
                   Step 3
                 </div>
                 <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 4 }}>Locations</div>
-                <FieldHelp>
-                  Admins access all locations. For other roles, select one or more locations.
-                </FieldHelp>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
                   {locations.map((location) => (
                     <label key={location.shopify_location_id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
