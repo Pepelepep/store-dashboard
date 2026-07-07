@@ -5,6 +5,7 @@ name = "ShopOps POS attribution"
 handle = "shopops-pos-attribution"
 uid = "385c2ad6-d776-7000-615a-78dd26072b97a073a310"
 type = "ui_extension"
+description = "Runs ShopOps POS attribution in the background."
 
 [[extensions.targeting]]
 target = "pos.home.tile.render"

@@ -1,3 +1,6 @@
+/** @jsxImportSource preact */
+import { render } from "preact";
+
 const ATTRIBUTION_SOURCE = "pos_session";
 const PROPERTY_KEYS = {
   staffMemberId: "_shopops_staff_member_id",
@@ -220,17 +223,19 @@ function subscribe(api, path, callback) {
   return undefined;
 }
 
-function renderTile(root) {
-  if (!root || typeof root.createComponent !== "function") {
+function renderTile() {
+  if (typeof document === "undefined" || !document.body) {
     return;
   }
 
-  const tile = root.createComponent("Text", undefined, "ShopOps attribution active");
-  root.appendChild(tile);
+  render(
+    <s-tile heading="ShopOps" subheading="Staff tracking active" />,
+    document.body,
+  );
 }
 
-function register(api, root) {
-  renderTile(root);
+function register(api) {
+  renderTile();
   void stampCart(api);
 
   const unsubscribers = [
@@ -247,6 +252,12 @@ function register(api, root) {
   };
 }
 
+function getApi(root, api) {
+  if (api) return api;
+  if (typeof shopify !== "undefined") return shopify;
+  return root;
+}
+
 export default function shopopsPosAttribution(root, api) {
-  return register(api, root);
+  return register(getApi(root, api));
 }
