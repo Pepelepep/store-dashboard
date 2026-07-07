@@ -1,5 +1,3 @@
-/* global globalThis */
-
 const ATTRIBUTION_SOURCE = "pos_session";
 const PROPERTY_KEYS = {
   staffMemberId: "_shopops_staff_member_id",
