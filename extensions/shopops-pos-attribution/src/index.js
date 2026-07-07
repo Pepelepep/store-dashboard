@@ -249,8 +249,6 @@ function register(api, root) {
   };
 }
 
-const extensionHost = globalThis.shopify;
-
-if (extensionHost && typeof extensionHost.extend === "function") {
-  extensionHost.extend("pos.home.tile.render", (root, api) => register(api, root));
+export default function shopopsPosAttribution(root, api) {
+  return register(api, root);
 }
