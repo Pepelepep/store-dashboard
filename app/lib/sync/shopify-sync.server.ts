@@ -211,12 +211,17 @@ type DiscountAllocationNode = {
   discountApplication?: DiscountApplicationNode | null;
 };
 
+type CustomAttributeNode = {
+  key?: string | null;
+  value?: string | null;
+};
+
 type OrderLineItemNode = {
   id: string;
   title: string;
   quantity: number;
   sku?: string | null;
-  staffMember?: StaffMemberAttributionNode | null;
+  customAttributes?: CustomAttributeNode[] | null;
   variant?: {
     id: string;
     title?: string | null;
@@ -248,12 +253,6 @@ type StaffMemberNode = {
   isShopOwner?: boolean | null;
 };
 
-type StaffMemberAttributionNode = {
-  id: string;
-  name?: string | null;
-  email?: string | null;
-};
-
 type OrderTransactionNode = {
   id: string;
   kind?: string | null;
@@ -264,7 +263,6 @@ type OrderTransactionNode = {
   parentTransaction?: {
     id: string;
   } | null;
-  user?: StaffMemberAttributionNode | null;
 };
 
 type RefundLineItemNode = {
@@ -284,9 +282,7 @@ type RefundNode = {
 };
 
 type StaffSource =
-  | "line_item_staff"
-  | "order_staff"
-  | "transaction_user"
+  | "pos_session"
   | "unavailable";
 
 type StaffAttribution = {
@@ -305,7 +301,6 @@ type OrderNode = {
   cancelReason?: string | null;
   currencyCode?: string | null;
   displayFinancialStatus?: string | null;
-  staffMember?: StaffMemberAttributionNode | null;
   transactions?: OrderTransactionNode[] | null;
   refunds?: RefundNode[] | null;
   subtotalPriceSet?: MoneySet | null;
@@ -363,21 +358,18 @@ export type OrdersSyncBatchProgress = {
   cursor?: string | null;
   startDate?: string | null;
   endDate?: string | null;
-  staffAttributionAvailable?: boolean;
 };
 
 export type OrdersReconciliation48hBatchProgress = {
   cursor?: string | null;
   windowStart?: string | null;
   windowEnd?: string | null;
-  staffAttributionAvailable?: boolean;
 };
 
 export type FinancialBackfill30dBatchProgress = {
   cursor?: string | null;
   windowStart?: string | null;
   windowEnd?: string | null;
-  staffAttributionAvailable?: boolean;
 };
 
 export type SyncBatchResult = {
@@ -458,22 +450,24 @@ function getFinancialQueryDiscountApplicationFields() {
   `;
 }
 
-function getFinancialQueryLineItemFields(includeStaffAttribution: boolean) {
+const POS_ATTRIBUTION_PROPERTY_KEYS = {
+  staffMemberId: "_shopops_staff_member_id",
+  userId: "_shopops_user_id",
+  locationId: "_shopops_location_id",
+  deviceId: "_shopops_device_id",
+  deviceName: "_shopops_device_name",
+  attributionSource: "_shopops_attribution_source",
+} as const;
+
+function getFinancialQueryLineItemFields() {
   return `
     id
     title
     quantity
     sku
-    ${
-      includeStaffAttribution
-        ? `
-    staffMember {
-      id
-      name
-      email
-    }
-    `
-        : ""
+    customAttributes {
+      key
+      value
     }
     variant {
       id
@@ -541,7 +535,7 @@ function getFinancialQueryLineItemFields(includeStaffAttribution: boolean) {
   `;
 }
 
-function getFinancialQueryTransactionFields(includeUser = false) {
+function getFinancialQueryTransactionFields() {
   return `
     id
     kind
@@ -556,17 +550,6 @@ function getFinancialQueryTransactionFields(includeUser = false) {
     }
     parentTransaction {
       id
-    }
-    ${
-      includeUser
-        ? `
-    user {
-      id
-      name
-      email
-    }
-    `
-        : ""
     }
   `;
 }
@@ -770,45 +753,75 @@ function normalizeStaffId(staffId?: string | null) {
   return staffId?.split("/").pop() ?? null;
 }
 
-function getStaffAttribution(
-  staffMember?: StaffMemberAttributionNode | null,
-  source: StaffSource = "unavailable",
-): StaffAttribution {
-  if (!staffMember?.id) {
-    return {
-      staffMemberId: null,
-      staffMemberName: null,
-      staffMemberEmail: null,
-      staffSource: "unavailable",
-    };
-  }
-
+function getUnavailableStaffAttribution(): StaffAttribution {
   return {
-    staffMemberId: normalizeStaffId(staffMember.id),
-    staffMemberName: staffMember.name ?? null,
-    staffMemberEmail: staffMember.email ?? null,
-    staffSource: source,
+    staffMemberId: null,
+    staffMemberName: null,
+    staffMemberEmail: null,
+    staffSource: "unavailable",
   };
 }
 
-function getTransactionStaffAttribution(
-  transactions?: OrderTransactionNode[] | null,
-): StaffAttribution {
-  const transactionUser = (transactions ?? []).find(
-    (transaction) => transaction.user?.id,
-  )?.user;
+function getCustomAttributeValue(
+  attributes: CustomAttributeNode[] | null | undefined,
+  key: string,
+) {
+  const value = attributes?.find((attribute) => attribute.key === key)?.value;
+  const trimmed = value?.trim();
 
-  return getStaffAttribution(transactionUser, "transaction_user");
+  return trimmed ? trimmed : null;
 }
 
-function getOrderStaffAttribution(order: OrderNode): StaffAttribution {
-  const orderStaff = getStaffAttribution(order.staffMember, "order_staff");
+function getPosLineItemAttribution(lineItem: OrderLineItemNode) {
+  const source = getCustomAttributeValue(
+    lineItem.customAttributes,
+    POS_ATTRIBUTION_PROPERTY_KEYS.attributionSource,
+  );
+  const staffMemberId = getCustomAttributeValue(
+    lineItem.customAttributes,
+    POS_ATTRIBUTION_PROPERTY_KEYS.staffMemberId,
+  );
 
-  if (orderStaff.staffMemberId) {
-    return orderStaff;
-  }
+  return {
+    shopops_staff_member_id: staffMemberId,
+    shopops_user_id: getCustomAttributeValue(
+      lineItem.customAttributes,
+      POS_ATTRIBUTION_PROPERTY_KEYS.userId,
+    ),
+    shopops_pos_location_id: getCustomAttributeValue(
+      lineItem.customAttributes,
+      POS_ATTRIBUTION_PROPERTY_KEYS.locationId,
+    ),
+    shopops_pos_device_id: getCustomAttributeValue(
+      lineItem.customAttributes,
+      POS_ATTRIBUTION_PROPERTY_KEYS.deviceId,
+    ),
+    shopops_pos_device_name: getCustomAttributeValue(
+      lineItem.customAttributes,
+      POS_ATTRIBUTION_PROPERTY_KEYS.deviceName,
+    ),
+    shopops_attribution_source: source === "pos_session" ? source : null,
+    legacyStaffAttribution:
+      staffMemberId && source === "pos_session"
+        ? {
+            staffMemberId: normalizeStaffId(staffMemberId),
+            staffMemberName: null,
+            staffMemberEmail: null,
+            staffSource: "pos_session" as StaffSource,
+          }
+        : getUnavailableStaffAttribution(),
+  };
+}
 
-  return getTransactionStaffAttribution(order.transactions);
+function getPosBulkLineItemAttribution(lineItem: Record<string, unknown>) {
+  return getPosLineItemAttribution({
+    id: typeof lineItem.id === "string" ? lineItem.id : "",
+    title: typeof lineItem.title === "string" ? lineItem.title : "",
+    quantity: Number(lineItem.quantity ?? 0),
+    customAttributes: Array.isArray(lineItem.customAttributes)
+      ? (lineItem.customAttributes as CustomAttributeNode[])
+      : null,
+  });
 }
 
 function getAvailableQuantity(
@@ -2204,11 +2217,9 @@ export async function syncProductsBatch({
 async function getAllLineItemsForOrder({
   admin,
   order,
-  includeStaffAttribution = false,
 }: {
   admin: ShopifyAdminClient;
   order: OrderNode;
-  includeStaffAttribution?: boolean;
 }) {
   const allLineItems = [
     ...(order.lineItems.edges?.map((edge) => edge.node) ?? []),
@@ -2230,7 +2241,7 @@ async function getAllLineItemsForOrder({
                 }
                 edges {
                   node {
-                    ${getFinancialQueryLineItemFields(includeStaffAttribution)}
+                    ${getFinancialQueryLineItemFields()}
                   }
                 }
               }
@@ -4055,14 +4066,12 @@ async function upsertOrderNodes({
   shop,
   supabase,
   orders,
-  includeStaffAttribution,
   replaceExistingLines = false,
 }: {
   admin: ShopifyAdminClient;
   shop: string;
   supabase: SupabaseAdminClient;
   orders: OrderNode[];
-  includeStaffAttribution: boolean;
   replaceExistingLines?: boolean;
 }) {
   const { costByVariantId, costBySku } = await getVariantCostMaps({
@@ -4076,7 +4085,6 @@ async function upsertOrderNodes({
     const allLineItems = await getAllLineItemsForOrder({
       admin,
       order,
-      includeStaffAttribution,
     });
 
     orderLineItemsByOrderId.set(order.id, allLineItems);
@@ -4094,9 +4102,7 @@ async function upsertOrderNodes({
   const transactionRowsByOrderId = new Map<string, OrderTransactionNode[]>();
 
   for (const order of orders) {
-    const orderStaff = includeStaffAttribution
-      ? getOrderStaffAttribution(order)
-      : getStaffAttribution(null);
+    const orderStaff = getUnavailableStaffAttribution();
     const allLineItems = orderLineItemsByOrderId.get(order.id) ?? [];
     const {
       transactions,
@@ -4175,10 +4181,11 @@ async function upsertOrderNodes({
         revenue,
         quantity: lineItem.quantity,
       });
-      const lineStaff = includeStaffAttribution
-        ? getStaffAttribution(lineItem.staffMember, "line_item_staff")
-        : getStaffAttribution(null);
-      const staffAttribution = lineStaff.staffMemberId ? lineStaff : orderStaff;
+      const posAttribution = getPosLineItemAttribution(lineItem);
+      const staffAttribution = posAttribution.legacyStaffAttribution
+        .staffMemberId
+        ? posAttribution.legacyStaffAttribution
+        : orderStaff;
       const lineFinancials = lineFinancialsByLineItemId.get(lineItem.id);
       const existingCostAtSale = existingCostAtSaleByLineItemId.get(
         lineItem.id,
@@ -4230,6 +4237,12 @@ async function upsertOrderNodes({
         staff_member_name: staffAttribution.staffMemberName,
         staff_member_email: staffAttribution.staffMemberEmail,
         staff_source: staffAttribution.staffSource,
+        shopops_staff_member_id: posAttribution.shopops_staff_member_id,
+        shopops_user_id: posAttribution.shopops_user_id,
+        shopops_pos_location_id: posAttribution.shopops_pos_location_id,
+        shopops_pos_device_id: posAttribution.shopops_pos_device_id,
+        shopops_pos_device_name: posAttribution.shopops_pos_device_name,
+        shopops_attribution_source: posAttribution.shopops_attribution_source,
       });
     }
   }
@@ -4289,7 +4302,6 @@ async function syncOrdersPage({
   cursor,
   orderQuery,
   sortKey = "CREATED_AT",
-  includeStaffAttribution,
   replaceExistingLines = false,
 }: {
   admin: ShopifyAdminClient;
@@ -4298,7 +4310,6 @@ async function syncOrdersPage({
   cursor?: string | null;
   orderQuery: string;
   sortKey?: "CREATED_AT" | "UPDATED_AT";
-  includeStaffAttribution: boolean;
   replaceExistingLines?: boolean;
 }) {
   const data = await executeShopifyGraphql({
@@ -4326,19 +4337,8 @@ async function syncOrdersPage({
               cancelReason
               currencyCode
               displayFinancialStatus
-              ${
-                includeStaffAttribution
-                  ? `
-              staffMember {
-                id
-                name
-                email
-              }
-              `
-                  : ""
-              }
               transactions(first: 50) {
-                ${getFinancialQueryTransactionFields(includeStaffAttribution)}
+                ${getFinancialQueryTransactionFields()}
               }
               refunds {
                 ${getFinancialQueryRefundFields()}
@@ -4427,7 +4427,7 @@ async function syncOrdersPage({
                 }
                 edges {
                   node {
-                    ${getFinancialQueryLineItemFields(includeStaffAttribution)}
+                    ${getFinancialQueryLineItemFields()}
                   }
                 }
               }
@@ -4462,7 +4462,6 @@ async function syncOrdersPage({
     shop,
     supabase,
     orders,
-    includeStaffAttribution,
     replaceExistingLines,
   });
 
@@ -4495,36 +4494,13 @@ export async function syncOrdersBatch({
       : getIncrementalOrderDateRange();
   const orderQuery = buildOrderQuery(dateRange);
   const cursor = progress?.cursor ?? null;
-  let staffAttributionAvailable = progress?.staffAttributionAvailable !== false;
-  let staffAttributionError: string | null = null;
-  let pageResult: Awaited<ReturnType<typeof syncOrdersPage>>;
-
-  try {
-    pageResult = await syncOrdersPage({
-      admin,
-      shop,
-      supabase,
-      cursor,
-      orderQuery,
-      includeStaffAttribution: staffAttributionAvailable,
-    });
-  } catch (error) {
-    if (!staffAttributionAvailable) {
-      throw error;
-    }
-
-    staffAttributionAvailable = false;
-    staffAttributionError =
-      error instanceof Error ? error.message : String(error);
-    pageResult = await syncOrdersPage({
-      admin,
-      shop,
-      supabase,
-      cursor,
-      orderQuery,
-      includeStaffAttribution: false,
-    });
-  }
+  const pageResult = await syncOrdersPage({
+    admin,
+    shop,
+    supabase,
+    cursor,
+    orderQuery,
+  });
 
   const isDone = !pageResult.hasNextPage || pageResult.ordersSynced === 0;
   const orderLinesCogsRecomputed = isDone
@@ -4537,7 +4513,6 @@ export async function syncOrdersBatch({
       cursor: pageResult.hasNextPage ? pageResult.cursor : null,
       startDate: dateRange.startDate,
       endDate: dateRange.endDate,
-      staffAttributionAvailable,
     },
     counts: {
       ordersSynced: pageResult.ordersSynced,
@@ -4545,8 +4520,6 @@ export async function syncOrdersBatch({
       transactionsSynced: pageResult.transactionsSynced,
       pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
       orderLinesCogsRecomputed,
-      staffAttributionAvailable,
-      staffAttributionError,
     },
   };
 }
@@ -4591,40 +4564,15 @@ export async function syncOrdersReconciliation48hBatch({
     dateField: "updated_at",
   });
   const cursor = progress?.cursor ?? null;
-  let staffAttributionAvailable = progress?.staffAttributionAvailable !== false;
-  let staffAttributionError: string | null = null;
-  let pageResult: Awaited<ReturnType<typeof syncOrdersPage>>;
-
-  try {
-    pageResult = await syncOrdersPage({
-      admin,
-      shop,
-      supabase,
-      cursor,
-      orderQuery,
-      sortKey: "UPDATED_AT",
-      includeStaffAttribution: staffAttributionAvailable,
-      replaceExistingLines: true,
-    });
-  } catch (error) {
-    if (!staffAttributionAvailable) {
-      throw error;
-    }
-
-    staffAttributionAvailable = false;
-    staffAttributionError =
-      error instanceof Error ? error.message : String(error);
-    pageResult = await syncOrdersPage({
-      admin,
-      shop,
-      supabase,
-      cursor,
-      orderQuery,
-      sortKey: "UPDATED_AT",
-      includeStaffAttribution: false,
-      replaceExistingLines: true,
-    });
-  }
+  const pageResult = await syncOrdersPage({
+    admin,
+    shop,
+    supabase,
+    cursor,
+    orderQuery,
+    sortKey: "UPDATED_AT",
+    replaceExistingLines: true,
+  });
 
   const isDone = !pageResult.hasNextPage || pageResult.ordersSynced === 0;
 
@@ -4634,7 +4582,6 @@ export async function syncOrdersReconciliation48hBatch({
       cursor: pageResult.hasNextPage ? pageResult.cursor : null,
       windowStart,
       windowEnd,
-      staffAttributionAvailable,
     },
     counts: {
       ordersSynced: pageResult.ordersSynced,
@@ -4642,8 +4589,6 @@ export async function syncOrdersReconciliation48hBatch({
       transactionsSynced: pageResult.transactionsSynced,
       pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
       orderLinesCogsRecomputed: 0,
-      staffAttributionAvailable,
-      staffAttributionError,
       windowStart,
       windowEnd,
     },
@@ -4670,38 +4615,14 @@ export async function syncFinancialBackfill30dBatch({
     dateField: "created_at",
   });
   const cursor = progress?.cursor ?? null;
-  let staffAttributionAvailable = progress?.staffAttributionAvailable !== false;
-  let staffAttributionError: string | null = null;
-  let pageResult: Awaited<ReturnType<typeof syncOrdersPage>>;
-
-  try {
-    pageResult = await syncOrdersPage({
-      admin,
-      shop,
-      supabase,
-      cursor,
-      orderQuery,
-      sortKey: "CREATED_AT",
-      includeStaffAttribution: staffAttributionAvailable,
-    });
-  } catch (error) {
-    if (!staffAttributionAvailable) {
-      throw error;
-    }
-
-    staffAttributionAvailable = false;
-    staffAttributionError =
-      error instanceof Error ? error.message : String(error);
-    pageResult = await syncOrdersPage({
-      admin,
-      shop,
-      supabase,
-      cursor,
-      orderQuery,
-      sortKey: "CREATED_AT",
-      includeStaffAttribution: false,
-    });
-  }
+  const pageResult = await syncOrdersPage({
+    admin,
+    shop,
+    supabase,
+    cursor,
+    orderQuery,
+    sortKey: "CREATED_AT",
+  });
 
   const isDone = !pageResult.hasNextPage || pageResult.ordersSynced === 0;
 
@@ -4711,7 +4632,6 @@ export async function syncFinancialBackfill30dBatch({
       cursor: pageResult.hasNextPage ? pageResult.cursor : null,
       windowStart,
       windowEnd,
-      staffAttributionAvailable,
     },
     counts: {
       ordersSynced: pageResult.ordersSynced,
@@ -4719,8 +4639,6 @@ export async function syncFinancialBackfill30dBatch({
       transactionsSynced: pageResult.transactionsSynced,
       pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
       orderLinesCogsRecomputed: 0,
-      staffAttributionAvailable,
-      staffAttributionError,
       windowStart,
       windowEnd,
     },
@@ -4730,11 +4648,9 @@ export async function syncFinancialBackfill30dBatch({
 async function fetchOrderByIdForSync({
   admin,
   orderId,
-  includeStaffAttribution,
 }: {
   admin: ShopifyAdminClient;
   orderId: string;
-  includeStaffAttribution: boolean;
 }) {
   const data = await executeShopifyGraphql({
     admin,
@@ -4750,19 +4666,8 @@ async function fetchOrderByIdForSync({
             cancelReason
             currencyCode
             displayFinancialStatus
-            ${
-              includeStaffAttribution
-                ? `
-            staffMember {
-              id
-              name
-              email
-            }
-            `
-                : ""
-            }
             transactions(first: 50) {
-              ${getFinancialQueryTransactionFields(includeStaffAttribution)}
+              ${getFinancialQueryTransactionFields()}
             }
             refunds {
               ${getFinancialQueryRefundFields()}
@@ -4851,7 +4756,7 @@ async function fetchOrderByIdForSync({
               }
               edges {
                 node {
-                  ${getFinancialQueryLineItemFields(includeStaffAttribution)}
+                  ${getFinancialQueryLineItemFields()}
                 }
               }
             }
@@ -4885,26 +4790,10 @@ export async function syncOrderById({
   const startedAt = new Date().toISOString();
 
   try {
-    let staffAttributionAvailable = true;
-    let staffAttributionError: string | null = null;
-    let order: OrderNode | null = null;
-
-    try {
-      order = await fetchOrderByIdForSync({
-        admin,
-        orderId,
-        includeStaffAttribution: true,
-      });
-    } catch (error) {
-      staffAttributionAvailable = false;
-      staffAttributionError =
-        error instanceof Error ? error.message : String(error);
-      order = await fetchOrderByIdForSync({
-        admin,
-        orderId,
-        includeStaffAttribution: false,
-      });
-    }
+    const order = await fetchOrderByIdForSync({
+      admin,
+      orderId,
+    });
 
     if (!order) {
       const result = {
@@ -4912,8 +4801,6 @@ export async function syncOrderById({
         orderLinesSynced: 0,
         orderId,
         orderFound: false,
-        staffAttributionAvailable,
-        staffAttributionError,
       };
 
       await insertSyncRun({
@@ -4934,15 +4821,12 @@ export async function syncOrderById({
       shop,
       supabase,
       orders: [order],
-      includeStaffAttribution: staffAttributionAvailable,
       replaceExistingLines: true,
     });
     const result = {
       ...counts,
       orderId,
       orderFound: true,
-      staffAttributionAvailable,
-      staffAttributionError,
     };
 
     await insertSyncRun({
@@ -5017,7 +4901,7 @@ export async function syncOrders({
     }
 
     // eslint-disable-next-line no-inner-declarations
-    async function runOrdersSync(includeStaffAttribution: boolean) {
+    async function runOrdersSync() {
       let cursor: string | null = null;
       let hasNextPage = true;
       let pagesProcessed = 0;
@@ -5045,27 +4929,6 @@ export async function syncOrders({
                     name
                     createdAt
                     displayFinancialStatus
-                    ${
-                      includeStaffAttribution
-                        ? `
-                    staffMember {
-                      id
-                      name
-                      email
-                    }
-                    transactions(first: 10) {
-                      id
-                      kind
-                      status
-                      user {
-                        id
-                        name
-                        email
-                      }
-                    }
-                    `
-                        : ""
-                    }
                     totalPriceSet {
                       shopMoney {
                         amount
@@ -5087,16 +4950,9 @@ export async function syncOrders({
                           title
                           quantity
                           sku
-                          ${
-                            includeStaffAttribution
-                              ? `
-                          staffMember {
-                            id
-                            name
-                            email
-                          }
-                          `
-                              : ""
+                          customAttributes {
+                            key
+                            value
                           }
                           variant {
                             id
@@ -5144,9 +5000,7 @@ export async function syncOrders({
           ) ?? [];
 
         const orderRows = orders.map((order) => {
-          const orderStaff = includeStaffAttribution
-            ? getOrderStaffAttribution(order)
-            : getStaffAttribution(null);
+          const orderStaff = getUnavailableStaffAttribution();
 
           return {
             shop_domain: shop,
@@ -5170,13 +5024,10 @@ export async function syncOrders({
         const orderLineRows: Record<string, unknown>[] = [];
 
         for (const order of orders) {
-          const orderStaff = includeStaffAttribution
-            ? getOrderStaffAttribution(order)
-            : getStaffAttribution(null);
+          const orderStaff = getUnavailableStaffAttribution();
           const allLineItems = await getAllLineItemsForOrder({
             admin,
             order,
-            includeStaffAttribution,
           });
 
           for (const lineItem of allLineItems) {
@@ -5200,11 +5051,10 @@ export async function syncOrders({
               quantity: lineItem.quantity,
             });
 
-            const lineStaff = includeStaffAttribution
-              ? getStaffAttribution(lineItem.staffMember, "line_item_staff")
-              : getStaffAttribution(null);
-            const staffAttribution = lineStaff.staffMemberId
-              ? lineStaff
+            const posAttribution = getPosLineItemAttribution(lineItem);
+            const staffAttribution = posAttribution.legacyStaffAttribution
+              .staffMemberId
+              ? posAttribution.legacyStaffAttribution
               : orderStaff;
 
             orderLineRows.push({
@@ -5232,6 +5082,13 @@ export async function syncOrders({
               staff_member_name: staffAttribution.staffMemberName,
               staff_member_email: staffAttribution.staffMemberEmail,
               staff_source: staffAttribution.staffSource,
+              shopops_staff_member_id: posAttribution.shopops_staff_member_id,
+              shopops_user_id: posAttribution.shopops_user_id,
+              shopops_pos_location_id: posAttribution.shopops_pos_location_id,
+              shopops_pos_device_id: posAttribution.shopops_pos_device_id,
+              shopops_pos_device_name: posAttribution.shopops_pos_device_name,
+              shopops_attribution_source:
+                posAttribution.shopops_attribution_source,
             });
           }
         }
@@ -5269,22 +5126,7 @@ export async function syncOrders({
       };
     }
 
-    let staffAttributionAvailable = true;
-    let staffAttributionError: string | null = null;
-    let syncResult: {
-      ordersSynced: number;
-      orderLinesSynced: number;
-      pagesProcessed: number;
-    };
-
-    try {
-      syncResult = await runOrdersSync(true);
-    } catch (error) {
-      staffAttributionAvailable = false;
-      staffAttributionError =
-        error instanceof Error ? error.message : String(error);
-      syncResult = await runOrdersSync(false);
-    }
+    const syncResult = await runOrdersSync();
 
     const cogsStartedAt = Date.now();
     const orderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
@@ -5296,8 +5138,6 @@ export async function syncOrders({
       orderLinesCogsRecomputed,
       startDate: startDate ?? null,
       endDate: endDate ?? null,
-      staffAttributionAvailable,
-      staffAttributionError,
       duration: {
         cogsRecomputeMs: getDurationMs(cogsStartedAt),
       },
@@ -5383,6 +5223,10 @@ export async function syncOrdersBulk({
                     title
                     quantity
                     sku
+                    customAttributes {
+                      key
+                      value
+                    }
                     variant {
                       id
                       title
@@ -5502,6 +5346,8 @@ export async function syncOrdersBulk({
         | null
         | undefined;
       const quantity = Number(lineItem.quantity ?? 0);
+      const posAttribution = getPosBulkLineItemAttribution(lineItem);
+      const staffAttribution = posAttribution.legacyStaffAttribution;
       const unitPrice = getNumericAmount(
         (
           lineItem.discountedUnitPriceSet as
@@ -5538,10 +5384,16 @@ export async function syncOrdersBulk({
           cogs: null,
           gross_profit: null,
           cost_source: null,
-          staff_member_id: null,
-          staff_member_name: null,
-          staff_member_email: null,
-          staff_source: "unavailable",
+          staff_member_id: staffAttribution.staffMemberId,
+          staff_member_name: staffAttribution.staffMemberName,
+          staff_member_email: staffAttribution.staffMemberEmail,
+          staff_source: staffAttribution.staffSource,
+          shopops_staff_member_id: posAttribution.shopops_staff_member_id,
+          shopops_user_id: posAttribution.shopops_user_id,
+          shopops_pos_location_id: posAttribution.shopops_pos_location_id,
+          shopops_pos_device_id: posAttribution.shopops_pos_device_id,
+          shopops_pos_device_name: posAttribution.shopops_pos_device_name,
+          shopops_attribution_source: posAttribution.shopops_attribution_source,
         },
       ];
     });

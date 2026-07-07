@@ -39,6 +39,21 @@ type SyncRun = {
   details?: Record<string, unknown> | null;
 };
 
+type RecentPosOrderLine = {
+  shopify_line_item_id: string;
+  order_name: string | null;
+  product_title: string | null;
+  retail_location_name: string | null;
+  shopops_pos_location_id: string | null;
+  shopops_staff_member_id: string | null;
+  shopops_user_id: string | null;
+  shopops_pos_device_id: string | null;
+  shopops_pos_device_name: string | null;
+  net_sales: number | null;
+  shopops_attribution_source: string | null;
+  created_at_shopify: string | null;
+};
+
 type LoaderData = {
   shop: string;
   counts: TableCount[];
@@ -46,6 +61,7 @@ type LoaderData = {
   activeJob: SyncJobRow | null;
   recentJobs: SyncJobRow[];
   hasReadUsersScope: boolean;
+  recentPosOrderLines: RecentPosOrderLine[];
 };
 
 type ActionData = {
@@ -168,6 +184,17 @@ function formatMilliseconds(value: unknown) {
   return remainingSeconds > 0
     ? `${minutes}m ${remainingSeconds}s`
     : `${minutes}m`;
+}
+
+function formatMoney(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+
+  return new Intl.NumberFormat("en-CA", {
+    style: "currency",
+    currency: "CAD",
+  }).format(value);
 }
 
 function getDurationDetails(run?: SyncRun | null) {
@@ -516,6 +543,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .eq("shop_domain", session.shop)
     .order("updated_at", { ascending: false })
     .limit(20);
+
+  const { data: recentPosOrderLines } = await supabase
+    .from("order_lines")
+    .select(
+      "shopify_line_item_id, order_name, product_title, retail_location_name, shopops_pos_location_id, shopops_staff_member_id, shopops_user_id, shopops_pos_device_id, shopops_pos_device_name, net_sales, shopops_attribution_source, created_at_shopify",
+    )
+    .eq("shop_domain", session.shop)
+    .or(
+      "shopops_attribution_source.eq.pos_session,shopops_staff_member_id.not.is.null,shopops_user_id.not.is.null",
+    )
+    .order("created_at_shopify", { ascending: false })
+    .limit(20);
   const typedRecentJobs = (recentJobs ?? []) as SyncJobRow[];
   if (
     counts.every((row) => row.count === 0) &&
@@ -537,6 +576,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     activeJob: selectCurrentSyncJob(typedRecentJobs),
     recentJobs: typedRecentJobs,
     hasReadUsersScope: hasConfiguredScope("read_users"),
+    recentPosOrderLines: (recentPosOrderLines ?? []) as RecentPosOrderLine[],
   };
 }
 
@@ -754,8 +794,15 @@ function SyncTypeStatusCard({
 }
 
 export default function AdminSyncPage() {
-  const { shop, counts, lastSyncRuns, activeJob, recentJobs, hasReadUsersScope } =
-    useLoaderData<LoaderData>();
+  const {
+    shop,
+    counts,
+    lastSyncRuns,
+    activeJob,
+    recentJobs,
+    hasReadUsersScope,
+    recentPosOrderLines,
+  } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
   const liveJob = selectCurrentSyncJob([activeJob]);
@@ -957,6 +1004,95 @@ export default function AdminSyncPage() {
                     {row.table}: {row.error ? "Error" : row.count}
                   </div>
                 ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontWeight: 800 }}>Recent POS order lines</div>
+              <HelperText>
+                Spike validation for POS session attribution stamped on line item properties.
+              </HelperText>
+              <div style={{ overflowX: "auto", marginTop: 12 }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 13,
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      {[
+                        "Order",
+                        "Product",
+                        "Location",
+                        "Staff member ID",
+                        "User ID",
+                        "Device",
+                        "Net sales",
+                        "Source",
+                      ].map((header) => (
+                        <th
+                          key={header}
+                          style={{
+                            textAlign: "left",
+                            padding: "10px",
+                            borderBottom: "1px solid #ddd",
+                          }}
+                        >
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentPosOrderLines.map((line) => (
+                      <tr key={line.shopify_line_item_id}>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.order_name ?? "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.product_title ?? "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.retail_location_name ??
+                            line.shopops_pos_location_id ??
+                            "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.shopops_staff_member_id ?? "Unassigned"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.shopops_user_id ?? "Unassigned"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {[
+                            line.shopops_pos_device_name,
+                            line.shopops_pos_device_id,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ") || "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {formatMoney(line.net_sales)}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.shopops_attribution_source ?? "Unassigned"}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {recentPosOrderLines.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          style={{ padding: "14px 10px", color: "#616161" }}
+                        >
+                          No POS-attributed order lines found yet.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

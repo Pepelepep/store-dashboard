@@ -21,6 +21,7 @@ These docs support ShopOps Studio marketplace readiness and reviewer preparation
 
 - [Shopify scopes justification](SHOPIFY_SCOPES_JUSTIFICATION.md)
 - [Protected customer data matrix](PROTECTED_CUSTOMER_DATA_MATRIX.md)
+- [POS staff attribution](POS_STAFF_ATTRIBUTION.md)
 
 ## Listing Preparation
 
