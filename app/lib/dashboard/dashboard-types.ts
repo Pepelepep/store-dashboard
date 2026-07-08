@@ -35,6 +35,17 @@ export type OrderLineDbRow = {
   staff_member_name: string | null;
   staff_member_email: string | null;
   staff_source: string | null;
+  shopops_staff_member_id?: string | null;
+  shopops_user_id?: string | null;
+  shopops_attributed_user_id?: string | null;
+  shopops_effective_staff_id?: string | null;
+  shopops_attribution_source?: string | null;
+  shopops_pos_location_id?: string | null;
+  shopops_pos_device_id?: string | null;
+  shopops_pos_device_name?: string | null;
+  resolved_staff_display_name?: string | null;
+  resolved_staff_status?: "mapped" | "unmapped" | "unassigned";
+  resolved_staff_key?: string | null;
 };
 
 export type DashboardSalesOrderLineRow = Pick<
@@ -61,6 +72,17 @@ export type DashboardSalesOrderLineRow = Pick<
   | "staff_member_name"
   | "staff_member_email"
   | "staff_source"
+  | "shopops_staff_member_id"
+  | "shopops_user_id"
+  | "shopops_attributed_user_id"
+  | "shopops_effective_staff_id"
+  | "shopops_attribution_source"
+  | "shopops_pos_location_id"
+  | "shopops_pos_device_id"
+  | "shopops_pos_device_name"
+  | "resolved_staff_display_name"
+  | "resolved_staff_status"
+  | "resolved_staff_key"
 >;
 
 export type ActiveDrilldowns = {

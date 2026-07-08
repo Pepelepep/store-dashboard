@@ -16,6 +16,10 @@ import {
   ensureShopInitialized,
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
+import {
+  fetchStaffIdentityAliasesForOrderLines,
+} from "../lib/staff-identity/staff-identity.server";
+import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
 import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { PageNotice } from "../components/ui/PageNotice";
@@ -56,6 +60,7 @@ type RecentPosOrderLine = {
   net_sales: number | null;
   shopops_attribution_source: string | null;
   created_at_shopify: string | null;
+  resolved_staff_name: string;
 };
 
 type LoaderData = {
@@ -548,7 +553,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .order("updated_at", { ascending: false })
     .limit(20);
 
-  const { data: recentPosOrderLines } = await supabase
+  const { data: recentPosOrderLinesData } = await supabase
     .from("order_lines")
     .select(
       "shopify_line_item_id, order_name, product_title, retail_location_name, shopops_pos_location_id, shopops_staff_member_id, shopops_staff_label, shopops_attributed_user_id, shopops_attributed_staff_member_id, shopops_effective_staff_id, shopops_user_id, shopops_pos_device_id, shopops_pos_device_name, net_sales, shopops_attribution_source, created_at_shopify",
@@ -559,6 +564,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     )
     .order("created_at_shopify", { ascending: false })
     .limit(20);
+  const recentPosOrderLinesRaw =
+    (recentPosOrderLinesData ?? []) as Omit<
+      RecentPosOrderLine,
+      "resolved_staff_name"
+    >[];
+  const recentAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
+    supabase,
+    shop: session.shop,
+    orderLines: recentPosOrderLinesRaw,
+  });
+  const recentPosOrderLines: RecentPosOrderLine[] =
+    recentPosOrderLinesRaw.map((line) => ({
+      ...line,
+      resolved_staff_name: resolveStaffDisplayNameForOrderLine(
+        line,
+        recentAliasesByKey,
+      ).label,
+    }));
   const typedRecentJobs = (recentJobs ?? []) as SyncJobRow[];
   if (
     counts.every((row) => row.count === 0) &&
@@ -580,7 +603,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     activeJob: selectCurrentSyncJob(typedRecentJobs),
     recentJobs: typedRecentJobs,
     hasReadUsersScope: hasConfiguredScope("read_users"),
-    recentPosOrderLines: (recentPosOrderLines ?? []) as RecentPosOrderLine[],
+    recentPosOrderLines,
   };
 }
 
@@ -1028,6 +1051,7 @@ export default function AdminSyncPage() {
                       {[
                         "Order",
                         "Product",
+                        "Resolved staff",
                         "Effective staff ID",
                         "Source",
                         "Attributed user ID",
@@ -1059,6 +1083,9 @@ export default function AdminSyncPage() {
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
                           {line.product_title ?? "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.resolved_staff_name}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
                           {line.shopops_effective_staff_id ?? "Unassigned"}
@@ -1100,7 +1127,7 @@ export default function AdminSyncPage() {
                     {recentPosOrderLines.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={11}
+                          colSpan={12}
                           style={{ padding: "14px 10px", color: "#616161" }}
                         >
                           No POS-attributed order lines found yet.

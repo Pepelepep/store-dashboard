@@ -9,6 +9,10 @@ import {
   ensureShopInitialized,
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
+import {
+  fetchStaffIdentityAliasesForOrderLines,
+} from "../lib/staff-identity/staff-identity.server";
+import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
 import { ActiveDrilldownBadge } from "../components/dashboard/ActiveDrilldownBadge";
 import { BestSellersCard } from "../components/dashboard/BestSellersCard";
 import { DashboardHeader } from "../components/dashboard/DashboardHeader";
@@ -261,7 +265,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const orderLinesSelect = isFinancialMetricsV2
     ? "*"
-    : "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source";
+    : "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name";
 
   const { data: locationsData, error: locationsError } = await supabase
     .from("locations")
@@ -361,7 +365,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
   if (recentSyncFailureError) errors.push(recentSyncFailureError.message);
 
-  const orderLines = (orderLinesResult.data ?? []) as unknown as OrderLineDbRow[];
+  const rawOrderLines =
+    (orderLinesResult.data ?? []) as unknown as OrderLineDbRow[];
+  const staffAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
+    supabase,
+    shop: session.shop,
+    orderLines: rawOrderLines,
+  });
+  const orderLines = rawOrderLines.map((row) => {
+    const resolution = resolveStaffDisplayNameForOrderLine(row, staffAliasesByKey);
+
+    return {
+      ...row,
+      resolved_staff_display_name: resolution.label,
+      resolved_staff_status: resolution.status,
+      resolved_staff_key: resolution.staffKey,
+    };
+  });
   const inventoryRows = (inventoryResult.data ?? []) as InventoryLevelDbRow[];
   const variants = (variantsResult.data ?? []) as VariantDbRow[];
   const products = (productsResult.data ?? []) as ProductDbRow[];
@@ -537,6 +557,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
       staff_member_name: row.staff_member_name,
       staff_member_email: row.staff_member_email,
       staff_source: row.staff_source,
+      shopops_staff_member_id: row.shopops_staff_member_id,
+      shopops_user_id: row.shopops_user_id,
+      shopops_attributed_user_id: row.shopops_attributed_user_id,
+      shopops_effective_staff_id: row.shopops_effective_staff_id,
+      shopops_attribution_source: row.shopops_attribution_source,
+      shopops_pos_location_id: row.shopops_pos_location_id,
+      shopops_pos_device_id: row.shopops_pos_device_id,
+      shopops_pos_device_name: row.shopops_pos_device_name,
+      resolved_staff_display_name: row.resolved_staff_display_name,
+      resolved_staff_status: row.resolved_staff_status,
+      resolved_staff_key: row.resolved_staff_key,
     }),
   );
   const staffAttributionAvailable =
@@ -546,6 +577,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
         row.staff_member_id ||
         row.staff_member_name ||
         row.staff_member_email ||
+        row.resolved_staff_status === "mapped" ||
+        row.resolved_staff_status === "unmapped" ||
         (row.staff_source && row.staff_source !== "unavailable"),
     );
 

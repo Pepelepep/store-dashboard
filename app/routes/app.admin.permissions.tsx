@@ -522,6 +522,21 @@ export async function action({ request }: ActionFunctionArgs) {
     } satisfies ActionData;
   }
 
+  try {
+    await upsertStaffIdentityFromAccess({
+      supabase,
+      shop: session.shop,
+      accessLabel,
+      email,
+      shopifyUserIds: linkedShopifyUserIds,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    } satisfies ActionData;
+  }
+
   return {
     ok: true,
     message: "Permissions saved.",
@@ -661,6 +676,89 @@ function getStaffLabel(staffMember: StaffMemberRow) {
     : "";
 
   return `${label}${detail}`;
+}
+
+async function upsertStaffIdentityFromAccess({
+  supabase,
+  shop,
+  accessLabel,
+  email,
+  shopifyUserIds,
+}: {
+  supabase: ReturnType<typeof getSupabaseAdminClient>;
+  shop: string;
+  accessLabel: string | null;
+  email: string | null;
+  shopifyUserIds: string[];
+}) {
+  if (!email) {
+    return;
+  }
+
+  const displayName = accessLabel || email;
+  const { data: existingPerson, error: existingPersonError } = await supabase
+    .from("staff_people")
+    .select("id")
+    .eq("shop_domain", shop)
+    .eq("email", email)
+    .maybeSingle();
+
+  if (existingPersonError) {
+    throw new Error(existingPersonError.message);
+  }
+
+  const personResult = existingPerson
+    ? await supabase
+        .from("staff_people")
+        .update({ display_name: displayName, updated_at: new Date().toISOString() })
+        .eq("shop_domain", shop)
+        .eq("id", existingPerson.id)
+        .select("id")
+        .single()
+    : await supabase
+        .from("staff_people")
+        .insert({
+          shop_domain: shop,
+          display_name: displayName,
+          email,
+        })
+        .select("id")
+        .single();
+  const { data: person, error: personError } = personResult;
+
+  if (personError) {
+    throw new Error(personError.message);
+  }
+
+  const aliasRows = [
+    {
+      shop_domain: shop,
+      person_id: person.id,
+      alias_type: "email",
+      alias_value: email,
+      source: "user_location_access",
+      first_seen_at: new Date().toISOString(),
+      last_seen_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    ...shopifyUserIds.map((shopifyUserId) => ({
+      shop_domain: shop,
+      person_id: person.id,
+      alias_type: "shopify_admin_user_id",
+      alias_value: shopifyUserId,
+      source: "user_location_access",
+      first_seen_at: new Date().toISOString(),
+      last_seen_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })),
+  ];
+  const { error: aliasError } = await supabase
+    .from("staff_identity_aliases")
+    .upsert(aliasRows, { onConflict: "shop_domain,alias_type,alias_value" });
+
+  if (aliasError) {
+    throw new Error(aliasError.message);
+  }
 }
 
 export default function AdminPermissionsPage() {

@@ -142,6 +142,9 @@ export default function App() {
               <a href={`/app/admin/permissions${search}`}>Team Access</a>
             ) : null}
             {canAdmin ? (
+              <a href={`/app/admin/staff${search}`}>Staff</a>
+            ) : null}
+            {canAdmin ? (
               <a href={`/app/data-quality${search}`}>Sync Status</a>
             ) : null}
             {billingEnabled ? (

@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import { upsertPosStaffIdentityAliasesFromOrderLines } from "../staff-identity/staff-identity.server";
 import { hasConfiguredScope } from "../shopify/scopes.server";
 
 type SupabaseAdminClient = ReturnType<typeof getSupabaseAdminClient>;
@@ -4311,6 +4312,12 @@ async function upsertOrderNodes({
     onConflict: "shop_domain,shopify_line_item_id",
   });
 
+  await upsertPosStaffIdentityAliasesFromOrderLines({
+    supabase,
+    shop,
+    orderLines: orderLineRows,
+  });
+
   for (const [orderId, transactions] of transactionRowsByOrderId.entries()) {
     await upsertOrderTransactions({
       supabase,
@@ -5149,6 +5156,12 @@ export async function syncOrders({
           onConflict: "shop_domain,shopify_line_item_id",
         });
 
+        await upsertPosStaffIdentityAliasesFromOrderLines({
+          supabase,
+          shop,
+          orderLines: orderLineRows,
+        });
+
         totalOrdersSynced += orderRows.length;
         totalOrderLinesSynced += orderLineRows.length;
         pagesProcessed += 1;
@@ -5457,6 +5470,11 @@ export async function syncOrdersBulk({
       table: "order_lines",
       rows: orderLineRows,
       onConflict: "shop_domain,shopify_line_item_id",
+    });
+    await upsertPosStaffIdentityAliasesFromOrderLines({
+      supabase,
+      shop,
+      orderLines: orderLineRows,
     });
 
     const dbUpsertMs = getDurationMs(dbStartedAt);

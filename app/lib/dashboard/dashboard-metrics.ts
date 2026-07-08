@@ -240,7 +240,11 @@ type SalesMetricOrderLine = DashboardSalesOrderLineRow & {
 
 export function getStaffFilterValue(row: DashboardSalesOrderLineRow) {
   return (
-    row.staff_member_id || row.staff_member_email || row.staff_member_name || ""
+    row.resolved_staff_key ||
+    row.staff_member_id ||
+    row.staff_member_email ||
+    row.staff_member_name ||
+    ""
   );
 }
 
@@ -250,10 +254,11 @@ export function getStaffDrilldownValue(row: DashboardSalesOrderLineRow) {
 
 export function getStaffDisplayLabel(row: DashboardSalesOrderLineRow) {
   return (
+    row.resolved_staff_display_name ||
     row.staff_member_name ||
     row.staff_member_email ||
-    row.staff_member_id ||
-    "Unassigned / unavailable"
+    (row.staff_member_id ? "Unmapped staff" : null) ||
+    "Unassigned"
   );
 }
 
@@ -403,8 +408,16 @@ export function computeSalesByStaff(orderLines: SalesMetricOrderLine[]) {
 
   for (const row of orderLines) {
     const staff = getStaffDisplayLabel(row);
-    const staffId = row.staff_member_id ?? "-";
-    const source = row.staff_source ?? "unavailable";
+    const staffId =
+      row.resolved_staff_key ??
+      row.shopops_effective_staff_id ??
+      row.staff_member_id ??
+      "-";
+    const source =
+      row.shopops_attribution_source ??
+      row.staff_source ??
+      row.resolved_staff_status ??
+      "unavailable";
     const key = getStaffDrilldownValue(row);
     const existing = grouped.get(key);
 
