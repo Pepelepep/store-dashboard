@@ -1,7 +1,6 @@
 import "@shopify/ui-extensions/preact";
 import {render} from "preact";
 
-const ATTRIBUTION_SOURCE = "pos_session";
 const PROPERTY_KEYS = {
   staffMemberId: "_shopops_staff_member_id",
   userId: "_shopops_user_id",
@@ -10,6 +9,8 @@ const PROPERTY_KEYS = {
   deviceName: "_shopops_device_name",
   staffLabel: "_shopops_staff_label",
   attributedUserId: "_shopops_attributed_user_id",
+  attributedStaffMemberId: "_shopops_attributed_staff_member_id",
+  effectiveStaffId: "_shopops_effective_staff_id",
   source: "_shopops_attribution_source",
 };
 const STAMP_DEBOUNCE_MS = 150;
@@ -98,7 +99,6 @@ function buildProperties(attribution) {
     [PROPERTY_KEYS.locationId]: attribution.locationId,
     [PROPERTY_KEYS.deviceId]: attribution.deviceId,
     [PROPERTY_KEYS.deviceName]: attribution.deviceName,
-    [PROPERTY_KEYS.source]: ATTRIBUTION_SOURCE,
   };
 
   if (attribution.staffLabel) {
@@ -119,17 +119,47 @@ function needsStamp(line, properties) {
 function buildLineProperties(line, baseProperties) {
   const lineStaffLabel = readFirstString(line, STAFF_LABEL_KEYS);
   const attributedUserId = stringify(line.attributedUserId);
+  const attributedStaffMemberId = stringify(line.attributedStaffMemberId);
   const properties = {...baseProperties};
+  const effectiveAttribution =
+    getEffectiveAttribution({
+      attributedUserId,
+      attributedStaffMemberId,
+      staffMemberId: baseProperties[PROPERTY_KEYS.staffMemberId],
+      userId: baseProperties[PROPERTY_KEYS.userId],
+    });
 
   if (!properties[PROPERTY_KEYS.staffLabel] && lineStaffLabel) {
     properties[PROPERTY_KEYS.staffLabel] = lineStaffLabel;
   }
 
-  if (attributedUserId) {
-    properties[PROPERTY_KEYS.attributedUserId] = attributedUserId;
-  }
+  properties[PROPERTY_KEYS.attributedUserId] = attributedUserId;
+  properties[PROPERTY_KEYS.attributedStaffMemberId] = attributedStaffMemberId;
+  properties[PROPERTY_KEYS.effectiveStaffId] = effectiveAttribution.id;
+  properties[PROPERTY_KEYS.source] = effectiveAttribution.source;
 
   return properties;
+}
+
+function getEffectiveAttribution({
+  attributedUserId,
+  attributedStaffMemberId,
+  staffMemberId,
+  userId,
+}) {
+  if (attributedUserId) {
+    return {id: attributedUserId, source: "attributed_user_id"};
+  }
+
+  if (attributedStaffMemberId) {
+    return {id: attributedStaffMemberId, source: "attributed_staff_member_id"};
+  }
+
+  if (staffMemberId) {
+    return {id: staffMemberId, source: "pos_session_staff_member"};
+  }
+
+  return {id: userId, source: "pos_session_user"};
 }
 
 function buildStampInputs(lines, baseProperties) {

@@ -21,6 +21,7 @@ const LINE_LABEL_KEYS = [
   "attributedUserName",
   "attributedUserLabel",
 ];
+const ATTRIBUTION_KEY_PATTERN = /(attribut|staff|user|seller|employee)/i;
 
 export default async () => {
   render(<Extension />, document.body);
@@ -48,6 +49,19 @@ function getTopLevelKeys(source) {
   return source && typeof source === "object" ? Object.keys(source).sort() : [];
 }
 
+function getMatchingTopLevelFields(source) {
+  if (!source || typeof source !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.keys(source)
+      .filter((key) => ATTRIBUTION_KEY_PATTERN.test(key))
+      .sort()
+      .map((key) => [key, stringify(source[key])]),
+  );
+}
+
 function getSessionDiagnostics() {
   const session = shopify.session.currentSession;
 
@@ -67,7 +81,10 @@ function getLineDiagnostics(line) {
     title: stringify(line.title),
     productTitle: stringify(readObjectValue(line, "productTitle")),
     properties: line.properties ?? {},
+    customAttributes: readObjectValue(line, "customAttributes") ?? {},
     attributedUserId: stringify(line.attributedUserId),
+    attributedStaffMemberId: stringify(line.attributedStaffMemberId),
+    matchingAttributionFields: getMatchingTopLevelFields(line),
     labels: pickStringFields(line, LINE_LABEL_KEYS),
     keys: getTopLevelKeys(line),
   };

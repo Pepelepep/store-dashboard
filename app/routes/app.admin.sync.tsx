@@ -48,6 +48,8 @@ type RecentPosOrderLine = {
   shopops_staff_member_id: string | null;
   shopops_staff_label: string | null;
   shopops_attributed_user_id: string | null;
+  shopops_attributed_staff_member_id: string | null;
+  shopops_effective_staff_id: string | null;
   shopops_user_id: string | null;
   shopops_pos_device_id: string | null;
   shopops_pos_device_name: string | null;
@@ -549,7 +551,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { data: recentPosOrderLines } = await supabase
     .from("order_lines")
     .select(
-      "shopify_line_item_id, order_name, product_title, retail_location_name, shopops_pos_location_id, shopops_staff_member_id, shopops_staff_label, shopops_attributed_user_id, shopops_user_id, shopops_pos_device_id, shopops_pos_device_name, net_sales, shopops_attribution_source, created_at_shopify",
+      "shopify_line_item_id, order_name, product_title, retail_location_name, shopops_pos_location_id, shopops_staff_member_id, shopops_staff_label, shopops_attributed_user_id, shopops_attributed_staff_member_id, shopops_effective_staff_id, shopops_user_id, shopops_pos_device_id, shopops_pos_device_name, net_sales, shopops_attribution_source, created_at_shopify",
     )
     .eq("shop_domain", session.shop)
     .or(
@@ -1026,14 +1028,15 @@ export default function AdminSyncPage() {
                       {[
                         "Order",
                         "Product",
-                        "Location",
-                        "Staff member ID",
-                        "Staff label",
+                        "Effective staff ID",
+                        "Source",
                         "Attributed user ID",
-                        "User ID",
+                        "Attributed staff member ID",
+                        "Session staff member ID",
+                        "Session user ID",
+                        "Location",
                         "Device",
                         "Net sales",
-                        "Source",
                       ].map((header) => (
                         <th
                           key={header}
@@ -1058,21 +1061,27 @@ export default function AdminSyncPage() {
                           {line.product_title ?? "-"}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.retail_location_name ??
-                            line.shopops_pos_location_id ??
-                            "-"}
+                          {line.shopops_effective_staff_id ?? "Unassigned"}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_staff_member_id ?? "Unassigned"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_staff_label ?? "-"}
+                          {line.shopops_attribution_source ?? "Unassigned"}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
                           {line.shopops_attributed_user_id ?? "-"}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.shopops_attributed_staff_member_id ?? "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.shopops_staff_member_id ?? "Unassigned"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
                           {line.shopops_user_id ?? "Unassigned"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.retail_location_name ??
+                            line.shopops_pos_location_id ??
+                            "-"}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
                           {[
@@ -1085,16 +1094,13 @@ export default function AdminSyncPage() {
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
                           {formatMoney(line.net_sales)}
                         </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_attribution_source ?? "Unassigned"}
-                        </td>
                       </tr>
                     ))}
 
                     {recentPosOrderLines.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={11}
                           style={{ padding: "14px 10px", color: "#616161" }}
                         >
                           No POS-attributed order lines found yet.

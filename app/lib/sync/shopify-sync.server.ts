@@ -458,8 +458,17 @@ const POS_ATTRIBUTION_PROPERTY_KEYS = {
   deviceName: "_shopops_device_name",
   staffLabel: "_shopops_staff_label",
   attributedUserId: "_shopops_attributed_user_id",
+  attributedStaffMemberId: "_shopops_attributed_staff_member_id",
+  effectiveStaffId: "_shopops_effective_staff_id",
   attributionSource: "_shopops_attribution_source",
 } as const;
+const POS_ATTRIBUTION_SOURCES = new Set([
+  "attributed_user_id",
+  "attributed_staff_member_id",
+  "pos_session_staff_member",
+  "pos_session_user",
+  "pos_session",
+]);
 
 function getFinancialQueryLineItemFields() {
   return `
@@ -783,6 +792,12 @@ function getPosLineItemAttribution(lineItem: OrderLineItemNode) {
     lineItem.customAttributes,
     POS_ATTRIBUTION_PROPERTY_KEYS.staffMemberId,
   );
+  const effectiveStaffId = getCustomAttributeValue(
+    lineItem.customAttributes,
+    POS_ATTRIBUTION_PROPERTY_KEYS.effectiveStaffId,
+  );
+  const attributionSource =
+    source && POS_ATTRIBUTION_SOURCES.has(source) ? source : null;
 
   return {
     shopops_staff_member_id: staffMemberId,
@@ -810,11 +825,16 @@ function getPosLineItemAttribution(lineItem: OrderLineItemNode) {
       lineItem.customAttributes,
       POS_ATTRIBUTION_PROPERTY_KEYS.attributedUserId,
     ),
-    shopops_attribution_source: source === "pos_session" ? source : null,
+    shopops_attributed_staff_member_id: getCustomAttributeValue(
+      lineItem.customAttributes,
+      POS_ATTRIBUTION_PROPERTY_KEYS.attributedStaffMemberId,
+    ),
+    shopops_effective_staff_id: effectiveStaffId,
+    shopops_attribution_source: attributionSource,
     legacyStaffAttribution:
-      staffMemberId && source === "pos_session"
+      effectiveStaffId && attributionSource
         ? {
-            staffMemberId: normalizeStaffId(staffMemberId),
+            staffMemberId: normalizeStaffId(effectiveStaffId),
             staffMemberName: null,
             staffMemberEmail: null,
             staffSource: "pos_session" as StaffSource,
@@ -4254,6 +4274,9 @@ async function upsertOrderNodes({
         shopops_pos_device_name: posAttribution.shopops_pos_device_name,
         shopops_staff_label: posAttribution.shopops_staff_label,
         shopops_attributed_user_id: posAttribution.shopops_attributed_user_id,
+        shopops_attributed_staff_member_id:
+          posAttribution.shopops_attributed_staff_member_id,
+        shopops_effective_staff_id: posAttribution.shopops_effective_staff_id,
         shopops_attribution_source: posAttribution.shopops_attribution_source,
       });
     }
@@ -5102,6 +5125,10 @@ export async function syncOrders({
               shopops_staff_label: posAttribution.shopops_staff_label,
               shopops_attributed_user_id:
                 posAttribution.shopops_attributed_user_id,
+              shopops_attributed_staff_member_id:
+                posAttribution.shopops_attributed_staff_member_id,
+              shopops_effective_staff_id:
+                posAttribution.shopops_effective_staff_id,
               shopops_attribution_source:
                 posAttribution.shopops_attribution_source,
             });
@@ -5410,6 +5437,9 @@ export async function syncOrdersBulk({
           shopops_pos_device_name: posAttribution.shopops_pos_device_name,
           shopops_staff_label: posAttribution.shopops_staff_label,
           shopops_attributed_user_id: posAttribution.shopops_attributed_user_id,
+          shopops_attributed_staff_member_id:
+            posAttribution.shopops_attributed_staff_member_id,
+          shopops_effective_staff_id: posAttribution.shopops_effective_staff_id,
           shopops_attribution_source: posAttribution.shopops_attribution_source,
         },
       ];
