@@ -1,5 +1,5 @@
-/** @jsxImportSource preact */
-import { render } from "preact";
+import "@shopify/ui-extensions/preact";
+import {render} from "preact";
 
 const ATTRIBUTION_SOURCE = "pos_session";
 const PROPERTY_KEYS = {
@@ -132,9 +132,9 @@ function needsStamp(line, properties) {
 
 function buildStampTargets(lines, properties) {
   return lines
-    .map((line) => ({ id: getLineId(line), line }))
-    .filter(({ id, line }) => id && needsStamp(line, properties))
-    .map(({ id }) => ({
+    .map((line) => ({id: getLineId(line), line}))
+    .filter(({id, line}) => id && needsStamp(line, properties))
+    .map(({id}) => ({
       lineItemUuid: id,
       lineItemId: id,
       id,
@@ -223,19 +223,20 @@ function subscribe(api, path, callback) {
   return undefined;
 }
 
-function renderTile() {
-  if (typeof document === "undefined" || !document.body) {
-    return;
-  }
+function Extension() {
+  const {i18n} = shopify;
 
-  render(
-    <s-tile heading="ShopOps" subheading="Staff tracking active" />,
-    document.body,
+  return (
+    <s-tile
+      heading={i18n.translate("tile_heading")}
+      subheading={i18n.translate("tile_subheading")}
+      onClick={() => shopify.action.presentModal()}
+    />
   );
 }
 
 function register(api) {
-  renderTile();
+  render(<Extension />, document.body);
   void stampCart(api);
 
   const unsubscribers = [
@@ -252,12 +253,6 @@ function register(api) {
   };
 }
 
-function getApi(root, api) {
-  if (api) return api;
-  if (typeof shopify !== "undefined") return shopify;
-  return root;
-}
-
-export default function shopopsPosAttribution(root, api) {
-  return register(getApi(root, api));
-}
+export default async () => {
+  register(shopify);
+};

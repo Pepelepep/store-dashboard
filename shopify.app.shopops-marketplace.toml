@@ -63,7 +63,7 @@ redirect_urls = [
 ]
 
 [pos]
-embedded = false
+embedded = true
 
 [build]
 automatically_update_urls_on_dev = false

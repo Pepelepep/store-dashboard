@@ -1,12 +1,19 @@
-api_version = "2026-07"
+api_version = "2026-01"
 
 [[extensions]]
-name = "ShopOps POS attribution"
-handle = "shopops-pos-attribution"
-uid = "385c2ad6-d776-7000-615a-78dd26072b97a073a310"
 type = "ui_extension"
+# Change the merchant-facing name of the extension in locales/en.default.json
+name = "t:name"
+uid = "385c2ad6-d776-7000-615a-78dd26072b97a073a310"
+handle = "shopops-pos-attribution"
 description = "Runs ShopOps POS attribution in the background."
 
+# module: file that contains your extension's source code
+# target: location where your extension appears in POS
 [[extensions.targeting]]
+module = "./src/Tile.jsx"
 target = "pos.home.tile.render"
-module = "./src/index.js"
+
+[[extensions.targeting]]
+module = "./src/Modal.jsx"
+target = "pos.home.modal.render"
