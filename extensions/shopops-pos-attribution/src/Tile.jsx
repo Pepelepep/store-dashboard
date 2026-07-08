@@ -10,217 +10,164 @@ const PROPERTY_KEYS = {
   deviceName: "_shopops_device_name",
   source: "_shopops_attribution_source",
 };
+const STAMP_DEBOUNCE_MS = 150;
 
-let lastCartSignature = "";
 let isStamping = false;
+let stampQueued = false;
+let stampTimer;
+let deviceIdPromise;
+let status = {
+  staffDetected: false,
+  lineCount: 0,
+  lastResult: "Waiting for cart",
+  lastError: "",
+};
 
-function readPath(source, path) {
-  return path.split(".").reduce((value, key) => {
-    if (value && typeof value === "object" && key in value) {
-      return value[key];
-    }
-
-    return undefined;
-  }, source);
+function stringify(value) {
+  return value === undefined || value === null ? "" : String(value);
 }
 
-function readFirst(source, paths) {
-  for (const path of paths) {
-    const value = readPath(source, path);
+function getSession() {
+  return shopify.session.currentSession;
+}
 
-    if (value !== undefined && value !== null && value !== "") {
-      return String(value);
-    }
+async function getDeviceId() {
+  if (shopify.session.deviceId) {
+    return stringify(shopify.session.deviceId);
   }
 
-  return null;
+  if (!deviceIdPromise && typeof shopify.device?.getDeviceId === "function") {
+    deviceIdPromise = shopify.device.getDeviceId();
+  }
+
+  return deviceIdPromise ? stringify(await deviceIdPromise) : "";
 }
 
-function getSession(api) {
-  return (
-    readPath(api, "pos.session.current") ??
-    readPath(api, "session.current") ??
-    readPath(api, "session") ??
-    {}
-  );
-}
-
-function getDevice(api) {
-  return (
-    readPath(api, "pos.device.current") ??
-    readPath(api, "device.current") ??
-    readPath(api, "device") ??
-    {}
-  );
-}
-
-function getAttribution(api) {
-  const session = getSession(api);
-  const device = getDevice(api);
+async function getAttribution() {
+  const session = getSession();
 
   return {
-    staffMemberId: readFirst(session, ["staffMemberId", "staff.memberId", "staffMember.id"]),
-    userId: readFirst(session, ["userId", "user.id"]),
-    locationId: readFirst(session, ["locationId", "location.id"]),
-    posVersion: readFirst(session, ["posVersion", "version"]),
-    deviceId: readFirst(device, ["deviceId", "id"]),
-    deviceName: readFirst(device, ["deviceName", "name"]),
+    staffMemberId: stringify(session.staffMemberId),
+    userId: stringify(session.userId),
+    locationId: stringify(session.locationId),
+    deviceId: await getDeviceId(),
+    deviceName: stringify(shopify.device?.name ?? shopify.device?.registerName),
   };
 }
 
-function getCartLines(api) {
-  const cart =
-    readPath(api, "cart.current") ??
-    readPath(api, "cart") ??
-    readPath(api, "pos.cart.current") ??
-    {};
-  const lines =
-    readPath(cart, "lineItems") ??
-    readPath(cart, "lines") ??
-    readPath(cart, "items") ??
-    [];
-
-  return Array.isArray(lines) ? lines : [];
-}
-
-function getLineId(line) {
-  return (
-    readFirst(line, ["uuid", "lineItemUuid", "id", "lineItemId", "merchandiseId"]) ??
-    null
-  );
-}
-
-function getLineProperties(line) {
-  const properties =
-    readPath(line, "properties") ??
-    readPath(line, "lineItemProperties") ??
-    readPath(line, "customAttributes") ??
-    [];
-
-  if (Array.isArray(properties)) {
-    return Object.fromEntries(
-      properties
-        .map((property) => [
-          readFirst(property, ["key", "name"]),
-          readFirst(property, ["value"]),
-        ])
-        .filter(([key]) => key),
-    );
-  }
-
-  return properties && typeof properties === "object" ? properties : {};
+function getCartLines() {
+  return shopify.cart.current.value.lineItems ?? [];
 }
 
 function buildProperties(attribution) {
   return {
-    [PROPERTY_KEYS.staffMemberId]: attribution.staffMemberId ?? "",
-    [PROPERTY_KEYS.userId]: attribution.userId ?? "",
-    [PROPERTY_KEYS.locationId]: attribution.locationId ?? "",
-    [PROPERTY_KEYS.deviceId]: attribution.deviceId ?? "",
-    [PROPERTY_KEYS.deviceName]: attribution.deviceName ?? "",
+    [PROPERTY_KEYS.staffMemberId]: attribution.staffMemberId,
+    [PROPERTY_KEYS.userId]: attribution.userId,
+    [PROPERTY_KEYS.locationId]: attribution.locationId,
+    [PROPERTY_KEYS.deviceId]: attribution.deviceId,
+    [PROPERTY_KEYS.deviceName]: attribution.deviceName,
     [PROPERTY_KEYS.source]: ATTRIBUTION_SOURCE,
   };
 }
 
 function needsStamp(line, properties) {
-  const current = getLineProperties(line);
+  const current = line.properties ?? {};
 
   return Object.entries(properties).some(
     ([key, value]) => (current[key] ?? "") !== value,
   );
 }
 
-function buildStampTargets(lines, properties) {
+function buildStampInputs(lines, properties) {
   return lines
-    .map((line) => ({id: getLineId(line), line}))
-    .filter(({id, line}) => id && needsStamp(line, properties))
-    .map(({id}) => ({
-      lineItemUuid: id,
-      lineItemId: id,
-      id,
+    .filter((line) => line.uuid && needsStamp(line, properties))
+    .map((line) => ({
+      lineItemUuid: line.uuid,
       properties,
-      lineItemProperties: properties,
     }));
 }
 
-function getSignature(lines, attribution, properties) {
-  return JSON.stringify({
-    attribution,
-    lines: lines.map((line) => ({
-      id: getLineId(line),
-      properties: Object.fromEntries(
-        Object.keys(properties).map((key) => [key, getLineProperties(line)[key] ?? ""]),
-      ),
-    })),
-  });
+async function addLineItemProperties(inputs) {
+  if (inputs.length === 0) return;
+
+  if (typeof shopify.cart.bulkAddLineItemProperties === "function") {
+    try {
+      await shopify.cart.bulkAddLineItemProperties(inputs);
+      return;
+    } catch (error) {
+      console.debug("[ShopOps POS attribution] bulk line item properties failed", error);
+    }
+  }
+
+  await Promise.all(
+    inputs.map((input) =>
+      shopify.cart.addLineItemProperties(input.lineItemUuid, input.properties),
+    ),
+  );
 }
 
-async function callBulkAddLineItemProperties(api, targets) {
-  const bulkAddLineItemProperties =
-    readPath(api, "cart.bulkAddLineItemProperties") ??
-    readPath(api, "pos.cart.bulkAddLineItemProperties");
-
-  if (typeof bulkAddLineItemProperties !== "function" || targets.length === 0) {
-    return;
-  }
-
-  try {
-    await bulkAddLineItemProperties(targets);
-    return;
-  } catch (error) {
-    console.debug("[ShopOps POS attribution] bulk array shape failed", error);
-  }
-
-  await bulkAddLineItemProperties({
-    lineItems: targets,
-    properties: targets[0].properties,
-  });
+function updateStatus(nextStatus) {
+  status = {...status, ...nextStatus};
+  renderTile();
 }
 
-async function stampCart(api) {
-  if (isStamping) return;
-
-  const attribution = getAttribution(api);
-  const lines = getCartLines(api);
-  const properties = buildProperties(attribution);
-  const signature = getSignature(lines, attribution, properties);
-
-  if (lines.length === 0) {
-    lastCartSignature = signature;
-    return;
-  }
-
-  if (signature === lastCartSignature) {
-    return;
-  }
-
-  const targets = buildStampTargets(lines, properties);
-
-  if (targets.length === 0) {
-    lastCartSignature = signature;
+async function stampCart() {
+  if (isStamping) {
+    stampQueued = true;
     return;
   }
 
   isStamping = true;
 
   try {
-    await callBulkAddLineItemProperties(api, targets);
-    lastCartSignature = signature;
+    const lines = getCartLines();
+    const attribution = await getAttribution();
+    const properties = buildProperties(attribution);
+    const inputs = buildStampInputs(lines, properties);
+
+    if (inputs.length > 0) {
+      await addLineItemProperties(inputs);
+    }
+
+    updateStatus({
+      staffDetected: Boolean(attribution.staffMemberId),
+      lineCount: lines.length,
+      lastResult:
+        inputs.length > 0
+          ? `Auto-stamped ${inputs.length} line${inputs.length === 1 ? "" : "s"}`
+          : "Cart already stamped",
+      lastError: "",
+    });
   } catch (error) {
     console.debug("[ShopOps POS attribution] failed to stamp cart", error);
+    updateStatus({
+      lineCount: getCartLines().length,
+      lastResult: "Auto-stamp failed",
+      lastError: error instanceof Error ? error.message : String(error),
+    });
   } finally {
     isStamping = false;
+
+    if (stampQueued) {
+      stampQueued = false;
+      scheduleStamp();
+    }
   }
 }
 
-function subscribe(api, path, callback) {
-  const target = readPath(api, path);
+function scheduleStamp() {
+  clearTimeout(stampTimer);
+  stampTimer = setTimeout(() => {
+    void stampCart();
+  }, STAMP_DEBOUNCE_MS);
+}
 
-  if (target && typeof target.subscribe === "function") {
-    return target.subscribe(callback);
-  }
+function getTileSubheading() {
+  const staffStatus = status.staffDetected ? "Staff detected" : "Not detected";
+  const lineText = `${status.lineCount} cart line${status.lineCount === 1 ? "" : "s"}`;
+  const errorText = status.lastError ? `Error: ${status.lastError}` : status.lastResult;
 
-  return undefined;
+  return `${staffStatus} | ${lineText} | ${errorText}`;
 }
 
 function Extension() {
@@ -229,30 +176,32 @@ function Extension() {
   return (
     <s-tile
       heading={i18n.translate("tile_heading")}
-      subheading={i18n.translate("tile_subheading")}
+      subheading={getTileSubheading()}
       onClick={() => shopify.action.presentModal()}
     />
   );
 }
 
-function register(api) {
+function renderTile() {
   render(<Extension />, document.body);
-  void stampCart(api);
+}
 
-  const unsubscribers = [
-    subscribe(api, "cart", () => void stampCart(api)),
-    subscribe(api, "pos.cart", () => void stampCart(api)),
-    subscribe(api, "session", () => void stampCart(api)),
-    subscribe(api, "pos.session", () => void stampCart(api)),
-  ].filter((unsubscribe) => typeof unsubscribe === "function");
-
-  return () => {
-    for (const unsubscribe of unsubscribers) {
-      unsubscribe();
-    }
+function register() {
+  status = {
+    ...status,
+    staffDetected: Boolean(getSession().staffMemberId),
+    lineCount: getCartLines().length,
   };
+
+  renderTile();
+  scheduleStamp();
+
+  return shopify.cart.current.subscribe((cart) => {
+    updateStatus({lineCount: cart.lineItems?.length ?? 0});
+    scheduleStamp();
+  });
 }
 
 export default async () => {
-  register(shopify);
+  register();
 };
