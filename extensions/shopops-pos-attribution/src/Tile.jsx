@@ -8,9 +8,22 @@ const PROPERTY_KEYS = {
   locationId: "_shopops_location_id",
   deviceId: "_shopops_device_id",
   deviceName: "_shopops_device_name",
+  staffLabel: "_shopops_staff_label",
+  attributedUserId: "_shopops_attributed_user_id",
   source: "_shopops_attribution_source",
 };
 const STAMP_DEBOUNCE_MS = 150;
+const STAFF_LABEL_KEYS = [
+  "staffMemberName",
+  "staffName",
+  "staffDisplayName",
+  "staffLabel",
+  "userName",
+  "userDisplayName",
+  "userLabel",
+  "name",
+  "displayName",
+];
 
 let isStamping = false;
 let stampQueued = false;
@@ -25,6 +38,24 @@ let status = {
 
 function stringify(value) {
   return value === undefined || value === null ? "" : String(value);
+}
+
+function readObjectValue(source, key) {
+  return source && typeof source === "object" && key in source
+    ? source[key]
+    : undefined;
+}
+
+function readFirstString(source, keys) {
+  for (const key of keys) {
+    const value = readObjectValue(source, key);
+
+    if (value !== undefined && value !== null && value !== "") {
+      return String(value);
+    }
+  }
+
+  return "";
 }
 
 function getSession() {
@@ -52,6 +83,7 @@ async function getAttribution() {
     locationId: stringify(session.locationId),
     deviceId: await getDeviceId(),
     deviceName: stringify(shopify.device?.name ?? shopify.device?.registerName),
+    staffLabel: readFirstString(session, STAFF_LABEL_KEYS),
   };
 }
 
@@ -60,7 +92,7 @@ function getCartLines() {
 }
 
 function buildProperties(attribution) {
-  return {
+  const properties = {
     [PROPERTY_KEYS.staffMemberId]: attribution.staffMemberId,
     [PROPERTY_KEYS.userId]: attribution.userId,
     [PROPERTY_KEYS.locationId]: attribution.locationId,
@@ -68,6 +100,12 @@ function buildProperties(attribution) {
     [PROPERTY_KEYS.deviceName]: attribution.deviceName,
     [PROPERTY_KEYS.source]: ATTRIBUTION_SOURCE,
   };
+
+  if (attribution.staffLabel) {
+    properties[PROPERTY_KEYS.staffLabel] = attribution.staffLabel;
+  }
+
+  return properties;
 }
 
 function needsStamp(line, properties) {
@@ -78,10 +116,27 @@ function needsStamp(line, properties) {
   );
 }
 
-function buildStampInputs(lines, properties) {
+function buildLineProperties(line, baseProperties) {
+  const lineStaffLabel = readFirstString(line, STAFF_LABEL_KEYS);
+  const attributedUserId = stringify(line.attributedUserId);
+  const properties = {...baseProperties};
+
+  if (!properties[PROPERTY_KEYS.staffLabel] && lineStaffLabel) {
+    properties[PROPERTY_KEYS.staffLabel] = lineStaffLabel;
+  }
+
+  if (attributedUserId) {
+    properties[PROPERTY_KEYS.attributedUserId] = attributedUserId;
+  }
+
+  return properties;
+}
+
+function buildStampInputs(lines, baseProperties) {
   return lines
-    .filter((line) => line.uuid && needsStamp(line, properties))
-    .map((line) => ({
+    .map((line) => ({line, properties: buildLineProperties(line, baseProperties)}))
+    .filter(({line, properties}) => line.uuid && needsStamp(line, properties))
+    .map(({line, properties}) => ({
       lineItemUuid: line.uuid,
       properties,
     }));

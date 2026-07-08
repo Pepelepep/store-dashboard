@@ -456,6 +456,8 @@ const POS_ATTRIBUTION_PROPERTY_KEYS = {
   locationId: "_shopops_location_id",
   deviceId: "_shopops_device_id",
   deviceName: "_shopops_device_name",
+  staffLabel: "_shopops_staff_label",
+  attributedUserId: "_shopops_attributed_user_id",
   attributionSource: "_shopops_attribution_source",
 } as const;
 
@@ -799,6 +801,14 @@ function getPosLineItemAttribution(lineItem: OrderLineItemNode) {
     shopops_pos_device_name: getCustomAttributeValue(
       lineItem.customAttributes,
       POS_ATTRIBUTION_PROPERTY_KEYS.deviceName,
+    ),
+    shopops_staff_label: getCustomAttributeValue(
+      lineItem.customAttributes,
+      POS_ATTRIBUTION_PROPERTY_KEYS.staffLabel,
+    ),
+    shopops_attributed_user_id: getCustomAttributeValue(
+      lineItem.customAttributes,
+      POS_ATTRIBUTION_PROPERTY_KEYS.attributedUserId,
     ),
     shopops_attribution_source: source === "pos_session" ? source : null,
     legacyStaffAttribution:
@@ -4242,6 +4252,8 @@ async function upsertOrderNodes({
         shopops_pos_location_id: posAttribution.shopops_pos_location_id,
         shopops_pos_device_id: posAttribution.shopops_pos_device_id,
         shopops_pos_device_name: posAttribution.shopops_pos_device_name,
+        shopops_staff_label: posAttribution.shopops_staff_label,
+        shopops_attributed_user_id: posAttribution.shopops_attributed_user_id,
         shopops_attribution_source: posAttribution.shopops_attribution_source,
       });
     }
@@ -5087,6 +5099,9 @@ export async function syncOrders({
               shopops_pos_location_id: posAttribution.shopops_pos_location_id,
               shopops_pos_device_id: posAttribution.shopops_pos_device_id,
               shopops_pos_device_name: posAttribution.shopops_pos_device_name,
+              shopops_staff_label: posAttribution.shopops_staff_label,
+              shopops_attributed_user_id:
+                posAttribution.shopops_attributed_user_id,
               shopops_attribution_source:
                 posAttribution.shopops_attribution_source,
             });
@@ -5393,6 +5408,8 @@ export async function syncOrdersBulk({
           shopops_pos_location_id: posAttribution.shopops_pos_location_id,
           shopops_pos_device_id: posAttribution.shopops_pos_device_id,
           shopops_pos_device_name: posAttribution.shopops_pos_device_name,
+          shopops_staff_label: posAttribution.shopops_staff_label,
+          shopops_attributed_user_id: posAttribution.shopops_attributed_user_id,
           shopops_attribution_source: posAttribution.shopops_attribution_source,
         },
       ];

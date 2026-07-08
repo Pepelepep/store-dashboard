@@ -46,6 +46,8 @@ type RecentPosOrderLine = {
   retail_location_name: string | null;
   shopops_pos_location_id: string | null;
   shopops_staff_member_id: string | null;
+  shopops_staff_label: string | null;
+  shopops_attributed_user_id: string | null;
   shopops_user_id: string | null;
   shopops_pos_device_id: string | null;
   shopops_pos_device_name: string | null;
@@ -547,7 +549,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { data: recentPosOrderLines } = await supabase
     .from("order_lines")
     .select(
-      "shopify_line_item_id, order_name, product_title, retail_location_name, shopops_pos_location_id, shopops_staff_member_id, shopops_user_id, shopops_pos_device_id, shopops_pos_device_name, net_sales, shopops_attribution_source, created_at_shopify",
+      "shopify_line_item_id, order_name, product_title, retail_location_name, shopops_pos_location_id, shopops_staff_member_id, shopops_staff_label, shopops_attributed_user_id, shopops_user_id, shopops_pos_device_id, shopops_pos_device_name, net_sales, shopops_attribution_source, created_at_shopify",
     )
     .eq("shop_domain", session.shop)
     .or(
@@ -1026,6 +1028,8 @@ export default function AdminSyncPage() {
                         "Product",
                         "Location",
                         "Staff member ID",
+                        "Staff label",
+                        "Attributed user ID",
                         "User ID",
                         "Device",
                         "Net sales",
@@ -1062,6 +1066,12 @@ export default function AdminSyncPage() {
                           {line.shopops_staff_member_id ?? "Unassigned"}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.shopops_staff_label ?? "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
+                          {line.shopops_attributed_user_id ?? "-"}
+                        </td>
+                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
                           {line.shopops_user_id ?? "Unassigned"}
                         </td>
                         <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
@@ -1084,7 +1094,7 @@ export default function AdminSyncPage() {
                     {recentPosOrderLines.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={10}
                           style={{ padding: "14px 10px", color: "#616161" }}
                         >
                           No POS-attributed order lines found yet.
