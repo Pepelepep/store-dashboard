@@ -148,6 +148,9 @@ export function SalesByStaffCard({
           : undefined
       }
     >
+      <p style={{ color: "#616161", fontSize: 13, marginTop: 0 }}>
+        Sales by Staff tracking begins after ShopOps POS attribution is activated.
+      </p>
       {!staffAttributionAvailable ? (
         <div
           style={{
