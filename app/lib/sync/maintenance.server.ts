@@ -170,6 +170,18 @@ async function cleanupHistory(supabase: SupabaseAdminClient) {
 
 export async function runMaintenanceTick() {
   const supabase = getSupabaseAdminClient();
+  const tickStartedAt = new Date().toISOString();
+  const { error: startError } = await supabase
+    .from("maintenance_tick_state")
+    .upsert(
+      {
+        singleton: true,
+        last_started_at: tickStartedAt,
+        updated_at: tickStartedAt,
+      },
+      { onConflict: "singleton" },
+    );
+  if (startError) throw new Error(startError.message);
   const steps: Record<
     string,
     { ok: boolean; result?: unknown; error?: string }
@@ -208,8 +220,23 @@ export async function runMaintenanceTick() {
   const failedSteps = Object.entries(steps)
     .filter(([, step]) => !step.ok)
     .map(([name]) => name);
+  const tickCompletedAt = new Date().toISOString();
+  const tickSucceeded = failedSteps.length === 0;
+  const healthUpdate: Record<string, unknown> = {
+    last_completed_at: tickCompletedAt,
+    last_error: tickSucceeded
+      ? null
+      : `Failed steps: ${failedSteps.join(", ")}`,
+    updated_at: tickCompletedAt,
+  };
+  if (tickSucceeded) healthUpdate.last_succeeded_at = tickCompletedAt;
+  const { error: healthError } = await supabase
+    .from("maintenance_tick_state")
+    .update(healthUpdate)
+    .eq("singleton", true);
+  if (healthError) throw new Error(healthError.message);
   return {
-    ok: failedSteps.length === 0,
+    ok: tickSucceeded,
     partial:
       failedSteps.length > 0 && failedSteps.length < Object.keys(steps).length,
     failedSteps,

@@ -930,11 +930,13 @@ export async function processManualSyncJobBatch({
   supabase,
   shop,
   jobId,
+  preserveQueuedOnFailure = false,
 }: {
   admin: ShopifyAdminClient;
   supabase: SupabaseAdminClient;
   shop: string;
   jobId: string;
+  preserveQueuedOnFailure?: boolean;
 }): Promise<ProcessManualSyncJobResult> {
   const { data: jobData, error: jobError } = await supabase
     .from("sync_jobs")
@@ -1223,37 +1225,51 @@ export async function processManualSyncJobBatch({
     const errorMessage = getSafeErrorMessage(error);
     const errorDetails = getErrorDetails(error);
 
-    await insertSyncRun({
-      supabase,
-      shop,
-      syncType: failedStep,
-      status: "error",
-      source: getSyncJobSource(claimedJob),
-      startedAt,
-      errorMessage,
-      details: {
+    try {
+      await insertSyncRun({
+        supabase,
+        shop,
+        syncType: failedStep,
+        status: "error",
+        source: getSyncJobSource(claimedJob),
+        startedAt,
+        errorMessage,
+        details: {
+          jobId: claimedJob.id,
+          batchJobType: claimedJob.job_type,
+          failedStep,
+          ...getProgressForStep(claimedJob, failedStep),
+          errorDetails,
+        },
+      });
+    } catch (historyError) {
+      console.error("[sync-jobs] failed to record error history", {
         jobId: claimedJob.id,
-        batchJobType: claimedJob.job_type,
-        failedStep,
-        ...getProgressForStep(claimedJob, failedStep),
-        errorDetails,
-      },
-    });
+        shop,
+        error: getSafeErrorMessage(historyError),
+      });
+    }
 
     const { data: updatedJob, error: updateError } = await supabase
       .from("sync_jobs")
       .update({
-        status: "error",
+        status: preserveQueuedOnFailure ? "pending" : "error",
         current_step: failedStep,
-        error_message: errorMessage,
+        error_message: preserveQueuedOnFailure ? null : errorMessage,
         details: {
           ...(claimedJob.details ?? {}),
           failedStep,
           errorDetails,
+          ...(preserveQueuedOnFailure
+            ? {
+                immediatePassFailedAt: new Date().toISOString(),
+                immediatePassError: errorMessage,
+              }
+            : {}),
         },
         started_at: startedAt,
         updated_at: new Date().toISOString(),
-        finished_at: new Date().toISOString(),
+        finished_at: preserveQueuedOnFailure ? null : new Date().toISOString(),
       })
       .eq("shop_domain", shop)
       .eq("id", job.id)
