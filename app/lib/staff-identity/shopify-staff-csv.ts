@@ -17,9 +17,17 @@ export type ShopifyStaffCsvResult = {
 };
 
 const REQUIRED_COLUMNS = [
-  "assisting_staff_member_id",
+  "assisting_staff_id",
   "assisting_staff_member_name",
 ] as const;
+
+const COLUMN_ALIASES: Record<string, string[]> = {
+  assisting_staff_id: ["assisting_staff_id", "assisting_staff_member_id"],
+  assisting_staff_member_name: [
+    "assisting_staff_member_name",
+    "assisting_staff_name",
+  ],
+};
 
 function normalizeHeader(value: string) {
   return value
@@ -73,7 +81,20 @@ export function parseShopifyStaffCsv(csv: string): ShopifyStaffCsvResult {
   if (records.length === 0) throw new Error("The CSV file is empty.");
 
   const headers = records[0].map(normalizeHeader);
-  const columns = new Map(headers.map((header, index) => [header, index]));
+  const exportedColumns = new Map(
+    headers.map((header, index) => [header, index]),
+  );
+  const columns = new Map<string, number>();
+  for (const column of REQUIRED_COLUMNS) {
+    const alias = COLUMN_ALIASES[column].find((name) =>
+      exportedColumns.has(name),
+    );
+    if (alias) columns.set(column, exportedColumns.get(alias)!);
+  }
+  for (const optional of ["pos_location_name", "net_sales"]) {
+    const index = exportedColumns.get(optional);
+    if (index !== undefined) columns.set(optional, index);
+  }
   const missing = REQUIRED_COLUMNS.filter((column) => !columns.has(column));
   if (missing.length) {
     throw new Error(
@@ -90,7 +111,7 @@ export function parseShopifyStaffCsv(csv: string): ShopifyStaffCsvResult {
     record[columns.get(name) ?? -1]?.trim() ?? "";
 
   for (const record of records.slice(1)) {
-    const sellerId = valueAt(record, "assisting_staff_member_id");
+    const sellerId = valueAt(record, "assisting_staff_id");
     const displayName = valueAt(record, "assisting_staff_member_name").replace(
       /\s+/g,
       " ",

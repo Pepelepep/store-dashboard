@@ -56,6 +56,7 @@ type StaffProfile = StaffPersonRow & {
   dashboardAccess: string;
   permissions: PermissionRow[];
   posMetrics: SellerMetric;
+  canHardDelete: boolean;
 };
 type LoaderData = {
   profiles: StaffProfile[];
@@ -63,6 +64,10 @@ type LoaderData = {
   deferred: StaffAlias[];
   sellerMetrics: Record<string, SellerMetric>;
   locations: LocationRow[];
+  posSetup: {
+    status: "not_configured" | "waiting" | "active";
+    firstTrackedAt: string | null;
+  };
 };
 type ActionData = { ok: boolean; message: string };
 type Overlay =
@@ -73,6 +78,8 @@ type Overlay =
   | "profile"
   | "access"
   | "pos"
+  | "remove"
+  | "setup"
   | null;
 
 const POS_ALIAS_TYPES = new Set<StaffAliasType>([
@@ -82,13 +89,9 @@ const POS_ALIAS_TYPES = new Set<StaffAliasType>([
   STAFF_ALIAS_TYPES.posEffectiveStaffId,
 ]);
 const SHOPIFY_QUERY = `FROM sales
-SHOW
-  net_sales,
-  assisting_staff_member_id,
-  assisting_staff_member_name,
-  pos_location_name
+SHOW net_sales
 GROUP BY
-  assisting_staff_member_id,
+  assisting_staff_id,
   assisting_staff_member_name,
   pos_location_name
 SINCE -365d
@@ -114,6 +117,13 @@ function date(value: string | null) {
 }
 function metricKey(alias: StaffAlias) {
   return staffIdentityAliasKey(alias.alias_type, alias.alias_value);
+}
+function advancedAliasLabel(aliasType: StaffAliasType) {
+  if (aliasType === STAFF_ALIAS_TYPES.shopifyAdminUserId)
+    return "Shopify login ID";
+  if (POS_ALIAS_TYPES.has(aliasType)) return "POS seller ID";
+  if (aliasType === STAFF_ALIAS_TYPES.email) return "Login email alias";
+  return "Identity alias";
 }
 function blankMetric(): SellerMetric {
   return {
@@ -178,6 +188,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     permissionsResult,
     locationsResult,
     metricsResult,
+    setupResult,
+    firstTrackedResult,
   ] = await Promise.all([
     supabase
       .from("staff_people")
@@ -211,6 +223,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
         "attribution_source, effective_staff_id, last_order_name, last_activity_at, last_location, last_device, order_count, net_sales",
       )
       .eq("shop_domain", session.shop),
+    supabase
+      .from("pos_attribution_setup")
+      .select("tile_confirmed_at")
+      .eq("shop_domain", session.shop)
+      .maybeSingle(),
+    supabase
+      .from("order_lines")
+      .select("created_at_shopify")
+      .eq("shop_domain", session.shop)
+      .not("shopops_effective_staff_id", "is", null)
+      .neq("shopops_effective_staff_id", "")
+      .not("shopops_attribution_source", "is", null)
+      .order("created_at_shopify", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
   ]);
   for (const result of [
     peopleResult,
@@ -218,6 +245,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     permissionsResult,
     locationsResult,
     metricsResult,
+    setupResult,
+    firstTrackedResult,
   ])
     if (result.error) throw new Response(result.error.message, { status: 500 });
   const people = (peopleResult.data ?? []) as StaffPersonRow[];
@@ -255,6 +284,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const personPermissions = permissions.filter(
       (row) => row.person_id === person.id,
     );
+    const personDashboardAccess = accessStatus(
+      person,
+      personAliases,
+      permissions,
+    );
     const posMetrics = personAliases.reduce((total, alias) => {
       const item = metrics.get(metricKey(alias));
       if (!item) return total;
@@ -280,9 +314,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return {
       ...person,
       aliases: personAliases,
-      dashboardAccess: accessStatus(person, personAliases, permissions),
+      dashboardAccess: personDashboardAccess,
       permissions: personPermissions,
       posMetrics,
+      canHardDelete:
+        personDashboardAccess === "No access" &&
+        personAliases.length === 0 &&
+        posMetrics.orderCount === 0,
     };
   });
   const reviewable = aliases.filter(
@@ -298,6 +336,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     deferred: reviewable.filter((alias) => alias.review_status === "deferred"),
     sellerMetrics: Object.fromEntries(metrics),
     locations: (locationsResult.data ?? []) as LocationRow[],
+    posSetup: {
+      status: firstTrackedResult.data?.created_at_shopify
+        ? "active"
+        : setupResult.data?.tile_confirmed_at
+          ? "waiting"
+          : "not_configured",
+      firstTrackedAt: firstTrackedResult.data?.created_at_shopify ?? null,
+    },
   } satisfies LoaderData;
 }
 
@@ -513,18 +559,46 @@ export async function action({ request }: ActionFunctionArgs) {
       ? { ok: false, message: result.error.message }
       : { ok: true, message: "Profile updated." };
   }
-  if (intent === "set_active") {
-    const result = await supabase
-      .from("staff_people")
-      .update({
-        is_active: text(data.get("is_active")) === "true",
+  if (intent === "confirm_pos_tile") {
+    const result = await supabase.from("pos_attribution_setup").upsert(
+      {
+        shop_domain: session.shop,
+        tile_confirmed_at: now,
         updated_at: now,
-      })
-      .eq("shop_domain", session.shop)
-      .eq("id", personId);
+      },
+      { onConflict: "shop_domain" },
+    );
     return result.error
       ? { ok: false, message: result.error.message }
-      : { ok: true, message: "Staff status updated." };
+      : {
+          ok: true,
+          message:
+            "Tile added. Tracking will become active after the first attributed POS sale is synchronized.",
+        };
+  }
+  if (intent === "remove_staff") {
+    const result = await supabase.rpc("remove_or_archive_staff", {
+      p_shop_domain: session.shop,
+      p_person_id: personId,
+    });
+    return result.error
+      ? { ok: false, message: result.error.message }
+      : {
+          ok: true,
+          message:
+            result.data === "deleted"
+              ? "Unused staff profile permanently deleted."
+              : "Staff archived. Access was removed and reporting history was preserved.",
+        };
+  }
+  if (intent === "restore_staff") {
+    const result = await supabase.rpc("restore_archived_staff", {
+      p_shop_domain: session.shop,
+      p_person_id: personId,
+    });
+    return result.error
+      ? { ok: false, message: result.error.message }
+      : { ok: true, message: "Staff restored." };
   }
   if (intent === "remove_dashboard_access") {
     const result = await supabase.rpc("remove_staff_dashboard_access", {
@@ -888,6 +962,10 @@ function CsvImport({
         Use a Shopify sales export to map many detected sellers to readable
         names. This never changes dashboard access.
       </p>
+      <p className="hint">
+        Required CSV fields: assisting_staff_id and assisting_staff_member_name.
+        POS location name and net sales are optional.
+      </p>
       <ol>
         <li>Open Shopify Admin → Analytics → Reports</li>
         <li>Create a new exploration</li>
@@ -1112,6 +1190,8 @@ export default function StaffPage() {
         const query =
           `${profile.display_name} ${profile.email ?? ""}`.toLowerCase();
         if (!query.includes(search.toLowerCase())) return false;
+        if (filter === "archived") return !profile.is_active;
+        if (!profile.is_active) return false;
         if (filter === "access") return profile.dashboardAccess !== "No access";
         if (filter === "pos") return profile.posMetrics.orderCount > 0;
         if (filter === "attention")
@@ -1141,6 +1221,7 @@ export default function StaffPage() {
   return (
     <main className="staff-page">
       <style>{STAFF_CSS}</style>
+      <style>{STAFF_LIFECYCLE_CSS}</style>
       <div className="staff-shell">
         <header className="page-header">
           <div>
@@ -1156,6 +1237,24 @@ export default function StaffPage() {
             {result.message}
           </div>
         ) : null}
+        {data.posSetup.status !== "active" ? (
+          <div className="pending-notice setup-notice">
+            <span>
+              <b>Finish POS sales tracking</b>
+              <small>
+                {data.posSetup.status === "waiting"
+                  ? "Waiting for the first tracked POS sale."
+                  : "Add the ShopOps tile to start Sales by Staff tracking."}
+              </small>
+            </span>
+            <Button onClick={() => open("setup")}>Set up</Button>
+          </div>
+        ) : (
+          <p className="tracking-active">
+            Sales by Staff tracking active since{" "}
+            {date(data.posSetup.firstTrackedAt)}.
+          </p>
+        )}
         {data.pending.length ? (
           <div className="pending-notice">
             <span>
@@ -1185,6 +1284,7 @@ export default function StaffPage() {
                 ["access", "Dashboard access"],
                 ["pos", "POS sellers"],
                 ["attention", "Needs attention"],
+                ["archived", "Archived"],
               ].map(([value, label]) => (
                 <button
                   type="button"
@@ -1278,22 +1378,28 @@ export default function StaffPage() {
                           ? "Enable access"
                           : "Edit access"}
                       </button>
-                      <Form method="post">
-                        <input type="hidden" name="intent" value="set_active" />
-                        <input
-                          type="hidden"
-                          name="person_id"
-                          value={profile.id}
-                        />
-                        <input
-                          type="hidden"
-                          name="is_active"
-                          value={String(!profile.is_active)}
-                        />
-                        <button type="submit">
-                          {profile.is_active ? "Deactivate" : "Reactivate"}
+                      {profile.is_active ? (
+                        <button
+                          type="button"
+                          onClick={() => open("remove", profile)}
+                        >
+                          Remove staff
                         </button>
-                      </Form>
+                      ) : (
+                        <Form method="post">
+                          <input
+                            type="hidden"
+                            name="intent"
+                            value="restore_staff"
+                          />
+                          <input
+                            type="hidden"
+                            name="person_id"
+                            value={profile.id}
+                          />
+                          <button type="submit">Restore</button>
+                        </Form>
+                      )}
                     </div>
                   ) : null}
                 </span>
@@ -1367,6 +1473,112 @@ export default function StaffPage() {
             profiles={data.profiles}
             metrics={data.sellerMetrics}
           />
+        </OverlayPanel>
+      ) : null}
+      {overlay === "setup" ? (
+        <OverlayPanel
+          title="Set up POS sales tracking"
+          onClose={() => setOverlay(null)}
+        >
+          <div className="setup-flow">
+            <section>
+              <StatusBadge
+                variant={
+                  data.posSetup.status === "not_configured"
+                    ? "warning"
+                    : "success"
+                }
+              >
+                {data.posSetup.status === "not_configured"
+                  ? "Not configured"
+                  : "Tile added"}
+              </StatusBadge>
+              <h3>1. Add the ShopOps POS tile</h3>
+              <ol>
+                <li>Open Shopify Admin</li>
+                <li>Go to Point of Sale → Settings</li>
+                <li>Open POS app / Smart Grid editor</li>
+                <li>Select the Smart Grid template used by the store</li>
+                <li>Click Add tile</li>
+                <li>Select Embedded Apps</li>
+                <li>Select the ShopOps POS attribution tile</li>
+                <li>Save</li>
+                <li>
+                  Repeat or assign the template to other POS locations when
+                  required
+                </li>
+              </ol>
+              {data.posSetup.status === "not_configured" ? (
+                <Form method="post">
+                  <input type="hidden" name="intent" value="confirm_pos_tile" />
+                  <Button primary type="submit">
+                    I added the tile
+                  </Button>
+                </Form>
+              ) : null}
+            </section>
+            <section>
+              <StatusBadge
+                variant={
+                  data.posSetup.status === "active" ? "success" : "neutral"
+                }
+              >
+                {data.posSetup.status === "active"
+                  ? "Active"
+                  : "Waiting for first tracked sale"}
+              </StatusBadge>
+              <h3>2. Verify tracking</h3>
+              <p>Complete one test POS sale after adding the tile.</p>
+              <p className="hint">
+                {data.posSetup.status === "active"
+                  ? `Sales by Staff tracking active since ${date(data.posSetup.firstTrackedAt)}.`
+                  : "Sales by Staff starts after the ShopOps POS tile is added and a new POS sale is synchronized."}
+              </p>
+            </section>
+            <section>
+              <StatusBadge variant="neutral">Optional</StatusBadge>
+              <h3>3. Import staff names</h3>
+              <p>
+                Import assisting staff IDs and names from Shopify Analytics to
+                assign multiple POS sellers faster.
+              </p>
+              <Button onClick={() => setOverlay("import")}>
+                Import staff names
+              </Button>
+              <p className="hint">
+                The import maps names to detected seller IDs. It cannot recreate
+                seller attribution for older unstamped orders.
+              </p>
+            </section>
+          </div>
+        </OverlayPanel>
+      ) : null}
+      {selected && overlay === "remove" ? (
+        <OverlayPanel
+          title="Remove staff"
+          onClose={() => setOverlay("details")}
+        >
+          <div className="remove-confirmation">
+            <h3>
+              {selected.canHardDelete
+                ? "Permanently delete this unused profile?"
+                : "Archive this staff member?"}
+            </h3>
+            <p>
+              {selected.canHardDelete
+                ? `${selected.display_name} has no dashboard access, seller identities, or reporting history. This unused profile will be permanently deleted.`
+                : `${selected.display_name} will be hidden from the active Staff list. Dashboard access will be removed, while POS mappings, identities, and Sales by Staff history remain preserved.`}
+            </p>
+            <Form method="post">
+              <input type="hidden" name="intent" value="remove_staff" />
+              <input type="hidden" name="person_id" value={selected.id} />
+              <Button danger type="submit">
+                {selected.canHardDelete
+                  ? "Permanently delete"
+                  : "Archive staff"}
+              </Button>
+            </Form>
+          </div>
         </OverlayPanel>
       ) : null}
       {selected && overlay === "profile" ? (
@@ -1450,9 +1662,10 @@ export default function StaffPage() {
                       : "Enabled"}
                   </b>
                   {selected.dashboardAccess !== "No access"
-                    ? ` · ${selected.dashboardAccess} · ${locationLabel(selected)}`
+                    ? ` · ${selected.email ?? "No login email"} · ${selected.dashboardAccess} · ${locationLabel(selected)}`
                     : ""}
                 </p>
+                <small>Login email controls access to ShopOps.</small>
               </div>
               <Button onClick={() => setOverlay("access")}>
                 {selected.dashboardAccess === "No access" ? "Enable" : "Edit"}
@@ -1473,6 +1686,10 @@ export default function StaffPage() {
                   First activity {date(selected.posMetrics.firstActivityAt)} ·
                   Last activity {date(selected.posMetrics.lastActivityAt)}
                 </small>
+                <small>
+                  POS seller matching controls Sales by Staff reporting and does
+                  not grant dashboard access.
+                </small>
               </div>
               <Button onClick={() => setOverlay("pos")}>Manage</Button>
             </section>
@@ -1482,9 +1699,10 @@ export default function StaffPage() {
                 {selected.aliases.length ? (
                   selected.aliases.map((alias) => (
                     <code key={alias.id}>
-                      {alias.alias_type}: {alias.alias_value}
+                      {advancedAliasLabel(alias.alias_type)}:{" "}
+                      {alias.alias_value}
                       <br />
-                      Source: {alias.source ?? "unknown"}
+                      Attribution source: {alias.source ?? "unknown"}
                     </code>
                   ))
                 ) : (
@@ -1492,6 +1710,13 @@ export default function StaffPage() {
                 )}
               </div>
             </details>
+            {selected.is_active ? (
+              <div className="detail-remove">
+                <Button danger onClick={() => setOverlay("remove")}>
+                  Remove staff
+                </Button>
+              </div>
+            ) : null}
           </div>
         </OverlayPanel>
       ) : null}
@@ -1533,6 +1758,19 @@ export default function StaffPage() {
 export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
+
+const STAFF_LIFECYCLE_CSS = `
+.tracking-active{color:#39714f;font-size:13px;margin:0 0 14px;padding:0 2px}
+.setup-flow{display:grid}
+.setup-flow>section{border-bottom:1px solid #e5e5e5;padding:18px 0}
+.setup-flow>section:first-child{padding-top:0}
+.setup-flow>section:last-child{border:0}
+.setup-flow h3{font-size:16px;margin:10px 0}
+.setup-flow ol{color:#454545;display:grid;gap:6px;padding-left:22px}
+.detail-remove{padding-top:18px}
+.remove-confirmation h3{margin-top:0}
+.remove-confirmation p{color:#454545;line-height:1.5}
+`;
 
 const STAFF_CSS = `
 *{box-sizing:border-box}.staff-page{min-height:100vh;background:#f4f5f4;color:#202223;padding:28px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.staff-shell{max-width:1240px;margin:auto}.page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.page-header h1{font-size:30px;letter-spacing:-.5px;margin:0}.page-header p{color:#616161;margin:6px 0 0}.staff-button{background:#fff;border:1px solid #c9cccf;border-radius:8px;color:#202223;cursor:pointer;font-weight:650;padding:8px 12px}.staff-button:hover{background:#f6f6f7}.staff-button.primary{background:#303030;border-color:#303030;color:#fff}.staff-button.danger{color:#b42318}.notice,.pending-notice{border-radius:10px;margin-bottom:14px;padding:12px 14px}.notice.success{background:#eaf7ef;color:#166534}.notice.error{background:#fff0f0;color:#b42318}.pending-notice{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;display:flex;justify-content:space-between}.pending-notice span{display:grid;gap:2px}.pending-notice small{color:#4b5563}.roster{background:#fff;border:1px solid #dedede;border-radius:14px;box-shadow:0 1px 3px #0000000a;overflow:visible}.toolbar{align-items:center;border-bottom:1px solid #e8e8e8;display:flex;gap:14px;padding:14px}.search{align-items:center;border:1px solid #c9cccf;border-radius:8px;display:flex;min-width:260px;padding:0 10px}.search input{border:0;outline:0;padding:9px;width:100%}.filters{display:flex;gap:4px;overflow:auto}.filters button,.segmented button{background:transparent;border:0;border-radius:7px;cursor:pointer;padding:8px 11px;white-space:nowrap}.filters button[aria-pressed=true],.segmented button[aria-pressed=true]{background:#e8e8e8;font-weight:700}.table-head,.staff-row{align-items:center;display:grid;gap:16px;grid-template-columns:minmax(210px,1.5fr) 1fr .8fr 1fr .65fr 52px;padding:0 16px}.table-head{background:#f7f7f7;color:#616161;font-size:12px;font-weight:700;min-height:38px;text-transform:uppercase}.staff-row{border-top:1px solid #ededed;cursor:pointer;min-height:62px}.staff-row:hover{background:#fafafa}.identity{display:grid;min-width:0}.identity b,.identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity small{color:#6d7175;margin-top:3px}.actions{position:relative}.icon-button{background:transparent;border:0;border-radius:7px;cursor:pointer;font-size:18px;padding:6px 8px}.icon-button:hover{background:#e8e8e8}.menu{background:#fff;border:1px solid #d8d8d8;border-radius:9px;box-shadow:0 8px 22px #0002;display:grid;min-width:160px;padding:5px;position:absolute;right:0;top:36px;z-index:4}.menu button{background:transparent;border:0;border-radius:6px;cursor:pointer;padding:8px;text-align:left;width:100%}.menu button:hover{background:#f1f1f1}.compact-empty{text-align:center;color:#6d7175;padding:30px}.roster-footer{align-items:center;border-top:1px solid #ededed;color:#6d7175;display:flex;gap:18px;padding:12px 16px}.roster-footer button{background:transparent;border:0;color:#255aa8;cursor:pointer;margin-left:auto}.roster-footer button+button{margin-left:0}.staff-overlay{align-items:stretch;background:#0006;display:flex;inset:0;justify-content:flex-end;position:fixed;z-index:50}.staff-panel{background:#fff;box-shadow:-8px 0 32px #0002;max-width:92vw;overflow:auto;width:460px}.staff-panel.wide{width:760px}.staff-panel>header{align-items:center;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 22px;position:sticky;top:0;background:#fff;z-index:2}.staff-panel h2{font-size:20px;margin:0}.panel-body{padding:22px}.form-stack{display:grid;gap:16px}.form-stack label{display:grid;font-size:13px;font-weight:650;gap:6px}.form-stack input,.form-stack select,.upload input{border:1px solid #b7b9bb;border-radius:8px;font:inherit;padding:10px}.form-stack fieldset{border:0;margin:0;padding:0}.form-stack legend{font-size:13px;font-weight:650;margin-bottom:8px}.form-stack .check,.check{align-items:center;display:flex;font-weight:400;gap:8px;margin:8px 0}.form-stack .check input,.check input{margin:0}.hint{color:#6d7175;font-size:13px}.detail-sections{display:grid}.detail-sections>section{align-items:flex-start;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 0}.detail-sections h3{font-size:14px;margin:0 0 5px}.detail-sections p{color:#454545;margin:0}.detail-sections small{color:#6d7175;display:block;margin-top:5px}.detail-sections details{padding:18px 0}.detail-sections summary{cursor:pointer;font-weight:650}.advanced{display:grid;gap:8px;margin-top:12px}.advanced code{background:#f6f6f7;border-radius:7px;font-size:11px;overflow-wrap:anywhere;padding:9px}.seller-row{border-bottom:1px solid #e5e5e5;padding:18px 0}.seller-row:first-child{padding-top:0}.seller-facts{display:grid;gap:12px;grid-template-columns:repeat(3,1fr)}.seller-facts span{display:grid;font-size:14px}.seller-facts b{color:#6d7175;font-size:11px;margin-bottom:4px;text-transform:uppercase}.row-actions{display:flex;gap:8px;margin-top:15px}.assign-box{background:#f7f7f7;border-radius:10px;margin-top:15px;padding:15px}.assign-box h3{margin:0 0 10px}.segmented{background:#ededed;border-radius:9px;display:flex;margin-bottom:14px;padding:3px}.segmented button{flex:1}.query{background:#202223;border-radius:10px;color:#fff;margin:16px 0;overflow:auto;padding:14px}.query pre{font-size:12px;white-space:pre-wrap}.query .staff-button{float:right}.upload{display:grid;font-weight:650;gap:8px}.preview{border-top:1px solid #e5e5e5;margin-top:20px;padding-top:20px}.preview-counts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.preview-counts span{background:#f6f6f7;border-radius:8px;display:grid;font-size:12px;padding:10px}.preview-counts b{font-size:18px}.preview-row{align-items:center;border-bottom:1px solid #e5e5e5;display:grid;gap:10px;grid-template-columns:1fr auto;padding:14px 0}.preview-row>div{display:grid}.preview-row span,.preview-row small{color:#6d7175;font-size:13px}.preview-row select{border:1px solid #b7b9bb;border-radius:7px;padding:7px}.preview-row.warning{background:#fff8e6;padding-left:10px}.preview-row.muted{opacity:.7}.confirm{background:#eef5ff;border-radius:10px;margin-top:16px;padding:14px}.bulk-forms{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.remove-access{border-top:1px solid #e5e5e5;margin-top:22px;padding-top:18px}.pos-summary{text-align:center;padding:20px 0}.saving{background:#303030;border-radius:20px;bottom:18px;color:white;padding:9px 15px;position:fixed;right:18px}.error{color:#b42318}

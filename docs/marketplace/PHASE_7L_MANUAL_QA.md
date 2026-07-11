@@ -23,4 +23,4 @@ Use a test shop with ShopOps POS attribution active. Re-sync the relevant orders
 - [ ] Large history: verify seller-card order count, net sales, and latest activity against a history larger than the API row limit.
 - [ ] Metrics idempotency: refresh and repeat order sync; confirm seller metrics and source-qualified identities do not duplicate.
 
-Also verify the Staff & access page keeps raw IDs inside collapsed Advanced details and that the legacy Team Access URL remains usable for bookmarked links.
+Also verify the Staff page keeps raw IDs inside collapsed Advanced details and that the legacy Team Access URL remains usable for bookmarked links.

@@ -76,29 +76,53 @@ export function getStaffIdentityAliasCandidates(line: StaffIdentityOrderLine) {
 
   switch (line.shopops_attribution_source) {
     case "attributed_user_id":
-      return [{ aliasType: STAFF_ALIAS_TYPES.posAttributedUserId, aliasValue: effectiveId }];
+      return [
+        {
+          aliasType: STAFF_ALIAS_TYPES.posAttributedUserId,
+          aliasValue: effectiveId,
+        },
+      ];
     case "attributed_staff_member_id":
     case "pos_session_staff_member":
-      return [{ aliasType: STAFF_ALIAS_TYPES.posStaffMemberId, aliasValue: effectiveId }];
+      return [
+        {
+          aliasType: STAFF_ALIAS_TYPES.posStaffMemberId,
+          aliasValue: effectiveId,
+        },
+      ];
     case "pos_session_user":
     case "pos_session":
-      return [{ aliasType: STAFF_ALIAS_TYPES.posUserId, aliasValue: effectiveId }];
+      return [
+        { aliasType: STAFF_ALIAS_TYPES.posUserId, aliasValue: effectiveId },
+      ];
     default:
-      return [{ aliasType: STAFF_ALIAS_TYPES.posEffectiveStaffId, aliasValue: effectiveId }];
+      return [
+        {
+          aliasType: STAFF_ALIAS_TYPES.posEffectiveStaffId,
+          aliasValue: effectiveId,
+        },
+      ];
   }
 }
 
 export function getDiagnosticStaffIdentityAliasCandidates(
   line: StaffIdentityOrderLine,
 ) {
-  const candidates: Array<{ aliasType: StaffAliasType; aliasValue: string }> = [];
+  const candidates: Array<{ aliasType: StaffAliasType; aliasValue: string }> =
+    [];
   const staffMemberId = normalizeAliasValue(line.shopops_staff_member_id);
   const userId = normalizeAliasValue(line.shopops_user_id);
   if (staffMemberId) {
-    candidates.push({ aliasType: STAFF_ALIAS_TYPES.posStaffMemberId, aliasValue: staffMemberId });
+    candidates.push({
+      aliasType: STAFF_ALIAS_TYPES.posStaffMemberId,
+      aliasValue: staffMemberId,
+    });
   }
   if (userId) {
-    candidates.push({ aliasType: STAFF_ALIAS_TYPES.posUserId, aliasValue: userId });
+    candidates.push({
+      aliasType: STAFF_ALIAS_TYPES.posUserId,
+      aliasValue: userId,
+    });
   }
   return candidates;
 }
@@ -117,7 +141,7 @@ export function resolveStaffDisplayNameForOrderLine(
       ? alias.staff_people[0]
       : alias?.staff_people;
 
-    if (alias?.person_id && person?.display_name && person.is_active !== false) {
+    if (alias?.person_id && person?.display_name) {
       return {
         label: person.display_name,
         status: "mapped",
