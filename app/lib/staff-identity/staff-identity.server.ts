@@ -36,7 +36,7 @@ export async function fetchStaffIdentityAliasesForOrderLines({
     const { data, error } = await supabase
       .from("staff_identity_aliases")
       .select(
-        "id, shop_domain, person_id, alias_type, alias_value, source, first_seen_at, last_seen_at, last_location_id, last_device_id, last_device_name, created_at, updated_at, staff_people(id, shop_domain, display_name, email, is_active, created_at, updated_at)",
+        "id, shop_domain, person_id, alias_type, alias_value, source, review_status, suggestion_dismissed_at, first_seen_at, last_seen_at, last_location_id, last_device_id, last_device_name, created_at, updated_at, staff_people(id, shop_domain, display_name, email, is_active, created_at, updated_at)",
       )
       .eq("shop_domain", shop)
       .eq("alias_type", aliasType)
@@ -96,7 +96,7 @@ export async function upsertPosStaffIdentityAliasesFromOrderLines({
         shop_domain: shop,
         alias_type: candidate.aliasType,
         alias_value: candidate.aliasValue,
-        source: "order_line_sync",
+        source: line.shopops_attribution_source ?? "order_line_sync",
         first_seen_at: existing?.first_seen_at ?? seenAt,
         last_seen_at: seenAt,
         last_location_id: line.shopops_pos_location_id ?? null,
@@ -104,6 +104,7 @@ export async function upsertPosStaffIdentityAliasesFromOrderLines({
         last_device_name: line.shopops_pos_device_name ?? null,
       });
     }
+
   }
 
   const aliasRows = Array.from(aliasRowsByKey.values());
@@ -127,6 +128,7 @@ export async function upsertPosStaffIdentityAliasesFromOrderLines({
       person_id: existing?.person_id ?? null,
       first_seen_at: existing?.first_seen_at ?? row.first_seen_at,
       updated_at: new Date().toISOString(),
+      review_status: existing?.person_id ? "mapped" : (existing?.review_status ?? "pending"),
     };
   });
 

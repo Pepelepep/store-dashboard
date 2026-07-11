@@ -27,6 +27,8 @@ export type StaffIdentityAliasRow = {
   alias_type: StaffAliasType;
   alias_value: string;
   source: string | null;
+  review_status?: "pending" | "deferred" | "mapped";
+  suggestion_dismissed_at?: string | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
   last_location_id: string | null;
@@ -43,6 +45,7 @@ export type StaffIdentityOrderLine = {
   shopops_user_id?: string | null;
   shopops_attributed_user_id?: string | null;
   shopops_effective_staff_id?: string | null;
+  shopops_attribution_source?: string | null;
   shopops_pos_location_id?: string | null;
   shopops_pos_device_id?: string | null;
   shopops_pos_device_name?: string | null;
@@ -56,28 +59,6 @@ export type StaffResolution = {
   matchedAliasValue: string | null;
 };
 
-const POS_ALIAS_PRIORITY: Array<{
-  aliasType: StaffAliasType;
-  field: keyof StaffIdentityOrderLine;
-}> = [
-  {
-    aliasType: STAFF_ALIAS_TYPES.posEffectiveStaffId,
-    field: "shopops_effective_staff_id",
-  },
-  {
-    aliasType: STAFF_ALIAS_TYPES.posAttributedUserId,
-    field: "shopops_attributed_user_id",
-  },
-  {
-    aliasType: STAFF_ALIAS_TYPES.posStaffMemberId,
-    field: "shopops_staff_member_id",
-  },
-  {
-    aliasType: STAFF_ALIAS_TYPES.posUserId,
-    field: "shopops_user_id",
-  },
-];
-
 function normalizeAliasValue(value: string | null | undefined) {
   return value?.trim() || null;
 }
@@ -90,13 +71,36 @@ export function staffIdentityAliasKey(
 }
 
 export function getStaffIdentityAliasCandidates(line: StaffIdentityOrderLine) {
-  return POS_ALIAS_PRIORITY.map(({ aliasType, field }) => ({
-    aliasType,
-    aliasValue: normalizeAliasValue(line[field]),
-  })).filter(
-    (candidate): candidate is { aliasType: StaffAliasType; aliasValue: string } =>
-      Boolean(candidate.aliasValue),
-  );
+  const effectiveId = normalizeAliasValue(line.shopops_effective_staff_id);
+  if (!effectiveId) return [];
+
+  switch (line.shopops_attribution_source) {
+    case "attributed_user_id":
+      return [{ aliasType: STAFF_ALIAS_TYPES.posAttributedUserId, aliasValue: effectiveId }];
+    case "attributed_staff_member_id":
+    case "pos_session_staff_member":
+      return [{ aliasType: STAFF_ALIAS_TYPES.posStaffMemberId, aliasValue: effectiveId }];
+    case "pos_session_user":
+    case "pos_session":
+      return [{ aliasType: STAFF_ALIAS_TYPES.posUserId, aliasValue: effectiveId }];
+    default:
+      return [{ aliasType: STAFF_ALIAS_TYPES.posEffectiveStaffId, aliasValue: effectiveId }];
+  }
+}
+
+export function getDiagnosticStaffIdentityAliasCandidates(
+  line: StaffIdentityOrderLine,
+) {
+  const candidates: Array<{ aliasType: StaffAliasType; aliasValue: string }> = [];
+  const staffMemberId = normalizeAliasValue(line.shopops_staff_member_id);
+  const userId = normalizeAliasValue(line.shopops_user_id);
+  if (staffMemberId) {
+    candidates.push({ aliasType: STAFF_ALIAS_TYPES.posStaffMemberId, aliasValue: staffMemberId });
+  }
+  if (userId) {
+    candidates.push({ aliasType: STAFF_ALIAS_TYPES.posUserId, aliasValue: userId });
+  }
+  return candidates;
 }
 
 export function resolveStaffDisplayNameForOrderLine(
@@ -126,7 +130,7 @@ export function resolveStaffDisplayNameForOrderLine(
 
   if (candidates.length > 0) {
     return {
-      label: "Unmapped staff",
+      label: "Unmapped POS seller",
       status: "unmapped",
       staffKey: "staff:unmapped",
       matchedAliasType: candidates[0].aliasType,

@@ -257,7 +257,7 @@ export function getStaffDisplayLabel(row: DashboardSalesOrderLineRow) {
     row.resolved_staff_display_name ||
     row.staff_member_name ||
     row.staff_member_email ||
-    (row.staff_member_id ? "Unmapped staff" : null) ||
+    (row.staff_member_id ? "Unmapped POS seller" : null) ||
     "Unassigned"
   );
 }
