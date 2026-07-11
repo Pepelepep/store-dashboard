@@ -1,20 +1,28 @@
 # Phase 7N manual QA
 
 - [ ] Install on a clean shop and confirm one Initial setup rebuild is queued and completes.
-- [ ] Click Sync now and confirm one parent operation refreshes all four resources with a seven-day order overlap.
+- [ ] Click Sync now and confirm one parent operation begins a bounded processing pass immediately with a seven-day order overlap.
+- [ ] Force the immediate pass to fail and confirm the operation remains queued with its cursor/progress available for cron recovery.
+- [ ] Confirm the maintenance cron safely continues a partially processed manual sync on its next tick.
 - [ ] Deliver order, product and inventory webhooks and confirm the maintenance tick processes them without manual queue processing.
 - [ ] Call the maintenance endpoint with a valid secret and verify all five structured step summaries.
 - [ ] Make reconciliation due and confirm a single 48-hour updated-order job is queued, automation timestamps update, and the next due time is six hours later.
-- [ ] Confirm Rebuild data requires confirmation, reads older-than-seven-day orders, and does not truncate valid data first.
+- [ ] Confirm Rebuild data requires confirmation, starts its first bounded batch immediately, reads older-than-seven-day orders, and does not truncate valid data first.
 - [ ] Double-click Sync now and confirm no duplicate concurrent operation is created.
+- [ ] Run the cron worker while a manual immediate pass starts and confirm optimistic claiming prevents duplicate work.
 - [ ] Run jobs for two shops and confirm claims and writes remain isolated by shop.
 - [ ] Make a running job stale and confirm it is recovered, then fails after the bounded stale retry limit.
 - [ ] Retry a failed job from Advanced diagnostics and confirm one support-triggered replacement is queued.
 - [ ] Rebuild a large order history and verify order, line-item, refund and transaction pagination.
 - [ ] Repeat order synchronization and verify refunds, discounts, net sales, COGS and profit do not inflate.
 - [ ] Repeat synchronization of attributed POS sales and verify effective seller and location attribution remain unchanged.
-- [ ] Confirm Recent activity renders at most 20 parent operations.
-- [ ] Confirm Load more requests the next server-side page and Newer returns to the previous page.
+- [ ] Confirm polling starts after Sync now/Rebuild data and when loading a page with an active operation.
+- [ ] Confirm polling revalidates status, freshness, progress and activity every five seconds, then stops when no operation remains active.
+- [ ] Confirm the overall status is one compact row containing the badge, last update, automatic state/check and Sync now action.
+- [ ] Confirm different resource freshness timestamps are presented as normal independent timestamps.
+- [ ] Confirm default Recent activity renders at most five quiet, merchant-friendly parent operations.
+- [ ] Confirm View all activity shows up to 20 operations and Load more/Newer use server-side pagination.
+- [ ] Confirm automatic sync is Not configured without a successful maintenance tick, Active within approximately 15 minutes, and Delayed afterward.
 - [ ] Seed expired successful operational history and confirm cleanup deletes at most the configured bounded batch while preserving active and unresolved failed work.
 - [ ] Call the cron endpoint with a missing/invalid secret and confirm HTTP 401 without secret logging.
 - [ ] Force one maintenance step to fail and confirm safe later steps run and the response reports a partial result.

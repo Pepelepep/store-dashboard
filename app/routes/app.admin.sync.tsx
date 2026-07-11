@@ -5,7 +5,9 @@ import {
   useLoaderData,
   useLocation,
   useNavigation,
+  useRevalidator,
 } from "react-router";
+import { useEffect } from "react";
 
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
@@ -14,6 +16,7 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getOfflineAdminClient } from "../lib/shopify/offline-admin.server";
 import {
   createManualSyncJob,
+  processManualSyncJobBatch,
   processSyncJobsBatch,
   type SyncJobRow,
   type SyncJobType,
@@ -28,10 +31,10 @@ type SyncRun = {
   finished_at: string | null;
   error_message: string | null;
 };
-type AutomationState = {
-  last_reconciliation_started_at: string | null;
-  last_reconciliation_succeeded_at: string | null;
-  next_reconciliation_due_at: string | null;
+type MaintenanceHealth = {
+  last_started_at: string | null;
+  last_completed_at: string | null;
+  last_succeeded_at: string | null;
   last_error: string | null;
 };
 type LoaderData = {
@@ -40,10 +43,11 @@ type LoaderData = {
   activeJob: SyncJobRow | null;
   hasMore: boolean;
   page: number;
-  automation: AutomationState | null;
+  viewAllActivity: boolean;
+  maintenance: MaintenanceHealth | null;
   webhookCounts: Record<string, number>;
 };
-type ActionData = { ok: boolean; message: string };
+type ActionData = { ok: boolean; message: string; operationStatus?: string };
 
 const RESOURCES = [
   { type: "orders", label: "Orders" },
@@ -77,7 +81,7 @@ function duration(job: SyncJobRow) {
 }
 
 function statusLabel(status: string) {
-  if (status === "pending") return "Queued";
+  if (status === "pending") return "Waiting";
   if (status === "running") return "Syncing";
   if (status === "success") return "Completed";
   if (status === "error") return "Failed";
@@ -92,11 +96,14 @@ function statusVariant(status: string) {
 }
 
 function actionLabel(job: SyncJobRow) {
-  if (job.job_type === "full_refresh") return "Rebuild data";
-  if (job.job_type === "full") return "Sync now";
-  if (job.job_type === "orders_reconciliation_48h") return "Reconcile orders";
-  if (job.job_type === "financial_backfill_30d") return "Financial backfill";
-  return `Sync ${job.job_type}`;
+  if (job.details?.trigger === "initial_setup") return "Initial import";
+  if (job.job_type === "full_refresh") return "Historical rebuild";
+  if (job.job_type === "full") return "Manual sync";
+  if (job.job_type === "orders_reconciliation_48h")
+    return "Automatic reconciliation";
+  if (job.details?.source === "webhook") return "Shopify update";
+  if (job.job_type === "financial_backfill_30d") return "Reporting repair";
+  return "Shopify data update";
 }
 
 function triggerLabel(job: SyncJobRow) {
@@ -118,16 +125,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
   await assertAdminAccess({ request, session, supabase });
   const url = new URL(request.url);
+  const viewAllActivity = url.searchParams.get("activity") === "all";
   const page = Math.max(
     0,
-    Math.min(50, Number(url.searchParams.get("activityPage") ?? 0) || 0),
+    viewAllActivity
+      ? Math.min(50, Number(url.searchParams.get("activityPage") ?? 0) || 0)
+      : 0,
   );
-  const from = page * 20;
+  const activityLimit = viewAllActivity ? 20 : 5;
+  const from = viewAllActivity ? page * 20 : 0;
   const [
     runsResult,
     jobsResult,
     activeResult,
-    automationResult,
+    maintenanceResult,
     webhookResult,
   ] = await Promise.all([
     supabase
@@ -141,7 +152,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .select("*")
       .eq("shop_domain", session.shop)
       .order("created_at", { ascending: false })
-      .range(from, from + 20),
+      .range(from, from + activityLimit),
     supabase
       .from("sync_jobs")
       .select("*")
@@ -151,11 +162,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .limit(1)
       .maybeSingle(),
     supabase
-      .from("sync_automation_state")
+      .from("maintenance_tick_state")
       .select(
-        "last_reconciliation_started_at, last_reconciliation_succeeded_at, next_reconciliation_due_at, last_error",
+        "last_started_at, last_completed_at, last_succeeded_at, last_error",
       )
-      .eq("shop_domain", session.shop)
+      .eq("singleton", true)
       .maybeSingle(),
     supabase
       .from("webhook_events")
@@ -167,7 +178,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     runsResult,
     jobsResult,
     activeResult,
-    automationResult,
+    maintenanceResult,
     webhookResult,
   ])
     if (result.error) throw new Response(result.error.message, { status: 500 });
@@ -176,11 +187,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     webhookCounts[event.status] = (webhookCounts[event.status] ?? 0) + 1;
   return {
     runs: (runsResult.data ?? []) as SyncRun[],
-    jobs: ((jobsResult.data ?? []) as SyncJobRow[]).slice(0, 20),
+    jobs: ((jobsResult.data ?? []) as SyncJobRow[]).slice(0, activityLimit),
     activeJob: (activeResult.data as SyncJobRow | null) ?? null,
-    hasMore: (jobsResult.data ?? []).length > 20,
+    hasMore: (jobsResult.data ?? []).length > activityLimit,
     page,
-    automation: automationResult.data as AutomationState | null,
+    viewAllActivity,
+    maintenance: maintenanceResult.data as MaintenanceHealth | null,
     webhookCounts,
   } satisfies LoaderData;
 }
@@ -245,25 +257,74 @@ export async function action({ request }: ActionFunctionArgs) {
     jobType: rebuild ? "full_refresh" : "full",
     trigger: rebuild ? "support" : "manual",
   });
+  let updatedJob = result.job;
+  let immediatePassDeferred = false;
+  try {
+    const admin = await getOfflineAdminClient(session.shop);
+    const immediate = await processManualSyncJobBatch({
+      admin,
+      supabase,
+      shop: session.shop,
+      jobId: result.job.id,
+      preserveQueuedOnFailure: true,
+    });
+    updatedJob = immediate.job;
+    immediatePassDeferred = Boolean(
+      immediate.job.details?.immediatePassFailedAt,
+    );
+  } catch {
+    immediatePassDeferred = true;
+  }
+  const completed = updatedJob.status === "success";
   return {
     ok: true,
-    message: result.reused
-      ? "A data synchronization is already queued or running."
-      : rebuild
-        ? "Historical rebuild queued."
-        : "Synchronization queued.",
+    operationStatus: updatedJob.status,
+    message: completed
+      ? rebuild
+        ? "Historical rebuild completed."
+        : "Shopify data updated."
+      : immediatePassDeferred
+        ? "Synchronization will continue automatically."
+        : result.reused
+          ? "The active synchronization is continuing."
+          : rebuild
+            ? "Historical rebuild started and will continue automatically."
+            : "Synchronization started and will continue automatically.",
   };
 }
 
 export default function DataSyncPage() {
-  const { runs, jobs, activeJob, hasMore, page, automation, webhookCounts } =
-    useLoaderData<LoaderData>();
+  const {
+    runs,
+    jobs,
+    activeJob,
+    hasMore,
+    page,
+    viewAllActivity,
+    maintenance,
+    webhookCounts,
+  } = useLoaderData<LoaderData>();
   const result = useActionData<ActionData>();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const location = useLocation();
+  useEffect(() => {
+    if (!activeJob) return;
+    const interval = window.setInterval(() => {
+      if (revalidator.state === "idle") revalidator.revalidate();
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [activeJob, revalidator]);
   const activityHref = (nextPage: number) => {
     const params = new URLSearchParams(location.search);
     params.set("activityPage", String(nextPage));
+    return `?${params.toString()}`;
+  };
+  const activityViewHref = (viewAll: boolean) => {
+    const params = new URLSearchParams(location.search);
+    if (viewAll) params.set("activity", "all");
+    else params.delete("activity");
+    params.delete("activityPage");
     return `?${params.toString()}`;
   };
   const lastSuccess =
@@ -275,18 +336,20 @@ export default function DataSyncPage() {
         (!lastSuccess || latestFailedRun.started_at > lastSuccess.finished_at!)
       ? "Needs attention"
       : "Up to date";
-  const dueAt = automation?.next_reconciliation_due_at
-    ? new Date(automation.next_reconciliation_due_at).getTime()
+  const lastMaintenanceAt = maintenance?.last_succeeded_at ?? null;
+  const maintenanceAge = lastMaintenanceAt
+    ? Date.now() - new Date(lastMaintenanceAt).getTime()
     : null;
-  const automatic = !automation
+  const automatic = !lastMaintenanceAt
     ? "Not configured"
-    : automation.last_error || (dueAt && dueAt < Date.now() - 15 * 60 * 1000)
+    : maintenanceAge !== null && maintenanceAge > 15 * 60 * 1000
       ? "Delayed"
       : "Active";
   const isSubmitting = navigation.state !== "idle";
   return (
     <main className="sync-page">
       <style>{CSS}</style>
+      <style>{COMPACT_CSS}</style>
       <div className="sync-shell">
         <header>
           <div>
@@ -295,21 +358,14 @@ export default function DataSyncPage() {
               ShopOps keeps your Shopify reporting data current automatically.
             </p>
           </div>
-          <Form method="post">
-            <input type="hidden" name="intent" value="sync_now" />
-            <button className="primary" disabled={isSubmitting} type="submit">
-              Sync now
-            </button>
-          </Form>
         </header>
         {result ? (
           <div className={`result ${result.ok ? "ok" : "bad"}`}>
             {result.message}
           </div>
         ) : null}
-        <section className="overview">
-          <div>
-            <small>Overall status</small>
+        <section className="overall-row">
+          <div className="overall-copy">
             <StatusBadge
               variant={
                 overall === "Up to date"
@@ -321,24 +377,26 @@ export default function DataSyncPage() {
             >
               {overall}
             </StatusBadge>
+            <span>Last updated {formatDate(lastSuccess?.finished_at)}</span>
+            <span className="divider">·</span>
+            <span>
+              Automatic sync <b>{automatic.toLowerCase()}</b>
+              {lastMaintenanceAt
+                ? ` · Last automatic check ${formatDate(lastMaintenanceAt)}`
+                : " · No successful automatic check yet"}
+            </span>
           </div>
-          <div>
-            <small>Last successful update</small>
-            <b>{formatDate(lastSuccess?.finished_at)}</b>
-          </div>
-          <div>
-            <small>Automatic sync</small>
-            <StatusBadge
-              variant={
-                automatic === "Active"
-                  ? "success"
-                  : automatic === "Delayed"
-                    ? "warning"
-                    : "neutral"
-              }
-            >
-              {automatic}
-            </StatusBadge>
+          <div className="sync-action">
+            <Form method="post">
+              <input type="hidden" name="intent" value="sync_now" />
+              <button className="primary" disabled={isSubmitting} type="submit">
+                Sync now
+              </button>
+            </Form>
+            <small>
+              Updates orders, products, inventory, and locations without
+              rebuilding your complete order history.
+            </small>
           </div>
         </section>
         {activeJob ? (
@@ -346,7 +404,7 @@ export default function DataSyncPage() {
             <span>
               <b>
                 {activeJob.status === "pending"
-                  ? "Synchronization queued"
+                  ? "Synchronization scheduled"
                   : "Synchronizing Shopify data"}
               </b>
               <small>
@@ -408,42 +466,73 @@ export default function DataSyncPage() {
         </section>
         <section className="activity">
           <div className="section-title">
-            <h2>Recent activity</h2>
-            <span>Page {page + 1}</span>
+            <h2>{viewAllActivity ? "All activity" : "Recent activity"}</h2>
+            {viewAllActivity ? (
+              <span>Page {page + 1}</span>
+            ) : (
+              <a href={activityViewHref(true)}>View all activity</a>
+            )}
           </div>
-          <div className="activity-head">
-            <span>Time</span>
-            <span>Action</span>
-            <span>Trigger</span>
-            <span>Result</span>
-            <span>Duration</span>
-          </div>
-          {jobs.map((job) => (
-            <details className="activity-row" key={job.id}>
-              <summary>
+          {viewAllActivity ? (
+            <div className="activity-head">
+              <span>Time</span>
+              <span>Action</span>
+              <span>Trigger</span>
+              <span>Result</span>
+              <span>Duration</span>
+            </div>
+          ) : (
+            <div className="activity-head compact">
+              <span>Time</span>
+              <span>Action</span>
+              <span>Result</span>
+            </div>
+          )}
+          {jobs.map((job) =>
+            viewAllActivity ? (
+              <details className="activity-row" key={job.id}>
+                <summary>
+                  <span>{formatDate(job.created_at)}</span>
+                  <b>{actionLabel(job)}</b>
+                  <span>{triggerLabel(job)}</span>
+                  <StatusBadge variant={statusVariant(job.status)}>
+                    {statusLabel(job.status)}
+                  </StatusBadge>
+                  <span>{duration(job)}</span>
+                </summary>
+                <div className="activity-detail">
+                  <span>
+                    {job.error_message ??
+                      "Operation details are available for support."}
+                  </span>
+                </div>
+              </details>
+            ) : (
+              <div
+                className={`activity-compact-row ${job.status === "error" ? "failed" : ""}`}
+                key={job.id}
+              >
                 <span>{formatDate(job.created_at)}</span>
                 <b>{actionLabel(job)}</b>
-                <span>{triggerLabel(job)}</span>
                 <StatusBadge variant={statusVariant(job.status)}>
                   {statusLabel(job.status)}
                 </StatusBadge>
-                <span>{duration(job)}</span>
-              </summary>
-              <div className="activity-detail">
-                <span>
-                  {job.error_message ??
-                    "Operation details are available for support."}
-                </span>
               </div>
-            </details>
-          ))}
+            ),
+          )}
           {!jobs.length ? (
             <p className="empty">No synchronization activity yet.</p>
           ) : null}
-          <div className="pagination">
-            {page > 0 ? <a href={activityHref(page - 1)}>Newer</a> : <span />}
-            {hasMore ? <a href={activityHref(page + 1)}>Load more</a> : null}
-          </div>
+          {viewAllActivity ? (
+            <div className="pagination">
+              {page > 0 ? (
+                <a href={activityHref(page - 1)}>Newer</a>
+              ) : (
+                <a href={activityViewHref(false)}>Back to recent</a>
+              )}
+              {hasMore ? <a href={activityHref(page + 1)}>Load more</a> : null}
+            </div>
+          ) : null}
         </section>
         <details className="advanced">
           <summary>Advanced diagnostics</summary>
@@ -451,8 +540,8 @@ export default function DataSyncPage() {
             <section>
               <h3>Rebuild data</h3>
               <p>
-                Re-imports complete Shopify history without deleting valid data
-                first. This can take considerably longer.
+                Reimports complete historical data. Use only to repair or
+                reinitialize reporting.
               </p>
               <Form method="post">
                 <input type="hidden" name="intent" value="rebuild" />
@@ -473,8 +562,8 @@ export default function DataSyncPage() {
             <section>
               <h3>Queue processing</h3>
               <p>
-                Support-only processing. Merchants do not need this for normal
-                synchronization.
+                Runs pending background tasks immediately. Automatic sync
+                normally handles this.
               </p>
               <Form method="post">
                 <input type="hidden" name="intent" value="process_queue" />
@@ -497,7 +586,7 @@ export default function DataSyncPage() {
                 <div className="raw" key={`raw-${job.id}`}>
                   <code>{job.id}</code>
                   <span>
-                    {job.job_type} · {job.status}
+                    {actionLabel(job)} · {statusLabel(job.status)}
                   </span>
                   {job.status === "error" ? (
                     <Form method="post">
@@ -519,6 +608,21 @@ export default function DataSyncPage() {
 export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
+
+const COMPACT_CSS = `
+.sync-shell>header{margin-bottom:16px}
+.overall-row{align-items:center;background:#fff;border:1px solid #dedede;border-radius:12px;display:flex;gap:20px;justify-content:space-between;margin-bottom:14px;padding:12px 14px}
+.overall-copy{align-items:center;color:#454545;display:flex;flex-wrap:wrap;font-size:13px;gap:9px}
+.overall-copy .divider{color:#8c9196}
+.sync-action{align-items:flex-end;display:flex;flex-direction:column;gap:5px;max-width:360px;text-align:right}
+.sync-action small{color:#6d7175;font-size:11px;line-height:1.35}
+.resource-row{min-height:48px}
+.section-title a{color:#255aa8;font-size:13px;text-decoration:none}
+.activity-head.compact,.activity-compact-row{align-items:center;display:grid;gap:12px;grid-template-columns:180px 1fr 110px}
+.activity-compact-row{border-bottom:1px solid #ededed;min-height:52px;padding:8px}
+.activity-compact-row.failed{background:#fff8f7}
+@media(max-width:760px){.overall-row{align-items:stretch;flex-direction:column}.overall-copy{align-items:flex-start;flex-direction:column}.overall-copy .divider{display:none}.sync-action{align-items:stretch;max-width:none;text-align:left}.activity-head.compact{display:none}.activity-compact-row{grid-template-columns:1fr auto}.activity-compact-row>b{grid-column:1/-1;grid-row:1}.activity-compact-row>span:first-child{grid-column:1;grid-row:2}.activity-compact-row>span:last-child{grid-column:2;grid-row:2}}
+`;
 
 const CSS = `
 *{box-sizing:border-box}.sync-page{min-height:100vh;background:#f4f5f4;color:#202223;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:28px}.sync-shell{max-width:1100px;margin:auto}.sync-shell>header{align-items:center;display:flex;justify-content:space-between;margin-bottom:20px}.sync-shell h1{font-size:30px;margin:0}.sync-shell header p{color:#616161;margin:6px 0 0}button,.primary{background:#fff;border:1px solid #b7b9bb;border-radius:8px;cursor:pointer;font-weight:650;padding:9px 13px}.primary{background:#303030;border-color:#303030;color:#fff}button:disabled{cursor:not-allowed;opacity:.6}.result{border-radius:9px;margin-bottom:14px;padding:11px 14px}.result.ok{background:#eaf7ef;color:#166534}.result.bad{background:#fff0f0;color:#b42318}.overview{background:#fff;border:1px solid #dedede;border-radius:13px;display:grid;grid-template-columns:repeat(3,1fr);margin-bottom:14px;padding:18px}.overview>div{display:grid;gap:8px}.overview small{color:#6d7175;font-weight:650}.progress{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;border-radius:10px;display:flex;justify-content:space-between;margin-bottom:14px;padding:12px 14px}.progress span{display:grid;gap:3px}.progress small{color:#516072}.resource-card,.activity,.advanced{background:#fff;border:1px solid #dedede;border-radius:13px;margin-bottom:16px;padding:18px}.resource-card h2,.activity h2{font-size:17px;margin:0 0 12px}.resource-row{align-items:center;border-top:1px solid #ededed;display:grid;gap:14px;grid-template-columns:1fr 130px 180px 1.4fr;min-height:54px}.resource-row small{color:#b42318}.section-title{align-items:center;display:flex;justify-content:space-between}.section-title span{color:#6d7175;font-size:13px}.activity-head,.activity-row summary{align-items:center;display:grid;gap:12px;grid-template-columns:180px 1fr 110px 110px 90px}.activity-head{background:#f7f7f7;color:#616161;font-size:11px;font-weight:700;padding:9px;text-transform:uppercase}.activity-row{border-bottom:1px solid #ededed}.activity-row summary{cursor:pointer;list-style:none;min-height:56px;padding:8px}.activity-row summary::-webkit-details-marker{display:none}.activity-detail{background:#fafafa;color:#616161;font-size:13px;padding:10px 14px}.pagination{display:flex;justify-content:space-between;padding-top:14px}.pagination a{color:#255aa8;text-decoration:none}.advanced>summary{cursor:pointer;font-weight:700}.advanced-body{display:grid;gap:20px;margin-top:18px}.advanced-body>section{border-top:1px solid #e5e5e5;padding-top:16px}.advanced-body h3{font-size:15px;margin:0 0 5px}.advanced-body p{color:#616161;margin:5px 0 12px}.advanced-body form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.raw{align-items:center;border-top:1px solid #ededed;display:grid;gap:10px;grid-template-columns:1fr 180px auto;padding:9px 0}.raw code{font-size:11px;overflow-wrap:anywhere}.empty{color:#6d7175;text-align:center;padding:20px}
