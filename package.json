@@ -24,6 +24,7 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "sync:local": "vite-node ./scripts/local-refresh.ts",
+    "cron:maintenance": "node ./scripts/run-maintenance-tick.mjs",
     "typecheck": "react-router typegen && tsc --noEmit"
   },
   "type": "module",

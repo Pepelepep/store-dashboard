@@ -26,6 +26,7 @@ type ProcessWebhookEventsBatchArgs = {
   maxAttempts?: number;
   maxReconciliationJobs?: number;
   maxReconciliationShops?: number;
+  includeReconciliation?: boolean;
 };
 
 type InventoryItemUpdate = {
@@ -471,6 +472,7 @@ export async function processWebhookEventsBatch({
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   maxReconciliationJobs = DEFAULT_MAX_RECONCILIATION_JOBS,
   maxReconciliationShops = DEFAULT_MAX_RECONCILIATION_SHOPS,
+  includeReconciliation = true,
 }: ProcessWebhookEventsBatchArgs = {}) {
   const claimedEvents = await claimWebhookEvents({
     supabase,
@@ -495,14 +497,18 @@ export async function processWebhookEventsBatch({
     }
   }
 
-  const reconciliationEnqueue = await enqueueDueOrdersReconciliationJobs({
-    supabase,
-    shopLimit: maxReconciliationShops,
-  });
-  const reconciliationProcessing = await processOrdersReconciliationJobs({
-    supabase,
-    jobLimit: maxReconciliationJobs,
-  });
+  const reconciliationEnqueue = includeReconciliation
+    ? await enqueueDueOrdersReconciliationJobs({
+        supabase,
+        shopLimit: maxReconciliationShops,
+      })
+    : { shopsChecked: 0, enqueued: 0, skipped: 0, failed: 0 };
+  const reconciliationProcessing = includeReconciliation
+    ? await processOrdersReconciliationJobs({
+        supabase,
+        jobLimit: maxReconciliationJobs,
+      })
+    : { jobsChecked: 0, processed: 0, completed: 0, failed: 0 };
 
   return {
     ...summary,

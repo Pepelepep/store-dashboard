@@ -142,7 +142,7 @@ export default function App() {
               <a href={`/app/admin/staff${search}`}>Staff</a>
             ) : null}
             {canAdmin ? (
-              <a href={`/app/data-quality${search}`}>Sync Status</a>
+              <a href={`/app/admin/sync${search}`}>Data sync</a>
             ) : null}
             {billingEnabled ? (
               <a href={`/app/billing-required${search}`}>Billing</a>

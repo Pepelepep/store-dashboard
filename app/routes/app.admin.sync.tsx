@@ -1,513 +1,111 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useLocation,
+  useNavigation,
+} from "react-router";
 
-import { authenticate } from "../shopify.server";
-import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
+import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { getOfflineAdminClient } from "../lib/shopify/offline-admin.server";
 import {
   createManualSyncJob,
   processSyncJobsBatch,
   type SyncJobRow,
   type SyncJobType,
 } from "../lib/sync/sync-jobs.server";
-import { getOfflineAdminClient } from "../lib/shopify/offline-admin.server";
-import { hasConfiguredScope } from "../lib/shopify/scopes.server";
-import {
-  ensureShopInitialized,
-  logEmptyDataState,
-} from "../lib/shop/shop-initialization.server";
-import {
-  fetchStaffIdentityAliasesForOrderLines,
-} from "../lib/staff-identity/staff-identity.server";
-import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
-import { HelperText } from "../components/ui/HelperText";
-import { InlineResult } from "../components/ui/InlineResult";
-import { PageNotice } from "../components/ui/PageNotice";
-import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
-import { StatusBadge } from "../components/ui/StatusBadge";
-
-type TableCount = {
-  table: string;
-  count: number;
-  error?: string;
-};
+import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
+import { authenticate } from "../shopify.server";
 
 type SyncRun = {
-  id: string;
   sync_type: string;
   status: string;
-  source: string | null;
   started_at: string;
-  finished_at?: string | null;
-  error_message?: string | null;
-  details?: Record<string, unknown> | null;
+  finished_at: string | null;
+  error_message: string | null;
 };
-
-type RecentPosOrderLine = {
-  shopify_line_item_id: string;
-  order_name: string | null;
-  product_title: string | null;
-  retail_location_name: string | null;
-  shopops_pos_location_id: string | null;
-  shopops_staff_member_id: string | null;
-  shopops_staff_label: string | null;
-  shopops_attributed_user_id: string | null;
-  shopops_attributed_staff_member_id: string | null;
-  shopops_effective_staff_id: string | null;
-  shopops_user_id: string | null;
-  shopops_pos_device_id: string | null;
-  shopops_pos_device_name: string | null;
-  net_sales: number | null;
-  shopops_attribution_source: string | null;
-  created_at_shopify: string | null;
-  resolved_staff_name: string;
+type AutomationState = {
+  last_reconciliation_started_at: string | null;
+  last_reconciliation_succeeded_at: string | null;
+  next_reconciliation_due_at: string | null;
+  last_error: string | null;
 };
-
 type LoaderData = {
-  shop: string;
-  counts: TableCount[];
-  lastSyncRuns: SyncRun[];
+  runs: SyncRun[];
+  jobs: SyncJobRow[];
   activeJob: SyncJobRow | null;
-  recentJobs: SyncJobRow[];
-  hasReadUsersScope: boolean;
-  recentPosOrderLines: RecentPosOrderLine[];
+  hasMore: boolean;
+  page: number;
+  automation: AutomationState | null;
+  webhookCounts: Record<string, number>;
 };
+type ActionData = { ok: boolean; message: string };
 
-type ActionData = {
-  ok: boolean;
-  message: string;
-};
+const RESOURCES = [
+  { type: "orders", label: "Orders" },
+  { type: "products", label: "Products" },
+  { type: "inventory", label: "Inventory" },
+  { type: "locations", label: "Locations" },
+] as const;
 
-type SyncTypeConfig = {
-  syncType: string;
-  label: string;
-  note?: string;
-};
-
-const freshnessMs = 24 * 60 * 60 * 1000;
-const syncTypeConfigs: SyncTypeConfig[] = [
-  {
-    syncType: "locations",
-    label: "Locations",
-  },
-  {
-    syncType: "products",
-    label: "Products",
-  },
-  {
-    syncType: "inventory",
-    label: "Inventory",
-  },
-  {
-    syncType: "orders",
-    label: "Orders",
-  },
-];
-const manualSyncActions: Array<{ jobType: SyncJobType; label: string }> = [
-  { jobType: "locations", label: "Sync locations" },
-  { jobType: "products", label: "Sync products" },
-  { jobType: "inventory", label: "Sync inventory" },
-  { jobType: "orders", label: "Sync orders" },
-  { jobType: "full", label: "Full refresh job" },
-];
-
-async function getTableCount({
-  table,
-  shop,
-  supabase,
-}: {
-  table: string;
-  shop: string;
-  supabase: ReturnType<typeof getSupabaseAdminClient>;
-}): Promise<TableCount> {
-  const { count, error } = await supabase
-    .from(table)
-    .select("*", { count: "exact", head: true })
-    .eq("shop_domain", shop);
-
-  return {
-    table,
-    count: count ?? 0,
-    error: error?.message,
-  };
+function formatDate(value?: string | null) {
+  return value
+    ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(value))
+    : "Never";
 }
 
-function formatDateTime(value?: string | null) {
-  if (!value) {
-    return "-";
-  }
-
-  return new Intl.DateTimeFormat("fr-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatDuration(startedAt?: string | null, finishedAt?: string | null) {
-  if (!startedAt || !finishedAt) {
-    return "-";
-  }
-
-  const started = new Date(startedAt).getTime();
-  const finished = new Date(finishedAt).getTime();
-
-  if (Number.isNaN(started) || Number.isNaN(finished) || finished < started) {
-    return "-";
-  }
-
-  const seconds = Math.round((finished - started) / 1000);
-
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-
-  return remainingSeconds > 0
-    ? `${minutes}m ${remainingSeconds}s`
-    : `${minutes}m`;
-}
-
-function formatMilliseconds(value: unknown) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "-";
-  }
-
-  if (value < 1000) {
-    return `${Math.round(value)}ms`;
-  }
-
-  const seconds = value / 1000;
-
-  if (seconds < 60) {
-    return `${seconds.toFixed(1)}s`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-
-  return remainingSeconds > 0
-    ? `${minutes}m ${remainingSeconds}s`
-    : `${minutes}m`;
-}
-
-function formatMoney(value?: number | null) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "-";
-  }
-
-  return new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency: "CAD",
-  }).format(value);
-}
-
-function getDurationDetails(run?: SyncRun | null) {
-  const duration = run?.details?.duration;
-
-  return duration && typeof duration === "object"
-    ? (duration as Record<string, unknown>)
-    : {};
-}
-
-function getTotalDuration(run: SyncRun) {
-  const duration = getDurationDetails(run);
-  const fromDetails = formatMilliseconds(duration.totalMs);
-
-  return fromDetails === "-"
-    ? formatDuration(run.started_at, run.finished_at)
-    : fromDetails;
-}
-
-function getCogsDuration(run: SyncRun) {
-  return formatMilliseconds(getDurationDetails(run).cogsRecomputeMs);
-}
-
-function getBulkOperationId(run: SyncRun) {
-  const value = run.details?.bulkOperationId;
-
-  return typeof value === "string" && value ? value : "-";
-}
-
-function getFreshness(run?: SyncRun | null) {
-  if (!run?.finished_at) {
-    return "Unknown";
-  }
-
-  const finished = new Date(run.finished_at).getTime();
-
-  if (Number.isNaN(finished)) {
-    return "Unknown";
-  }
-
-  return Date.now() - finished <= freshnessMs ? "Fresh" : "Stale";
-}
-
-function getFreshnessVariant(status: string) {
-  if (status === "Fresh") return "success";
-  if (status === "Stale") return "warning";
-  return "neutral";
-}
-
-function getSyncStatusVariant(status: string) {
-  const normalized = status.toLowerCase();
-
-  if (normalized === "success") return "success";
-  if (normalized === "error" || normalized === "failed") return "error";
-  if (normalized === "running") return "info";
-  if (normalized === "partial") return "warning";
-
-  return "neutral";
-}
-
-function isErrorStatus(status?: string | null) {
-  const normalized = (status ?? "").toLowerCase();
-  return normalized === "error" || normalized === "failed";
-}
-
-function formatSyncRunDetails(run: SyncRun) {
-  const details = run.details;
-
-  if (!details) {
-    return "-";
-  }
-
-  switch (run.sync_type) {
-    case "locations":
-      return details.syncedCount === undefined
-        ? "-"
-        : `${details.syncedCount} locations`;
-    case "products":
-      return (
-        [
-          details.productsSynced === undefined
-            ? null
-            : `${details.productsSynced} products`,
-          details.variantsSynced === undefined
-            ? null
-            : `${details.variantsSynced} variants`,
-          details.orderLinesCogsRecomputed === undefined
-            ? null
-            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
-        ]
-          .filter(Boolean)
-          .join(", ") || "-"
-      );
-    case "inventory":
-      return (
-        [
-          details.inventoryItemsProcessed === undefined
-            ? null
-            : `${details.inventoryItemsProcessed} items`,
-          details.inventoryLevelsSynced === undefined
-            ? null
-            : `${details.inventoryLevelsSynced} levels`,
-          details.orderLinesCogsRecomputed === undefined
-            ? null
-            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
-        ]
-          .filter(Boolean)
-          .join(", ") || "-"
-      );
-    case "staff_members":
-      return details.syncedCount === undefined
-        ? "-"
-        : `${details.syncedCount} staff members`;
-    case "orders":
-      return (
-        [
-          details.ordersSynced === undefined
-            ? null
-            : `${details.ordersSynced} orders`,
-          details.orderLinesSynced === undefined
-            ? null
-            : `${details.orderLinesSynced} lines`,
-          details.pagesProcessed === undefined
-            ? null
-            : `${details.pagesProcessed} pages`,
-          details.startDate && details.endDate
-            ? `${details.startDate} to ${details.endDate}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(", ") || "-"
-      );
-    default:
-      return "-";
-  }
-}
-
-function formatDetailSummary(run?: SyncRun | null) {
-  if (!run?.details) return "No count details recorded yet.";
-
-  const details = run.details;
-
-  switch (run.sync_type) {
-    case "locations":
-      return details.syncedCount === undefined
-        ? "No count details recorded yet."
-        : `${details.syncedCount} locations`;
-    case "products":
-      return (
-        [
-          details.productsSynced === undefined
-            ? null
-            : `${details.productsSynced} products`,
-          details.variantsSynced === undefined
-            ? null
-            : `${details.variantsSynced} variants`,
-          details.orderLinesCogsRecomputed === undefined
-            ? null
-            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
-        ]
-          .filter(Boolean)
-          .join(" · ") || "No count details recorded yet."
-      );
-    case "inventory":
-      return (
-        [
-          details.inventoryItemsProcessed === undefined
-            ? null
-            : `${details.inventoryItemsProcessed} inventory items`,
-          details.inventoryLevelsSynced === undefined
-            ? null
-            : `${details.inventoryLevelsSynced} levels`,
-          details.orderLinesCogsRecomputed === undefined
-            ? null
-            : `${details.orderLinesCogsRecomputed} COGS recalculated`,
-        ]
-          .filter(Boolean)
-          .join(" · ") || "No count details recorded yet."
-      );
-    case "staff_members":
-      return details.syncedCount === undefined
-        ? "No count details recorded yet."
-        : `${details.syncedCount} staff members`;
-    case "orders":
-      return (
-        [
-          details.ordersSynced === undefined
-            ? null
-            : `${details.ordersSynced} orders`,
-          details.orderLinesSynced === undefined
-            ? null
-            : `${details.orderLinesSynced} lines`,
-          details.pagesProcessed === undefined
-            ? null
-            : `${details.pagesProcessed} pages`,
-        ]
-          .filter(Boolean)
-          .join(" · ") || "No count details recorded yet."
-      );
-    default:
-      return "No count details recorded yet.";
-  }
-}
-
-function getSyncTypeSummary(runs: SyncRun[], syncType: string) {
-  const typeRuns = runs.filter((run) => run.sync_type === syncType);
-  const latestRun = typeRuns[0] ?? null;
-  const lastSuccess =
-    typeRuns.find((run) => run.status === "success" && run.finished_at) ?? null;
-  const lastError = typeRuns.find((run) => isErrorStatus(run.status)) ?? null;
-
-  return {
-    latestRun,
-    lastSuccess,
-    lastError,
-    freshness: getFreshness(lastSuccess),
-  };
-}
-
-function isActiveJob(job?: SyncJobRow | null): job is SyncJobRow {
-  return job?.status === "pending" || job?.status === "running";
-}
-
-function getJobStatusPriority(status?: string | null) {
-  switch (status) {
-    case "running":
-      return 0;
-    case "pending":
-      return 1;
-    case "error":
-      return 2;
-    case "success":
-      return 3;
-    case "cancelled":
-      return 4;
-    default:
-      return 5;
-  }
-}
-
-function selectCurrentSyncJob(jobs: Array<SyncJobRow | null | undefined>) {
-  return (
-    [...jobs]
-      .filter((job): job is SyncJobRow => Boolean(job))
-      .sort((a, b) => {
-        const priorityDiff =
-          getJobStatusPriority(a.status) - getJobStatusPriority(b.status);
-
-        if (priorityDiff !== 0) {
-          return priorityDiff;
-        }
-
-        return (
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-        );
-      })[0] ?? null
+function duration(job: SyncJobRow) {
+  if (!job.started_at || !job.finished_at) return "—";
+  const seconds = Math.max(
+    0,
+    Math.round(
+      (new Date(job.finished_at).getTime() -
+        new Date(job.started_at).getTime()) /
+        1000,
+    ),
   );
+  return seconds < 60
+    ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function getJobProgressSummary(job?: SyncJobRow | null) {
-  if (!job?.counts) {
-    return "No batch counts recorded yet.";
-  }
+function statusLabel(status: string) {
+  if (status === "pending") return "Queued";
+  if (status === "running") return "Syncing";
+  if (status === "success") return "Completed";
+  if (status === "error") return "Failed";
+  return "Cancelled";
+}
 
-  return Object.entries(job.counts)
-    .map(([step, counts]) => {
-      if (!counts || typeof counts !== "object") {
-        return null;
-      }
+function statusVariant(status: string) {
+  if (status === "success") return "success" as const;
+  if (status === "error") return "error" as const;
+  if (status === "pending" || status === "running") return "info" as const;
+  return "neutral" as const;
+}
 
-      const stepCounts = counts as Record<string, unknown>;
-      const values = [
-        typeof stepCounts.syncedCount === "number"
-          ? `${stepCounts.syncedCount} records`
-          : null,
-        typeof stepCounts.productsSynced === "number"
-          ? `${stepCounts.productsSynced} products`
-          : null,
-        typeof stepCounts.variantsSynced === "number"
-          ? `${stepCounts.variantsSynced} variants`
-          : null,
-        typeof stepCounts.inventoryItemsProcessed === "number"
-          ? `${stepCounts.inventoryItemsProcessed} inventory items`
-          : null,
-        typeof stepCounts.inventoryLevelsSynced === "number"
-          ? `${stepCounts.inventoryLevelsSynced} levels`
-          : null,
-        typeof stepCounts.ordersSynced === "number"
-          ? `${stepCounts.ordersSynced} orders`
-          : null,
-        typeof stepCounts.orderLinesSynced === "number"
-          ? `${stepCounts.orderLinesSynced} lines`
-          : null,
-        typeof stepCounts.orderLinesCogsRecomputed === "number"
-          ? `${stepCounts.orderLinesCogsRecomputed} COGS recalculated`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(", ");
+function actionLabel(job: SyncJobRow) {
+  if (job.job_type === "full_refresh") return "Rebuild data";
+  if (job.job_type === "full") return "Sync now";
+  if (job.job_type === "orders_reconciliation_48h") return "Reconcile orders";
+  if (job.job_type === "financial_backfill_30d") return "Financial backfill";
+  return `Sync ${job.job_type}`;
+}
 
-      return values ? `${step}: ${values}` : null;
-    })
-    .filter(Boolean)
-    .join(" · ") || "No batch counts recorded yet.";
+function triggerLabel(job: SyncJobRow) {
+  const trigger = job.details?.trigger;
+  if (trigger === "initial_setup") return "Initial setup";
+  if (trigger === "support") return "Support";
+  if (job.details?.source === "cron") return "Automatic";
+  if (job.details?.source === "webhook") return "Webhook";
+  return "Manual";
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -518,93 +116,73 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-
   await assertAdminAccess({ request, session, supabase });
-
-  const counts = await Promise.all([
-    getTableCount({ table: "locations", shop: session.shop, supabase }),
-    getTableCount({ table: "products", shop: session.shop, supabase }),
-    getTableCount({ table: "variants", shop: session.shop, supabase }),
-    getTableCount({ table: "inventory_levels", shop: session.shop, supabase }),
-    getTableCount({ table: "orders", shop: session.shop, supabase }),
-    getTableCount({ table: "order_lines", shop: session.shop, supabase }),
-    getTableCount({ table: "fixed_expenses", shop: session.shop, supabase }),
-    getTableCount({
-      table: "user_location_access",
-      shop: session.shop,
-      supabase,
-    }),
-    getTableCount({ table: "staff_members", shop: session.shop, supabase }),
+  const url = new URL(request.url);
+  const page = Math.max(
+    0,
+    Math.min(50, Number(url.searchParams.get("activityPage") ?? 0) || 0),
+  );
+  const from = page * 20;
+  const [
+    runsResult,
+    jobsResult,
+    activeResult,
+    automationResult,
+    webhookResult,
+  ] = await Promise.all([
+    supabase
+      .from("sync_runs")
+      .select("sync_type, status, started_at, finished_at, error_message")
+      .eq("shop_domain", session.shop)
+      .order("started_at", { ascending: false })
+      .limit(100),
+    supabase
+      .from("sync_jobs")
+      .select("*")
+      .eq("shop_domain", session.shop)
+      .order("created_at", { ascending: false })
+      .range(from, from + 20),
+    supabase
+      .from("sync_jobs")
+      .select("*")
+      .eq("shop_domain", session.shop)
+      .in("status", ["pending", "running"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("sync_automation_state")
+      .select(
+        "last_reconciliation_started_at, last_reconciliation_succeeded_at, next_reconciliation_due_at, last_error",
+      )
+      .eq("shop_domain", session.shop)
+      .maybeSingle(),
+    supabase
+      .from("webhook_events")
+      .select("status")
+      .eq("shop_domain", session.shop)
+      .limit(500),
   ]);
-
-  const { data: syncRuns } = await supabase
-    .from("sync_runs")
-    .select(
-      "id, sync_type, status, source, started_at, finished_at, error_message, details",
-    )
-    .eq("shop_domain", session.shop)
-    .order("started_at", { ascending: false })
-    .limit(50);
-
-  const { data: recentJobs } = await supabase
-    .from("sync_jobs")
-    .select("*")
-    .eq("shop_domain", session.shop)
-    .order("updated_at", { ascending: false })
-    .limit(20);
-
-  const { data: recentPosOrderLinesData } = await supabase
-    .from("order_lines")
-    .select(
-      "shopify_line_item_id, order_name, product_title, retail_location_name, shopops_pos_location_id, shopops_staff_member_id, shopops_staff_label, shopops_attributed_user_id, shopops_attributed_staff_member_id, shopops_effective_staff_id, shopops_user_id, shopops_pos_device_id, shopops_pos_device_name, net_sales, shopops_attribution_source, created_at_shopify",
-    )
-    .eq("shop_domain", session.shop)
-    .or(
-      "shopops_attribution_source.eq.pos_session,shopops_staff_member_id.not.is.null,shopops_user_id.not.is.null",
-    )
-    .order("created_at_shopify", { ascending: false })
-    .limit(20);
-  const recentPosOrderLinesRaw =
-    (recentPosOrderLinesData ?? []) as Omit<
-      RecentPosOrderLine,
-      "resolved_staff_name"
-    >[];
-  const recentAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
-    supabase,
-    shop: session.shop,
-    orderLines: recentPosOrderLinesRaw,
-  });
-  const recentPosOrderLines: RecentPosOrderLine[] =
-    recentPosOrderLinesRaw.map((line) => ({
-      ...line,
-      resolved_staff_name: resolveStaffDisplayNameForOrderLine(
-        line,
-        recentAliasesByKey,
-      ).label,
-    }));
-  const typedRecentJobs = (recentJobs ?? []) as SyncJobRow[];
-  if (
-    counts.every((row) => row.count === 0) &&
-    (syncRuns ?? []).length === 0 &&
-    typedRecentJobs.length === 0
-  ) {
-    logEmptyDataState({
-      route: "app.admin.sync",
-      shop: session.shop,
-      reason: "fresh_business_database",
-      counts: Object.fromEntries(counts.map((row) => [row.table, row.count])),
-    });
-  }
-
+  for (const result of [
+    runsResult,
+    jobsResult,
+    activeResult,
+    automationResult,
+    webhookResult,
+  ])
+    if (result.error) throw new Response(result.error.message, { status: 500 });
+  const webhookCounts: Record<string, number> = {};
+  for (const event of webhookResult.data ?? [])
+    webhookCounts[event.status] = (webhookCounts[event.status] ?? 0) + 1;
   return {
-    shop: session.shop,
-    counts,
-    lastSyncRuns: (syncRuns ?? []) as SyncRun[],
-    activeJob: selectCurrentSyncJob(typedRecentJobs),
-    recentJobs: typedRecentJobs,
-    hasReadUsersScope: hasConfiguredScope("read_users"),
-    recentPosOrderLines,
-  };
+    runs: (runsResult.data ?? []) as SyncRun[],
+    jobs: ((jobsResult.data ?? []) as SyncJobRow[]).slice(0, 20),
+    activeJob: (activeResult.data as SyncJobRow | null) ?? null,
+    hasMore: (jobsResult.data ?? []).length > 20,
+    page,
+    automation: automationResult.data as AutomationState | null,
+    webhookCounts,
+  } satisfies LoaderData;
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -616,864 +194,333 @@ export async function action({ request }: ActionFunctionArgs) {
     supabase,
   });
   await assertAdminAccess({ request, session, supabase });
-
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") ?? "queue");
-
-  if (intent === "process") {
+  const data = await request.formData();
+  const intent = String(data.get("intent") ?? "");
+  if (intent === "process_queue") {
     const summary = await processSyncJobsBatch({
       supabase,
       limit: 5,
       getAdminClient: getOfflineAdminClient,
     });
-
+    return {
+      ok: summary.failed === 0,
+      message: `Processed ${summary.processed} operation${summary.processed === 1 ? "" : "s"}; ${summary.completed} completed and ${summary.failed} failed.`,
+    };
+  }
+  if (intent === "retry") {
+    const jobId = String(data.get("job_id") ?? "");
+    const { data: failedJob } = await supabase
+      .from("sync_jobs")
+      .select("job_type")
+      .eq("shop_domain", session.shop)
+      .eq("id", jobId)
+      .eq("status", "error")
+      .maybeSingle();
+    if (!failedJob)
+      return { ok: false, message: "Failed operation not found." };
+    const result = await createManualSyncJob({
+      supabase,
+      shop: session.shop,
+      jobType: failedJob.job_type as SyncJobType,
+      trigger: "support",
+    });
     return {
       ok: true,
-      message: `Processed ${summary.processed} sync job batch(es): ${summary.completed} completed, ${summary.failed} failed, ${summary.skipped} skipped.`,
-    } satisfies ActionData;
+      message: result.reused
+        ? "An equivalent operation is already active."
+        : "Retry queued.",
+    };
   }
-
-  const jobType = String(formData.get("jobType") ?? "") as SyncJobType;
-  const allowedJobTypes = new Set(manualSyncActions.map((action) => action.jobType));
-
-  if (!allowedJobTypes.has(jobType)) {
+  const rebuild = intent === "rebuild";
+  if (rebuild && data.get("confirmation") !== "confirmed")
     return {
       ok: false,
-      message: "Unknown sync action.",
-    } satisfies ActionData;
-  }
-
+      message: "Confirm the historical rebuild before continuing.",
+    };
+  if (intent !== "sync_now" && !rebuild)
+    return { ok: false, message: "Unknown sync action." };
   const result = await createManualSyncJob({
     supabase,
     shop: session.shop,
-    jobType,
+    jobType: rebuild ? "full_refresh" : "full",
+    trigger: rebuild ? "support" : "manual",
   });
-
-  console.info("[fresh-install:sync-action]", {
-    route: "app.admin.sync.action",
-    shop: session.shop,
-    jobType,
-    reused: result.reused,
-  });
-
   return {
     ok: true,
     message: result.reused
-      ? `Existing ${jobType} sync job is already queued or running.`
-      : `Queued ${jobType} sync job.`,
-  } satisfies ActionData;
+      ? "A data synchronization is already queued or running."
+      : rebuild
+        ? "Historical rebuild queued."
+        : "Synchronization queued.",
+  };
+}
+
+export default function DataSyncPage() {
+  const { runs, jobs, activeJob, hasMore, page, automation, webhookCounts } =
+    useLoaderData<LoaderData>();
+  const result = useActionData<ActionData>();
+  const navigation = useNavigation();
+  const location = useLocation();
+  const activityHref = (nextPage: number) => {
+    const params = new URLSearchParams(location.search);
+    params.set("activityPage", String(nextPage));
+    return `?${params.toString()}`;
+  };
+  const lastSuccess =
+    runs.find((run) => run.status === "success" && run.finished_at) ?? null;
+  const latestFailedRun = runs.find((run) => run.status === "error") ?? null;
+  const overall = activeJob
+    ? "Syncing"
+    : latestFailedRun &&
+        (!lastSuccess || latestFailedRun.started_at > lastSuccess.finished_at!)
+      ? "Needs attention"
+      : "Up to date";
+  const dueAt = automation?.next_reconciliation_due_at
+    ? new Date(automation.next_reconciliation_due_at).getTime()
+    : null;
+  const automatic = !automation
+    ? "Not configured"
+    : automation.last_error || (dueAt && dueAt < Date.now() - 15 * 60 * 1000)
+      ? "Delayed"
+      : "Active";
+  const isSubmitting = navigation.state !== "idle";
+  return (
+    <main className="sync-page">
+      <style>{CSS}</style>
+      <div className="sync-shell">
+        <header>
+          <div>
+            <h1>Data sync</h1>
+            <p>
+              ShopOps keeps your Shopify reporting data current automatically.
+            </p>
+          </div>
+          <Form method="post">
+            <input type="hidden" name="intent" value="sync_now" />
+            <button className="primary" disabled={isSubmitting} type="submit">
+              Sync now
+            </button>
+          </Form>
+        </header>
+        {result ? (
+          <div className={`result ${result.ok ? "ok" : "bad"}`}>
+            {result.message}
+          </div>
+        ) : null}
+        <section className="overview">
+          <div>
+            <small>Overall status</small>
+            <StatusBadge
+              variant={
+                overall === "Up to date"
+                  ? "success"
+                  : overall === "Syncing"
+                    ? "info"
+                    : "warning"
+              }
+            >
+              {overall}
+            </StatusBadge>
+          </div>
+          <div>
+            <small>Last successful update</small>
+            <b>{formatDate(lastSuccess?.finished_at)}</b>
+          </div>
+          <div>
+            <small>Automatic sync</small>
+            <StatusBadge
+              variant={
+                automatic === "Active"
+                  ? "success"
+                  : automatic === "Delayed"
+                    ? "warning"
+                    : "neutral"
+              }
+            >
+              {automatic}
+            </StatusBadge>
+          </div>
+        </section>
+        {activeJob ? (
+          <div className="progress">
+            <span>
+              <b>
+                {activeJob.status === "pending"
+                  ? "Synchronization queued"
+                  : "Synchronizing Shopify data"}
+              </b>
+              <small>
+                {actionLabel(activeJob)} · Updates continue automatically.
+              </small>
+            </span>
+            <StatusBadge variant="info">
+              {statusLabel(activeJob.status)}
+            </StatusBadge>
+          </div>
+        ) : null}
+        <section className="resource-card">
+          <h2>Data freshness</h2>
+          {RESOURCES.map((resource) => {
+            const resourceRuns = runs.filter(
+              (run) => run.sync_type === resource.type,
+            );
+            const success = resourceRuns.find(
+              (run) => run.status === "success" && run.finished_at,
+            );
+            const error = resourceRuns.find((run) => run.status === "error");
+            const syncing =
+              activeJob &&
+              (activeJob.job_type === resource.type ||
+                activeJob.job_type === "full" ||
+                activeJob.job_type === "full_refresh");
+            const status = syncing
+              ? "Syncing"
+              : error && (!success || error.started_at > success.finished_at!)
+                ? "Needs attention"
+                : success
+                  ? "Up to date"
+                  : "Not synced";
+            return (
+              <div className="resource-row" key={resource.type}>
+                <b>{resource.label}</b>
+                <StatusBadge
+                  variant={
+                    status === "Up to date"
+                      ? "success"
+                      : status === "Needs attention"
+                        ? "warning"
+                        : status === "Syncing"
+                          ? "info"
+                          : "neutral"
+                  }
+                >
+                  {status}
+                </StatusBadge>
+                <span>{formatDate(success?.finished_at)}</span>
+                <small>
+                  {status === "Needs attention"
+                    ? error?.error_message?.slice(0, 120)
+                    : ""}
+                </small>
+              </div>
+            );
+          })}
+        </section>
+        <section className="activity">
+          <div className="section-title">
+            <h2>Recent activity</h2>
+            <span>Page {page + 1}</span>
+          </div>
+          <div className="activity-head">
+            <span>Time</span>
+            <span>Action</span>
+            <span>Trigger</span>
+            <span>Result</span>
+            <span>Duration</span>
+          </div>
+          {jobs.map((job) => (
+            <details className="activity-row" key={job.id}>
+              <summary>
+                <span>{formatDate(job.created_at)}</span>
+                <b>{actionLabel(job)}</b>
+                <span>{triggerLabel(job)}</span>
+                <StatusBadge variant={statusVariant(job.status)}>
+                  {statusLabel(job.status)}
+                </StatusBadge>
+                <span>{duration(job)}</span>
+              </summary>
+              <div className="activity-detail">
+                <span>
+                  {job.error_message ??
+                    "Operation details are available for support."}
+                </span>
+              </div>
+            </details>
+          ))}
+          {!jobs.length ? (
+            <p className="empty">No synchronization activity yet.</p>
+          ) : null}
+          <div className="pagination">
+            {page > 0 ? <a href={activityHref(page - 1)}>Newer</a> : <span />}
+            {hasMore ? <a href={activityHref(page + 1)}>Load more</a> : null}
+          </div>
+        </section>
+        <details className="advanced">
+          <summary>Advanced diagnostics</summary>
+          <div className="advanced-body">
+            <section>
+              <h3>Rebuild data</h3>
+              <p>
+                Re-imports complete Shopify history without deleting valid data
+                first. This can take considerably longer.
+              </p>
+              <Form method="post">
+                <input type="hidden" name="intent" value="rebuild" />
+                <label>
+                  <input
+                    type="checkbox"
+                    name="confirmation"
+                    value="confirmed"
+                    required
+                  />{" "}
+                  I understand this starts a full historical rebuild.
+                </label>
+                <button type="submit" disabled={isSubmitting}>
+                  Rebuild data
+                </button>
+              </Form>
+            </section>
+            <section>
+              <h3>Queue processing</h3>
+              <p>
+                Support-only processing. Merchants do not need this for normal
+                synchronization.
+              </p>
+              <Form method="post">
+                <input type="hidden" name="intent" value="process_queue" />
+                <button type="submit" disabled={isSubmitting}>
+                  Process queue now
+                </button>
+              </Form>
+            </section>
+            <section>
+              <h3>Webhook processing</h3>
+              <p>
+                Pending {webhookCounts.pending ?? 0} · Processing{" "}
+                {webhookCounts.processing ?? 0} · Failed{" "}
+                {webhookCounts.error ?? 0}
+              </p>
+            </section>
+            <section>
+              <h3>Raw operation diagnostics</h3>
+              {jobs.slice(0, 20).map((job) => (
+                <div className="raw" key={`raw-${job.id}`}>
+                  <code>{job.id}</code>
+                  <span>
+                    {job.job_type} · {job.status}
+                  </span>
+                  {job.status === "error" ? (
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="retry" />
+                      <input type="hidden" name="job_id" value={job.id} />
+                      <button type="submit">Retry</button>
+                    </Form>
+                  ) : null}
+                </div>
+              ))}
+            </section>
+          </div>
+        </details>
+      </div>
+    </main>
+  );
 }
 
 export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
 
-function Card({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        background: "white",
-        border: "1px solid #e3e3e3",
-        borderRadius: 16,
-        padding: 20,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-      }}
-    >
-      <h2 style={{ marginTop: 0 }}>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function SyncTypeStatusCard({
-  config,
-  runs,
-  activeJob,
-}: {
-  config: SyncTypeConfig;
-  runs: SyncRun[];
-  activeJob?: SyncJobRow | null;
-}) {
-  const summary = getSyncTypeSummary(runs, config.syncType);
-  const latestRun = summary.latestRun;
-  const duration = latestRun ? getTotalDuration(latestRun) : "-";
-  const isRunning =
-    isActiveJob(activeJob) &&
-    (activeJob?.job_type === config.syncType || activeJob?.job_type === "full");
-  const statusLabel = isRunning
-    ? "running"
-    : latestRun
-      ? latestRun.status
-      : "never synced";
-
-  return (
-    <section
-      style={{
-        background: "white",
-        border: "1px solid #e3e3e3",
-        borderRadius: 14,
-        padding: 16,
-        display: "grid",
-        gap: 12,
-      }}
-    >
-      <div
-        style={{
-          alignItems: "start",
-          display: "flex",
-          gap: 12,
-          justifyContent: "space-between",
-        }}
-      >
-        <div>
-          <h3 style={{ margin: "0 0 6px", fontSize: 18 }}>{config.label}</h3>
-          <StatusBadge variant={getFreshnessVariant(summary.freshness)}>
-            {summary.freshness}
-          </StatusBadge>
-        </div>
-        <StatusBadge variant={getSyncStatusVariant(statusLabel)}>
-          {statusLabel}
-        </StatusBadge>
-      </div>
-
-      <div style={{ display: "grid", gap: 6, color: "#616161", fontSize: 13 }}>
-        {summary.lastSuccess?.finished_at ? (
-          <div>
-            <strong>Last success:</strong>{" "}
-            {formatDateTime(summary.lastSuccess.finished_at)}
-          </div>
-        ) : (
-          <div>
-            <strong>Last success:</strong> Never
-          </div>
-        )}
-        {summary.lastError ? (
-          <div>
-            <strong>Last failed:</strong>{" "}
-            {formatDateTime(
-              summary.lastError.finished_at ?? summary.lastError.started_at,
-            )}
-          </div>
-        ) : null}
-        {latestRun?.source ? (
-          <div>
-            <strong>Source:</strong> {latestRun.source}
-          </div>
-        ) : null}
-        {duration !== "-" ? (
-          <div>
-            <strong>Duration:</strong> {duration}
-          </div>
-        ) : null}
-        {latestRun && getCogsDuration(latestRun) !== "-" ? (
-          <div>
-            <strong>COGS RPC:</strong> {getCogsDuration(latestRun)}
-          </div>
-        ) : null}
-        {latestRun && getBulkOperationId(latestRun) !== "-" ? (
-          <div>
-            <strong>Bulk operation:</strong> {getBulkOperationId(latestRun)}
-          </div>
-        ) : null}
-        {config.note ? (
-          <div>
-            <strong>Note:</strong> {config.note}
-          </div>
-        ) : null}
-      </div>
-
-      {summary.lastError?.error_message ? (
-        <div
-          style={{
-            background: "#fff4f4",
-            border: "1px solid #f2b8b5",
-            borderRadius: 10,
-            color: "#b42318",
-            fontSize: 13,
-            padding: 10,
-          }}
-        >
-          {summary.lastError.error_message}
-        </div>
-      ) : null}
-
-      <div
-        style={{
-          background: "#f6f6f7",
-          border: "1px solid #e3e3e3",
-          borderRadius: 10,
-          color: "#202223",
-          fontSize: 13,
-          fontWeight: 700,
-          padding: 10,
-        }}
-      >
-        {formatDetailSummary(latestRun)}
-      </div>
-    </section>
-  );
-}
-
-export default function AdminSyncPage() {
-  const {
-    shop,
-    counts,
-    lastSyncRuns,
-    activeJob,
-    recentJobs,
-    hasReadUsersScope,
-    recentPosOrderLines,
-  } = useLoaderData<LoaderData>();
-  const actionData = useActionData<ActionData>();
-  const navigation = useNavigation();
-  const liveJob = selectCurrentSyncJob([activeJob]);
-  const isSubmitting = navigation.state !== "idle";
-  const lastSuccessfulSync = lastSyncRuns.find(
-    (run) => run.status === "success" && run.finished_at,
-  );
-  const businessRecordCount = counts
-    .filter((row) =>
-      ["locations", "products", "variants", "inventory_levels", "orders", "order_lines"].includes(
-        row.table,
-      ),
-    )
-    .reduce((sum, row) => sum + row.count, 0);
-  const shouldShowFirstRunStatus =
-    !lastSuccessfulSync ||
-    businessRecordCount === 0 ||
-    (lastSyncRuns.length === 0 && recentJobs.length === 0);
-  const fullRefreshCommand = `npm run sync:local -- --shop ${shop} --steps locations,products,inventory,orders`;
-  const visibleSyncTypeConfigs = hasReadUsersScope
-    ? [
-        ...syncTypeConfigs,
-        {
-          syncType: "staff_members",
-          label: "Staff directory",
-          note: "Optional staff directory sync is enabled for this environment.",
-        },
-      ]
-    : [
-        ...syncTypeConfigs,
-        {
-          syncType: "staff_members",
-          label: "Staff directory",
-          note: "Public App Store builds do not request read_users; staff sync is future/custom-only and permissions use manual email assignments.",
-        },
-      ];
-
-  return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "#f6f6f7",
-        padding: 28,
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-      }}
-    >
-      <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-        <header style={{ marginBottom: 28 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Sync Status</h1>
-          <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            See when Shopify data last updated and whether reports are current.
-          </p>
-        </header>
-
-        {shouldShowFirstRunStatus ? (
-          <PageNotice
-            title="First run status"
-            message="No data yet. Run the first sync to import Shopify locations, products, inventory, and orders."
-            bullets={[
-              "Use this page to confirm report freshness and first-run progress.",
-              "Manual sync requests are queued and processed automatically by the background sync worker.",
-              "When sync completes, Profit Dashboard and Location Performance will show Shopify reporting data.",
-            ]}
-            tone="info"
-          />
-        ) : null}
-
-        {actionData ? (
-          <InlineResult variant={actionData.ok ? "success" : "error"}>
-            {actionData.message}
-          </InlineResult>
-        ) : null}
-
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 12,
-            padding: 16,
-            marginBottom: 20,
-            display: "grid",
-            gap: 12,
-          }}
-        >
-          <div>
-            <div style={{ fontWeight: 800 }}>Manual sync actions</div>
-            <HelperText>
-              Manual sync requests are queued and processed automatically by the background sync worker.
-            </HelperText>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {manualSyncActions.map((syncAction) => (
-              <Form key={syncAction.jobType} method="post">
-                <input type="hidden" name="intent" value="queue" />
-                <input type="hidden" name="jobType" value={syncAction.jobType} />
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  style={{
-                    background: "#202223",
-                    border: "1px solid #202223",
-                    borderRadius: 8,
-                    color: "white",
-                    cursor: isSubmitting ? "not-allowed" : "pointer",
-                    fontWeight: 700,
-                    opacity: isSubmitting ? 0.65 : 1,
-                    padding: "8px 12px",
-                  }}
-                >
-                  {syncAction.label}
-                </button>
-              </Form>
-            ))}
-          </div>
-        </section>
-
-        <details
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 12,
-            padding: 16,
-            marginBottom: 20,
-          }}
-        >
-          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-            Advanced diagnostics
-          </summary>
-          <div style={{ display: "grid", gap: 16, marginTop: 14 }}>
-            <HelperText>
-              Support-only tools for testing queued jobs, local support refreshes, and raw record counts.
-            </HelperText>
-            <Form method="post">
-              <input type="hidden" name="intent" value="process" />
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                style={{
-                  background: "white",
-                  border: "1px solid #202223",
-                  borderRadius: 8,
-                  color: "#202223",
-                  cursor: isSubmitting ? "not-allowed" : "pointer",
-                  fontWeight: 700,
-                  opacity: isSubmitting ? 0.65 : 1,
-                  padding: "8px 12px",
-                }}
-              >
-                Process queued jobs now
-              </button>
-            </Form>
-            <div>
-              <div style={{ fontWeight: 800 }}>Local support refresh</div>
-              <HelperText>
-                Local refresh is for development/support only. The marketplace path should use queued sync jobs for historical data.
-              </HelperText>
-              <pre
-                style={{
-                  background: "#202223",
-                  borderRadius: 10,
-                  color: "white",
-                  margin: "10px 0 0",
-                  overflowX: "auto",
-                  padding: 12,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {fullRefreshCommand}
-              </pre>
-            </div>
-            <div>
-              <div style={{ fontWeight: 800 }}>Database records</div>
-              <HelperText>
-                Current stored records for support and troubleshooting.
-              </HelperText>
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  marginTop: 12,
-                }}
-              >
-                {counts.map((row) => (
-                  <div
-                    key={row.table}
-                    title={row.error}
-                    style={{
-                      background: row.error ? "#fff4f4" : "#f6f6f7",
-                      border: `1px solid ${row.error ? "#f2b8b5" : "#e3e3e3"}`,
-                      borderRadius: 999,
-                      color: row.error ? "#b42318" : "#202223",
-                      fontSize: 13,
-                      fontWeight: 700,
-                      padding: "6px 10px",
-                    }}
-                  >
-                    {row.table}: {row.error ? "Error" : row.count}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontWeight: 800 }}>Recent POS order lines</div>
-              <HelperText>
-                Spike validation for POS session attribution stamped on line item properties.
-              </HelperText>
-              <div style={{ overflowX: "auto", marginTop: 12 }}>
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 13,
-                  }}
-                >
-                  <thead>
-                    <tr>
-                      {[
-                        "Order",
-                        "Product",
-                        "Resolved staff",
-                        "Effective staff ID",
-                        "Source",
-                        "Attributed user ID",
-                        "Attributed staff member ID",
-                        "Session staff member ID",
-                        "Session user ID",
-                        "Location",
-                        "Device",
-                        "Net sales",
-                      ].map((header) => (
-                        <th
-                          key={header}
-                          style={{
-                            textAlign: "left",
-                            padding: "10px",
-                            borderBottom: "1px solid #ddd",
-                          }}
-                        >
-                          {header}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentPosOrderLines.map((line) => (
-                      <tr key={line.shopify_line_item_id}>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.order_name ?? "-"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.product_title ?? "-"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.resolved_staff_name}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_effective_staff_id ?? "Unassigned"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_attribution_source ?? "Unassigned"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_attributed_user_id ?? "-"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_attributed_staff_member_id ?? "-"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_staff_member_id ?? "Unassigned"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.shopops_user_id ?? "Unassigned"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {line.retail_location_name ??
-                            line.shopops_pos_location_id ??
-                            "-"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {[
-                            line.shopops_pos_device_name,
-                            line.shopops_pos_device_id,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ") || "-"}
-                        </td>
-                        <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                          {formatMoney(line.net_sales)}
-                        </td>
-                      </tr>
-                    ))}
-
-                    {recentPosOrderLines.length === 0 ? (
-                      <tr>
-                        <td
-                          colSpan={12}
-                          style={{ padding: "14px 10px", color: "#616161" }}
-                        >
-                          No POS-attributed order lines found yet.
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </details>
-
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 12,
-            padding: 14,
-            marginBottom: 20,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <div style={{ fontWeight: 800 }}>Last successful sync</div>
-            <HelperText>
-              {lastSuccessfulSync?.finished_at
-                ? formatDateTime(lastSuccessfulSync.finished_at)
-                : "No successful sync run recorded yet."}
-            </HelperText>
-          </div>
-          <StatusBadge
-            variant={
-              getFreshness(lastSuccessfulSync) === "Fresh"
-                ? "success"
-                : getFreshness(lastSuccessfulSync) === "Stale"
-                  ? "warning"
-                  : "neutral"
-            }
-          >
-            {getFreshness(lastSuccessfulSync)}
-          </StatusBadge>
-        </section>
-
-        <section style={{ marginBottom: 24 }}>
-          <div style={{ marginBottom: 12 }}>
-            <h2 style={{ margin: 0, fontSize: 22 }}>Sync status</h2>
-            <HelperText>
-              Fresh means the last successful sync finished within 24 hours.
-            </HelperText>
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-              gap: 16,
-            }}
-          >
-            {visibleSyncTypeConfigs.map((config) => (
-              <SyncTypeStatusCard
-                key={config.syncType}
-                config={config}
-                runs={lastSyncRuns}
-                activeJob={liveJob}
-              />
-            ))}
-          </div>
-        </section>
-
-        {liveJob ? (
-          <section
-            style={{
-              background: "white",
-              border: "1px solid #e3e3e3",
-              borderRadius: 12,
-              padding: 16,
-              marginBottom: 24,
-              display: "grid",
-              gap: 10,
-            }}
-          >
-            <div
-              style={{
-                alignItems: "center",
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 800 }}>
-                  Current sync job: {liveJob.job_type}
-                </div>
-                <HelperText>
-                  Step: {liveJob.current_step ?? "-"} · Updated:{" "}
-                  {formatDateTime(liveJob.updated_at)}
-                </HelperText>
-              </div>
-              <StatusBadge variant={getSyncStatusVariant(liveJob.status)}>
-                {liveJob.status}
-              </StatusBadge>
-            </div>
-            <div
-              style={{
-                background: "#f6f6f7",
-                border: "1px solid #e3e3e3",
-                borderRadius: 10,
-                fontSize: 13,
-                padding: 10,
-              }}
-            >
-              {getJobProgressSummary(liveJob)}
-            </div>
-            {liveJob.error_message ? (
-              <InlineResult variant="error">{liveJob.error_message}</InlineResult>
-            ) : null}
-          </section>
-        ) : null}
-
-        <Card title="Recent sync jobs">
-          <HelperText>
-            Queued sync requests and their latest status.
-          </HelperText>
-          <div style={{ overflowX: "auto", marginTop: 12 }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 14,
-              }}
-            >
-              <thead>
-                <tr>
-                  {["Type", "Status", "Step", "Updated", "Progress", "Error"].map(
-                    (header) => (
-                      <th
-                        key={header}
-                        style={{
-                          textAlign: "left",
-                          padding: "10px",
-                          borderBottom: "1px solid #ddd",
-                        }}
-                      >
-                        {header}
-                      </th>
-                    ),
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {recentJobs.map((job) => (
-                  <tr key={job.id}>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                      {job.job_type}
-                    </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                      <StatusBadge variant={getSyncStatusVariant(job.status)}>
-                        {job.status}
-                      </StatusBadge>
-                    </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                      {job.current_step ?? "-"}
-                    </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                      {formatDateTime(job.updated_at)}
-                    </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                      {getJobProgressSummary(job)}
-                    </td>
-                    <td style={{ padding: "10px", borderBottom: "1px solid #eee" }}>
-                      {job.error_message ?? "-"}
-                    </td>
-                  </tr>
-                ))}
-
-                {recentJobs.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={6}
-                      style={{
-                        padding: "14px 10px",
-                        color: "#616161",
-                      }}
-                    >
-                      No sync jobs yet.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <div style={{ height: 24 }} />
-
-        <Card title="Recent sync history">
-          <HelperText>
-            Recent sync history. Showing the 20 most recent runs.
-          </HelperText>
-          <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 14,
-              }}
-            >
-              <thead>
-                <tr>
-                  {[
-                    "Type",
-                    "Status",
-                    "Source",
-                    "Started",
-                    "Finished",
-                    "Duration",
-                    "COGS RPC",
-                    "Bulk operation",
-                    "Details",
-                    "Error",
-                  ].map((header) => (
-                    <th
-                      key={header}
-                      style={{
-                        textAlign: "left",
-                        padding: "10px",
-                        borderBottom: "1px solid #ddd",
-                      }}
-                    >
-                      {header}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {lastSyncRuns.slice(0, 20).map((run) => (
-                  <tr key={run.id}>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {run.sync_type}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      <StatusBadge variant={getSyncStatusVariant(run.status)}>
-                        {run.status}
-                      </StatusBadge>
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {run.source ?? "-"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {formatDateTime(run.started_at)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {formatDateTime(run.finished_at)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {getTotalDuration(run)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {getCogsDuration(run)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                        maxWidth: 220,
-                        overflowWrap: "anywhere",
-                      }}
-                    >
-                      {getBulkOperationId(run)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {formatSyncRunDetails(run)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px",
-                        borderBottom: "1px solid #eee",
-                      }}
-                    >
-                      {run.error_message ?? "-"}
-                    </td>
-                  </tr>
-                ))}
-
-                {lastSyncRuns.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={10}
-                      style={{
-                        padding: "14px 10px",
-                        color: "#616161",
-                      }}
-                    >
-                      No sync runs yet.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
-    </main>
-  );
-}
+const CSS = `
+*{box-sizing:border-box}.sync-page{min-height:100vh;background:#f4f5f4;color:#202223;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:28px}.sync-shell{max-width:1100px;margin:auto}.sync-shell>header{align-items:center;display:flex;justify-content:space-between;margin-bottom:20px}.sync-shell h1{font-size:30px;margin:0}.sync-shell header p{color:#616161;margin:6px 0 0}button,.primary{background:#fff;border:1px solid #b7b9bb;border-radius:8px;cursor:pointer;font-weight:650;padding:9px 13px}.primary{background:#303030;border-color:#303030;color:#fff}button:disabled{cursor:not-allowed;opacity:.6}.result{border-radius:9px;margin-bottom:14px;padding:11px 14px}.result.ok{background:#eaf7ef;color:#166534}.result.bad{background:#fff0f0;color:#b42318}.overview{background:#fff;border:1px solid #dedede;border-radius:13px;display:grid;grid-template-columns:repeat(3,1fr);margin-bottom:14px;padding:18px}.overview>div{display:grid;gap:8px}.overview small{color:#6d7175;font-weight:650}.progress{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;border-radius:10px;display:flex;justify-content:space-between;margin-bottom:14px;padding:12px 14px}.progress span{display:grid;gap:3px}.progress small{color:#516072}.resource-card,.activity,.advanced{background:#fff;border:1px solid #dedede;border-radius:13px;margin-bottom:16px;padding:18px}.resource-card h2,.activity h2{font-size:17px;margin:0 0 12px}.resource-row{align-items:center;border-top:1px solid #ededed;display:grid;gap:14px;grid-template-columns:1fr 130px 180px 1.4fr;min-height:54px}.resource-row small{color:#b42318}.section-title{align-items:center;display:flex;justify-content:space-between}.section-title span{color:#6d7175;font-size:13px}.activity-head,.activity-row summary{align-items:center;display:grid;gap:12px;grid-template-columns:180px 1fr 110px 110px 90px}.activity-head{background:#f7f7f7;color:#616161;font-size:11px;font-weight:700;padding:9px;text-transform:uppercase}.activity-row{border-bottom:1px solid #ededed}.activity-row summary{cursor:pointer;list-style:none;min-height:56px;padding:8px}.activity-row summary::-webkit-details-marker{display:none}.activity-detail{background:#fafafa;color:#616161;font-size:13px;padding:10px 14px}.pagination{display:flex;justify-content:space-between;padding-top:14px}.pagination a{color:#255aa8;text-decoration:none}.advanced>summary{cursor:pointer;font-weight:700}.advanced-body{display:grid;gap:20px;margin-top:18px}.advanced-body>section{border-top:1px solid #e5e5e5;padding-top:16px}.advanced-body h3{font-size:15px;margin:0 0 5px}.advanced-body p{color:#616161;margin:5px 0 12px}.advanced-body form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.raw{align-items:center;border-top:1px solid #ededed;display:grid;gap:10px;grid-template-columns:1fr 180px auto;padding:9px 0}.raw code{font-size:11px;overflow-wrap:anywhere}.empty{color:#6d7175;text-align:center;padding:20px}
+@media(max-width:760px){.sync-page{padding:16px}.overview{grid-template-columns:1fr;gap:18px}.resource-row{grid-template-columns:1fr auto}.resource-row>span,.resource-row>small{grid-column:1/-1}.activity-head{display:none}.activity-row summary{grid-template-columns:1fr auto}.activity-row summary>span:nth-child(3),.activity-row summary>span:nth-child(5){font-size:12px}.raw{grid-template-columns:1fr}.sync-shell>header{align-items:flex-start;gap:12px}}
+`;
