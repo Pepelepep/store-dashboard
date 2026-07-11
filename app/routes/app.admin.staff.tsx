@@ -1,72 +1,79 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
+import { useMemo, useState } from "react";
 
+import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
+import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-import type {
-  StaffAliasType,
-  StaffIdentityAliasRow,
-  StaffPersonRow,
-} from "../lib/staff-identity/staff-identity";
 import {
   STAFF_ALIAS_TYPES,
   getStaffIdentityAliasCandidates,
   staffIdentityAliasKey,
+  type StaffAliasType,
+  type StaffIdentityAliasRow,
+  type StaffPersonRow,
 } from "../lib/staff-identity/staff-identity";
+import {
+  parseShopifyStaffCsv,
+  type ShopifyStaffCsvResult,
+} from "../lib/staff-identity/shopify-staff-csv";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
-import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
-import { StatusBadge } from "../components/ui/StatusBadge";
 
 type PermissionRow = {
   person_id: string | null;
-  access_label: string | null;
   user_email: string | null;
   shopify_user_id: string | null;
   role: string | null;
-  can_view: boolean | null;
-  can_manage: boolean | null;
   shopify_location_id: string | null;
   location_name: string | null;
 };
-
-type LocationRow = { shopify_location_id: string; name: string; is_active: boolean };
-
+type LocationRow = {
+  shopify_location_id: string;
+  name: string;
+  is_active: boolean;
+};
 type SellerMetric = {
   lastOrderName: string | null;
+  firstActivityAt: string | null;
   lastActivityAt: string | null;
   lastLocation: string | null;
   lastDevice: string | null;
   orderCount: number;
   netSales: number;
 };
-
 type StaffAlias = Omit<StaffIdentityAliasRow, "alias_type"> & {
   alias_type: StaffAliasType;
 };
-
 type StaffProfile = StaffPersonRow & {
   aliases: StaffAlias[];
   dashboardAccess: string;
-  lastPosSaleSeen: string | null;
   permissions: PermissionRow[];
   posMetrics: SellerMetric;
 };
-
 type LoaderData = {
-  shop: string;
-  unmappedPosAliases: StaffAlias[];
-  deferredPosAliases: StaffAlias[];
-  sellerMetrics: Record<string, SellerMetric>;
-  suggestions: Record<string, { personId: string; displayName: string; reason: string }>;
   profiles: StaffProfile[];
+  pending: StaffAlias[];
+  deferred: StaffAlias[];
+  sellerMetrics: Record<string, SellerMetric>;
   locations: LocationRow[];
 };
-
-type ActionData = {
-  ok: boolean;
-  message: string;
-};
+type ActionData = { ok: boolean; message: string };
+type Overlay =
+  | "add"
+  | "pending"
+  | "import"
+  | "details"
+  | "profile"
+  | "access"
+  | "pos"
+  | null;
 
 const POS_ALIAS_TYPES = new Set<StaffAliasType>([
   STAFF_ALIAS_TYPES.posStaffMemberId,
@@ -74,161 +81,86 @@ const POS_ALIAS_TYPES = new Set<StaffAliasType>([
   STAFF_ALIAS_TYPES.posAttributedUserId,
   STAFF_ALIAS_TYPES.posEffectiveStaffId,
 ]);
+const SHOPIFY_QUERY = `FROM sales
+SHOW
+  net_sales,
+  assisting_staff_member_id,
+  assisting_staff_member_name,
+  pos_location_name
+GROUP BY
+  assisting_staff_member_id,
+  assisting_staff_member_name,
+  pos_location_name
+SINCE -365d
+ORDER BY assisting_staff_member_name ASC
+LIMIT 1000`;
 
-function normalizeText(value: FormDataEntryValue | null) {
+function text(value: FormDataEntryValue | null) {
   return String(value ?? "").trim();
 }
-
-function getDashboardAccessErrorMessage(error: { message?: string } | null) {
-  const message = error?.message ?? "";
-  if (message.includes("login_email_in_use") || message.includes("dashboard_identity_in_use")) {
-    return "That login email is already used by another staff member.";
-  }
-  if (message.includes("invalid_access_locations")) return "Select at least one valid location.";
-  if (message.includes("staff_member_not_found")) return "Staff member not found.";
-  if (message.includes("invalid_access_identity")) return "A valid login email is required.";
-  return "Dashboard access could not be saved. Nothing was changed; please try again.";
+function money(value: number) {
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "CAD",
+  }).format(value);
+}
+function date(value: string | null) {
+  return value
+    ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(value))
+    : "—";
+}
+function metricKey(alias: StaffAlias) {
+  return staffIdentityAliasKey(alias.alias_type, alias.alias_value);
+}
+function blankMetric(): SellerMetric {
+  return {
+    lastOrderName: null,
+    firstActivityAt: null,
+    lastActivityAt: null,
+    lastLocation: null,
+    lastDevice: null,
+    orderCount: 0,
+    netSales: 0,
+  };
 }
 
-function formatDateTime(value?: string | null) {
-  if (!value) return "-";
-
-  return new Intl.DateTimeFormat("fr-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
-function getAliasLabel(aliasType: StaffAliasType) {
-  switch (aliasType) {
-    case STAFF_ALIAS_TYPES.email:
-      return "Email";
-    case STAFF_ALIAS_TYPES.shopifyAdminUserId:
-      return "Shopify admin user ID";
-    case STAFF_ALIAS_TYPES.posStaffMemberId:
-      return "POS staff member ID";
-    case STAFF_ALIAS_TYPES.posUserId:
-      return "POS user ID";
-    case STAFF_ALIAS_TYPES.posAttributedUserId:
-      return "POS attributed user ID";
-    case STAFF_ALIAS_TYPES.posEffectiveStaffId:
-      return "POS effective staff ID";
-    default:
-      return aliasType;
-  }
-}
-
-function getDashboardAccessStatus({
-  person,
-  aliases,
-  permissions,
-}: {
-  person: StaffPersonRow;
-  aliases: StaffAlias[];
-  permissions: PermissionRow[];
-}) {
+function accessStatus(
+  person: StaffPersonRow,
+  aliases: StaffAlias[],
+  permissions: PermissionRow[],
+) {
   const emails = new Set(
-    [person.email, ...aliases.filter((alias) => alias.alias_type === "email").map((alias) => alias.alias_value)]
+    [
+      person.email,
+      ...aliases
+        .filter((alias) => alias.alias_type === STAFF_ALIAS_TYPES.email)
+        .map((alias) => alias.alias_value),
+    ]
       .map((value) => value?.trim().toLowerCase())
-      .filter(Boolean) as string[],
+      .filter(Boolean),
   );
-  const shopifyUserIds = new Set(
+  const ids = new Set(
     aliases
-      .filter((alias) => alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId)
+      .filter(
+        (alias) => alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId,
+      )
       .map((alias) => alias.alias_value),
   );
-  const matchingPermissions = permissions.filter((permission) => {
-    const email = permission.user_email?.trim().toLowerCase();
-    const shopifyUserId = permission.shopify_user_id?.trim();
-
-    return permission.person_id === person.id || (
-      (email && emails.has(email)) ||
-      (shopifyUserId && shopifyUserIds.has(shopifyUserId))
-    );
-  });
-
-  if (matchingPermissions.length === 0) {
-    return "No dashboard access";
-  }
-
-  if (matchingPermissions.some((permission) => permission.role === "admin")) {
-    return "Admin";
-  }
-
-  if (matchingPermissions.some((permission) => permission.role === "manager")) {
-    return "Manager";
-  }
-
+  const matches = permissions.filter(
+    (row) =>
+      row.person_id === person.id ||
+      Boolean(
+        (row.user_email && emails.has(row.user_email.toLowerCase())) ||
+        (row.shopify_user_id && ids.has(row.shopify_user_id)),
+      ),
+  );
+  if (!matches.length) return "No access";
+  if (matches.some((row) => row.role === "admin")) return "Admin";
+  if (matches.some((row) => row.role === "manager")) return "Manager";
   return "Viewer";
-}
-
-function getLastPosSaleSeen(aliases: StaffAlias[]) {
-  return aliases
-    .filter((alias) => POS_ALIAS_TYPES.has(alias.alias_type))
-    .map((alias) => alias.last_seen_at)
-    .filter(Boolean)
-    .sort()
-    .at(-1) ?? null;
-}
-
-async function syncTeamAccessLabelForPerson({
-  supabase,
-  shop,
-  personId,
-  displayName,
-}: {
-  supabase: ReturnType<typeof getSupabaseAdminClient>;
-  shop: string;
-  personId: string;
-  displayName: string;
-}) {
-  const { data: aliases, error: aliasesError } = await supabase
-    .from("staff_identity_aliases")
-    .select("alias_type, alias_value")
-    .eq("shop_domain", shop)
-    .eq("person_id", personId)
-    .in("alias_type", [
-      STAFF_ALIAS_TYPES.email,
-      STAFF_ALIAS_TYPES.shopifyAdminUserId,
-    ]);
-
-  if (aliasesError) {
-    throw new Error(aliasesError.message);
-  }
-
-  const emailAliases = (aliases ?? [])
-    .filter((alias) => alias.alias_type === STAFF_ALIAS_TYPES.email)
-    .map((alias) => String(alias.alias_value).toLowerCase());
-  const shopifyUserIds = (aliases ?? [])
-    .filter((alias) => alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId)
-    .map((alias) => String(alias.alias_value));
-
-  if (emailAliases.length > 0) {
-    const { error } = await supabase
-      .from("user_location_access")
-      .update({ access_label: displayName })
-      .eq("shop_domain", shop)
-      .in("user_email", emailAliases);
-
-    if (error) {
-      throw new Error(error.message);
-    }
-  }
-
-  if (shopifyUserIds.length > 0) {
-    const { error } = await supabase
-      .from("user_location_access")
-      .update({ access_label: displayName })
-      .eq("shop_domain", shop)
-      .in("shopify_user_id", shopifyUserIds);
-
-    if (error) {
-      throw new Error(error.message);
-    }
-  }
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -240,19 +172,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase,
   });
   await assertAdminAccess({ request, session, supabase });
-
   const [
-    { data: peopleData, error: peopleError },
-    { data: aliasesData, error: aliasesError },
-    { data: permissionsData, error: permissionsError },
-    { data: locationsData, error: locationsError },
-    { data: sellerMetricsData, error: sellerMetricsError },
+    peopleResult,
+    aliasesResult,
+    permissionsResult,
+    locationsResult,
+    metricsResult,
   ] = await Promise.all([
     supabase
       .from("staff_people")
-      .select("id, shop_domain, display_name, email, is_active, created_at, updated_at")
+      .select(
+        "id, shop_domain, display_name, email, is_active, created_at, updated_at",
+      )
       .eq("shop_domain", session.shop)
-      .order("display_name", { ascending: true }),
+      .order("display_name"),
     supabase
       .from("staff_identity_aliases")
       .select(
@@ -262,123 +195,121 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .order("last_seen_at", { ascending: false, nullsFirst: false }),
     supabase
       .from("user_location_access")
-      .select("person_id, access_label, user_email, shopify_user_id, shopify_location_id, location_name, role, can_view, can_manage")
+      .select(
+        "person_id, user_email, shopify_user_id, role, shopify_location_id, location_name",
+      )
       .eq("shop_domain", session.shop),
-    supabase.from("locations")
+    supabase
+      .from("locations")
       .select("shopify_location_id, name, is_active")
-      .eq("shop_domain", session.shop).eq("is_active", true)
-      .order("name", { ascending: true }),
-    supabase.from("staff_pos_seller_metrics")
-      .select("attribution_source, effective_staff_id, last_order_name, last_activity_at, last_location, last_device, order_count, net_sales")
+      .eq("shop_domain", session.shop)
+      .eq("is_active", true)
+      .order("name"),
+    supabase
+      .from("staff_pos_seller_metrics")
+      .select(
+        "attribution_source, effective_staff_id, last_order_name, last_activity_at, last_location, last_device, order_count, net_sales",
+      )
       .eq("shop_domain", session.shop),
   ]);
-
-  if (peopleError) throw new Response(peopleError.message, { status: 500 });
-  if (aliasesError) throw new Response(aliasesError.message, { status: 500 });
-  if (permissionsError) {
-    throw new Response(permissionsError.message, { status: 500 });
-  }
-  if (locationsError) throw new Response(locationsError.message, { status: 500 });
-  if (sellerMetricsError) throw new Response(sellerMetricsError.message, { status: 500 });
-
-  const people = (peopleData ?? []) as StaffPersonRow[];
-  const aliases = (aliasesData ?? []) as StaffAlias[];
-  const permissions = (permissionsData ?? []) as PermissionRow[];
-  const locations = (locationsData ?? []) as LocationRow[];
-  const sellerMetrics = new Map<string, SellerMetric>();
-  for (const metric of sellerMetricsData ?? []) {
+  for (const result of [
+    peopleResult,
+    aliasesResult,
+    permissionsResult,
+    locationsResult,
+    metricsResult,
+  ])
+    if (result.error) throw new Response(result.error.message, { status: 500 });
+  const people = (peopleResult.data ?? []) as StaffPersonRow[];
+  const aliases = (aliasesResult.data ?? []) as StaffAlias[];
+  const permissions = (permissionsResult.data ?? []) as PermissionRow[];
+  const metrics = new Map<string, SellerMetric>();
+  for (const row of metricsResult.data ?? []) {
     const candidate = getStaffIdentityAliasCandidates({
-      shopops_effective_staff_id: metric.effective_staff_id,
-      shopops_attribution_source: metric.attribution_source,
+      shopops_effective_staff_id: row.effective_staff_id,
+      shopops_attribution_source: row.attribution_source,
     })[0];
     if (!candidate) continue;
-    const key = staffIdentityAliasKey(candidate.aliasType, candidate.aliasValue);
-    sellerMetrics.set(key, {
-      lastOrderName: metric.last_order_name,
-      lastActivityAt: metric.last_activity_at,
-      lastLocation: metric.last_location,
-      lastDevice: metric.last_device,
-      orderCount: Number(metric.order_count ?? 0),
-      netSales: Number(metric.net_sales ?? 0),
-    });
+    const alias = aliases.find(
+      (item) =>
+        item.alias_type === candidate.aliasType &&
+        item.alias_value === candidate.aliasValue,
+    );
+    metrics.set(
+      staffIdentityAliasKey(candidate.aliasType, candidate.aliasValue),
+      {
+        lastOrderName: row.last_order_name,
+        firstActivityAt: alias?.first_seen_at ?? null,
+        lastActivityAt: row.last_activity_at,
+        lastLocation: row.last_location,
+        lastDevice: row.last_device,
+        orderCount: Number(row.order_count ?? 0),
+        netSales: Number(row.net_sales ?? 0),
+      },
+    );
   }
-  const aliasesByPersonId = new Map<string, StaffAlias[]>();
-  const peopleById = new Map(people.map((person) => [person.id, person]));
-  const mappedAdminIds = new Map(
-    aliases.filter((alias) => alias.person_id && alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId)
-      .map((alias) => [alias.alias_value, alias.person_id as string]),
+  const profiles = people.map((person) => {
+    const personAliases = aliases.filter(
+      (alias) => alias.person_id === person.id,
+    );
+    const personPermissions = permissions.filter(
+      (row) => row.person_id === person.id,
+    );
+    const posMetrics = personAliases.reduce((total, alias) => {
+      const item = metrics.get(metricKey(alias));
+      if (!item) return total;
+      total.orderCount += item.orderCount;
+      total.netSales += item.netSales;
+      if (
+        !total.firstActivityAt ||
+        (item.firstActivityAt && item.firstActivityAt < total.firstActivityAt)
+      )
+        total.firstActivityAt = item.firstActivityAt;
+      if (
+        !total.lastActivityAt ||
+        (item.lastActivityAt && item.lastActivityAt > total.lastActivityAt)
+      )
+        Object.assign(total, {
+          lastActivityAt: item.lastActivityAt,
+          lastOrderName: item.lastOrderName,
+          lastLocation: item.lastLocation,
+          lastDevice: item.lastDevice,
+        });
+      return total;
+    }, blankMetric());
+    return {
+      ...person,
+      aliases: personAliases,
+      dashboardAccess: accessStatus(person, personAliases, permissions),
+      permissions: personPermissions,
+      posMetrics,
+    };
+  });
+  const reviewable = aliases.filter(
+    (alias) =>
+      !alias.person_id &&
+      alias.source !== "pos_session_diagnostic" &&
+      POS_ALIAS_TYPES.has(alias.alias_type) &&
+      metrics.has(metricKey(alias)),
   );
-  const suggestions: LoaderData["suggestions"] = {};
-
-  for (const alias of aliases) {
-    if (!alias.person_id) continue;
-
-    const personAliases = aliasesByPersonId.get(alias.person_id) ?? [];
-    personAliases.push(alias);
-    aliasesByPersonId.set(alias.person_id, personAliases);
-  }
-  for (const alias of aliases) {
-    if (alias.person_id || alias.suggestion_dismissed_at || alias.alias_type !== STAFF_ALIAS_TYPES.posAttributedUserId) continue;
-    const personId = mappedAdminIds.get(alias.alias_value);
-    const person = personId ? peopleById.get(personId) : null;
-    if (person?.is_active) {
-      suggestions[staffIdentityAliasKey(alias.alias_type, alias.alias_value)] = {
-        personId: person.id,
-        displayName: person.display_name,
-        reason: "This seller matches an existing login identity.",
-      };
-    }
-  }
-
   return {
-    shop: session.shop,
-    unmappedPosAliases: aliases.filter(
-      (alias) =>
-        !alias.person_id &&
-        alias.review_status !== "deferred" &&
-        alias.source !== "pos_session_diagnostic" &&
-        POS_ALIAS_TYPES.has(alias.alias_type) &&
-        sellerMetrics.has(staffIdentityAliasKey(alias.alias_type, alias.alias_value)),
-    ),
-    deferredPosAliases: aliases.filter(
-      (alias) => !alias.person_id && alias.review_status === "deferred" &&
-        POS_ALIAS_TYPES.has(alias.alias_type) &&
-        sellerMetrics.has(staffIdentityAliasKey(alias.alias_type, alias.alias_value)),
-    ),
-    sellerMetrics: Object.fromEntries(sellerMetrics),
-    suggestions,
-    locations,
-    profiles: people.map((person) => {
-      const personAliases = aliasesByPersonId.get(person.id) ?? [];
-      const personPermissions = permissions.filter((row) => row.person_id === person.id);
-      const metrics = personAliases.reduce<SellerMetric>((total, alias) => {
-        const metric = sellerMetrics.get(staffIdentityAliasKey(alias.alias_type, alias.alias_value));
-        if (!metric) return total;
-        total.orderCount += metric.orderCount;
-        total.netSales += metric.netSales;
-        if (!total.lastActivityAt || (metric.lastActivityAt && metric.lastActivityAt > total.lastActivityAt)) {
-          total.lastActivityAt = metric.lastActivityAt;
-          total.lastOrderName = metric.lastOrderName;
-          total.lastLocation = metric.lastLocation;
-          total.lastDevice = metric.lastDevice;
-        }
-        return total;
-      }, { lastOrderName: null, lastActivityAt: null, lastLocation: null, lastDevice: null, orderCount: 0, netSales: 0 });
-
-      return {
-        ...person,
-        aliases: personAliases,
-        dashboardAccess: getDashboardAccessStatus({
-          person,
-          aliases: personAliases,
-          permissions,
-        }),
-        lastPosSaleSeen: getLastPosSaleSeen(personAliases),
-        permissions: personPermissions,
-        posMetrics: metrics,
-      };
-    }),
+    profiles,
+    pending: reviewable.filter((alias) => alias.review_status !== "deferred"),
+    deferred: reviewable.filter((alias) => alias.review_status === "deferred"),
+    sellerMetrics: Object.fromEntries(metrics),
+    locations: (locationsResult.data ?? []) as LocationRow[],
   } satisfies LoaderData;
+}
+
+function friendlyAccessError(message?: string) {
+  if (message?.includes("invalid_access_locations"))
+    return "Select at least one valid location.";
+  if (
+    message?.includes("login_email_in_use") ||
+    message?.includes("dashboard_identity_in_use")
+  )
+    return "That login email is already used by another staff member.";
+  return "Dashboard access could not be saved. Nothing was changed.";
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -390,658 +321,1220 @@ export async function action({ request }: ActionFunctionArgs) {
     supabase,
   });
   await assertAdminAccess({ request, session, supabase });
+  const data = await request.formData();
+  const intent = text(data.get("intent"));
+  const personId = text(data.get("person_id"));
+  const aliasId = text(data.get("alias_id"));
+  const now = new Date().toISOString();
 
-  const formData = await request.formData();
-  const intent = normalizeText(formData.get("intent"));
-
-  if (intent === "create_from_alias") {
-    const aliasId = normalizeText(formData.get("alias_id"));
-    const displayName = normalizeText(formData.get("display_name"));
-    const email = normalizeText(formData.get("email")).toLowerCase() || null;
-
-    if (!aliasId || !displayName) {
-      return { ok: false, message: "POS seller and display name are required." };
-    }
-
-    const { data: alias, error: aliasError } = await supabase
-      .from("staff_identity_aliases")
-      .select("id, shop_domain, person_id")
-      .eq("shop_domain", session.shop)
-      .eq("id", aliasId)
-      .maybeSingle();
-
-    if (aliasError) return { ok: false, message: aliasError.message };
-    if (!alias) return { ok: false, message: "POS seller not found." };
-    if (alias.person_id) return { ok: false, message: "This POS seller is already assigned." };
-
-    const { data: person, error: personError } = await supabase
-      .from("staff_people")
-      .insert({
-        shop_domain: session.shop,
-        display_name: displayName,
-        email,
-      })
-      .select("id")
-      .single();
-
-    if (personError) return { ok: false, message: personError.message };
-
-    const { error: updateError } = await supabase
-      .from("staff_identity_aliases")
-      .update({ person_id: person.id, review_status: "mapped", updated_at: new Date().toISOString() })
-      .eq("shop_domain", session.shop)
-      .eq("id", aliasId);
-
-    if (updateError) return { ok: false, message: updateError.message };
-
-    if (email) {
-      const now = new Date().toISOString();
-      const { error: emailAliasError } = await supabase
-        .from("staff_identity_aliases")
-        .upsert({
-          shop_domain: session.shop,
-          person_id: person.id,
-          alias_type: STAFF_ALIAS_TYPES.email,
-          alias_value: email,
-          source: "staff_manager",
-          first_seen_at: now,
-          last_seen_at: now,
-        }, { onConflict: "shop_domain,alias_type,alias_value" });
-      if (emailAliasError) return { ok: false, message: emailAliasError.message };
-    }
-
-    return { ok: true, message: "Staff profile created." };
-  }
-
-  if (intent === "link_alias") {
-    const aliasId = normalizeText(formData.get("alias_id"));
-    const personId = normalizeText(formData.get("person_id"));
-
-    if (!aliasId || !personId) {
-      return { ok: false, message: "POS seller and staff member are required." };
-    }
-
-    const { data: targetPerson } = await supabase.from("staff_people").select("id")
-      .eq("shop_domain", session.shop).eq("id", personId).maybeSingle();
-    if (!targetPerson) return { ok: false, message: "Staff member not found." };
-    const { error } = await supabase
-      .from("staff_identity_aliases")
-      .update({ person_id: personId, review_status: "mapped", updated_at: new Date().toISOString() })
-      .eq("shop_domain", session.shop)
-      .eq("id", aliasId).is("person_id", null);
-
-    if (error) return { ok: false, message: error.message };
-
-    return { ok: true, message: "POS seller assigned." };
-  }
-
-  if (intent === "unlink_alias") {
-    const aliasId = normalizeText(formData.get("alias_id"));
-
-    if (!aliasId) return { ok: false, message: "POS seller is required." };
-
-    const { error } = await supabase
-      .from("staff_identity_aliases")
-      .update({ person_id: null, review_status: "pending", updated_at: new Date().toISOString() })
-      .eq("shop_domain", session.shop)
-      .eq("id", aliasId);
-
-    if (error) return { ok: false, message: error.message };
-
-    return { ok: true, message: "POS seller unassigned." };
-  }
-
-  if (intent === "defer_alias" || intent === "restore_alias") {
-    const aliasId = normalizeText(formData.get("alias_id"));
-    if (!aliasId) return { ok: false, message: "POS seller is required." };
-    const reviewStatus = intent === "defer_alias" ? "deferred" : "pending";
-    const { error } = await supabase.from("staff_identity_aliases")
-      .update({ review_status: reviewStatus, updated_at: new Date().toISOString() })
-      .eq("shop_domain", session.shop).eq("id", aliasId).is("person_id", null);
-    if (error) return { ok: false, message: error.message };
-    return { ok: true, message: reviewStatus === "deferred" ? "Seller moved to Review later." : "Seller restored." };
-  }
-
-  if (intent === "dismiss_suggestion") {
-    const aliasId = normalizeText(formData.get("alias_id"));
-    if (!aliasId) return { ok: false, message: "POS seller is required." };
-    const { error } = await supabase.from("staff_identity_aliases")
-      .update({ suggestion_dismissed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("shop_domain", session.shop).eq("id", aliasId).is("person_id", null);
-    if (error) return { ok: false, message: error.message };
-    return { ok: true, message: "Suggestion dismissed." };
-  }
-
-  if (intent === "rename_person") {
-    const personId = normalizeText(formData.get("person_id"));
-    const displayName = normalizeText(formData.get("display_name"));
-
-    if (!personId || !displayName) {
-      return { ok: false, message: "Staff profile and display name are required." };
-    }
-
-    const { error } = await supabase
-      .from("staff_people")
-      .update({ display_name: displayName, updated_at: new Date().toISOString() })
-      .eq("shop_domain", session.shop)
-      .eq("id", personId);
-
-    if (error) return { ok: false, message: error.message };
-
+  if (intent === "apply_csv_mappings") {
+    type CsvMapping = {
+      aliasId: string;
+      action: "create" | "link";
+      displayName?: string;
+      personId?: string;
+    };
+    let mappings: CsvMapping[];
     try {
-      await syncTeamAccessLabelForPerson({
-        supabase,
-        shop: session.shop,
-        personId,
-        displayName,
-      });
-    } catch (syncError) {
-      return {
-        ok: false,
-        message: syncError instanceof Error ? syncError.message : String(syncError),
-      };
+      mappings = JSON.parse(text(data.get("mappings"))) as CsvMapping[];
+    } catch {
+      return { ok: false, message: "The import selection could not be read." };
     }
-
-    return { ok: true, message: "Staff profile renamed." };
-  }
-
-  if (intent === "deactivate_person") {
-    const personId = normalizeText(formData.get("person_id"));
-
-    if (!personId) return { ok: false, message: "Staff profile is required." };
-
-    const { error } = await supabase
-      .from("staff_people")
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq("shop_domain", session.shop)
-      .eq("id", personId);
-
-    if (error) return { ok: false, message: error.message };
-
-    return { ok: true, message: "Staff profile deactivated." };
-  }
-
-  if (intent === "remove_dashboard_access") {
-    const personId = normalizeText(formData.get("person_id"));
-    if (!personId) return { ok: false, message: "Staff profile is required." };
-    const { error } = await supabase.rpc("remove_staff_dashboard_access", {
-      p_shop_domain: session.shop,
-      p_person_id: personId,
-    });
-    if (error) {
-      return {
-        ok: false,
-        message: "Dashboard access could not be removed. Nothing was changed; please try again.",
-      };
+    if (!Array.isArray(mappings) || !mappings.length)
+      return { ok: false, message: "Choose at least one mapping." };
+    let applied = 0;
+    for (const mapping of mappings) {
+      if (!mapping.aliasId || !["create", "link"].includes(mapping.action))
+        continue;
+      const aliasResult = await supabase
+        .from("staff_identity_aliases")
+        .select("id")
+        .eq("shop_domain", session.shop)
+        .eq("id", mapping.aliasId)
+        .eq("alias_type", STAFF_ALIAS_TYPES.posAttributedUserId)
+        .is("person_id", null)
+        .maybeSingle();
+      if (aliasResult.error || !aliasResult.data) continue;
+      let targetId = mapping.personId;
+      if (mapping.action === "create") {
+        const displayName = mapping.displayName?.trim();
+        if (!displayName) continue;
+        const created = await supabase
+          .from("staff_people")
+          .insert({
+            shop_domain: session.shop,
+            display_name: displayName,
+            email: null,
+          })
+          .select("id")
+          .single();
+        if (created.error)
+          return {
+            ok: false,
+            message: `Import stopped after ${applied} mappings: ${created.error.message}`,
+          };
+        targetId = created.data.id;
+      } else {
+        const person = await supabase
+          .from("staff_people")
+          .select("id")
+          .eq("shop_domain", session.shop)
+          .eq("id", targetId ?? "")
+          .maybeSingle();
+        if (!person.data) continue;
+      }
+      const linked = await supabase
+        .from("staff_identity_aliases")
+        .update({
+          person_id: targetId,
+          review_status: "mapped",
+          updated_at: now,
+        })
+        .eq("shop_domain", session.shop)
+        .eq("id", mapping.aliasId)
+        .is("person_id", null);
+      if (linked.error)
+        return {
+          ok: false,
+          message: `Import stopped after ${applied} mappings: ${linked.error.message}`,
+        };
+      applied += 1;
     }
     return {
       ok: true,
-      message: "Dashboard access removed. POS sales attribution was preserved.",
+      message: `${applied} POS seller mapping${applied === 1 ? "" : "s"} applied. Dashboard access was not changed.`,
     };
   }
 
+  if (intent === "create_person" || intent === "create_from_alias") {
+    const displayName = text(data.get("display_name"));
+    const email = text(data.get("email")).toLowerCase() || null;
+    if (!displayName)
+      return { ok: false, message: "Display name is required." };
+    if (intent === "create_from_alias" && !aliasId)
+      return { ok: false, message: "POS seller is required." };
+    const created = await supabase
+      .from("staff_people")
+      .insert({ shop_domain: session.shop, display_name: displayName, email })
+      .select("id")
+      .single();
+    if (created.error) return { ok: false, message: created.error.message };
+    if (email) {
+      const emailResult = await supabase.from("staff_identity_aliases").upsert(
+        {
+          shop_domain: session.shop,
+          person_id: created.data.id,
+          alias_type: STAFF_ALIAS_TYPES.email,
+          alias_value: email,
+          source: "staff_manager",
+          review_status: "mapped",
+          first_seen_at: now,
+          last_seen_at: now,
+          updated_at: now,
+        },
+        { onConflict: "shop_domain,alias_type,alias_value" },
+      );
+      if (emailResult.error)
+        return { ok: false, message: emailResult.error.message };
+    }
+    if (aliasId) {
+      const linked = await supabase
+        .from("staff_identity_aliases")
+        .update({
+          person_id: created.data.id,
+          review_status: "mapped",
+          updated_at: now,
+        })
+        .eq("shop_domain", session.shop)
+        .eq("id", aliasId)
+        .is("person_id", null);
+      if (linked.error) return { ok: false, message: linked.error.message };
+    }
+    return {
+      ok: true,
+      message: aliasId
+        ? "Staff created and POS seller assigned. Dashboard access was not changed."
+        : "Staff profile created.",
+    };
+  }
+  if (intent === "link_alias") {
+    if (!aliasId || !personId)
+      return { ok: false, message: "Choose a staff member." };
+    const result = await supabase
+      .from("staff_identity_aliases")
+      .update({ person_id: personId, review_status: "mapped", updated_at: now })
+      .eq("shop_domain", session.shop)
+      .eq("id", aliasId)
+      .is("person_id", null);
+    return result.error
+      ? { ok: false, message: result.error.message }
+      : {
+          ok: true,
+          message: "POS seller assigned. Dashboard access was not changed.",
+        };
+  }
+  if (intent === "defer_alias" || intent === "restore_alias") {
+    const result = await supabase
+      .from("staff_identity_aliases")
+      .update({
+        review_status: intent === "defer_alias" ? "deferred" : "pending",
+        updated_at: now,
+      })
+      .eq("shop_domain", session.shop)
+      .eq("id", aliasId)
+      .is("person_id", null);
+    return result.error
+      ? { ok: false, message: result.error.message }
+      : {
+          ok: true,
+          message:
+            intent === "defer_alias"
+              ? "Seller saved for later."
+              : "Seller returned to review.",
+        };
+  }
+  if (intent === "update_profile") {
+    const displayName = text(data.get("display_name"));
+    const email = text(data.get("email")).toLowerCase() || null;
+    if (!personId || !displayName)
+      return { ok: false, message: "Display name is required." };
+    const result = await supabase
+      .from("staff_people")
+      .update({ display_name: displayName, email, updated_at: now })
+      .eq("shop_domain", session.shop)
+      .eq("id", personId);
+    if (!result.error)
+      await supabase
+        .from("user_location_access")
+        .update({ access_label: displayName })
+        .eq("shop_domain", session.shop)
+        .eq("person_id", personId);
+    return result.error
+      ? { ok: false, message: result.error.message }
+      : { ok: true, message: "Profile updated." };
+  }
+  if (intent === "set_active") {
+    const result = await supabase
+      .from("staff_people")
+      .update({
+        is_active: text(data.get("is_active")) === "true",
+        updated_at: now,
+      })
+      .eq("shop_domain", session.shop)
+      .eq("id", personId);
+    return result.error
+      ? { ok: false, message: result.error.message }
+      : { ok: true, message: "Staff status updated." };
+  }
+  if (intent === "remove_dashboard_access") {
+    const result = await supabase.rpc("remove_staff_dashboard_access", {
+      p_shop_domain: session.shop,
+      p_person_id: personId,
+    });
+    return result.error
+      ? { ok: false, message: "Dashboard access could not be removed." }
+      : {
+          ok: true,
+          message:
+            "Dashboard access removed. Profile and POS sales were preserved.",
+        };
+  }
   if (intent === "save_dashboard_access") {
-    const personId = normalizeText(formData.get("person_id"));
-    const email = normalizeText(formData.get("email")).toLowerCase();
-    const roleValue = normalizeText(formData.get("role"));
-    const role = roleValue === "admin" || roleValue === "manager" ? roleValue : "viewer";
-    const requestedLocations = formData.getAll("location_ids").map(normalizeText).filter(Boolean);
-    if (!personId || !email) return { ok: false, message: "A login email is required." };
-    const { data: loginAliases, error: loginAliasError } = await supabase.from("staff_identity_aliases")
-      .select("alias_value").eq("shop_domain", session.shop).eq("person_id", personId)
+    const email = text(data.get("email")).toLowerCase();
+    const role = text(data.get("role"));
+    const aliases = await supabase
+      .from("staff_identity_aliases")
+      .select("alias_value")
+      .eq("shop_domain", session.shop)
+      .eq("person_id", personId)
       .eq("alias_type", STAFF_ALIAS_TYPES.shopifyAdminUserId);
-    if (loginAliasError) return { ok: false, message: getDashboardAccessErrorMessage(loginAliasError) };
-    const shopifyUserIds = Array.from(new Set((loginAliases ?? []).map((row) => row.alias_value).filter(Boolean)));
-    const { error } = await supabase.rpc("replace_staff_dashboard_access", {
+    if (aliases.error)
+      return { ok: false, message: friendlyAccessError(aliases.error.message) };
+    const result = await supabase.rpc("replace_staff_dashboard_access", {
       p_shop_domain: session.shop,
       p_person_id: personId,
       p_canonical_email: email,
-      p_role: role,
-      p_location_ids: requestedLocations,
-      p_shopify_user_ids: shopifyUserIds,
+      p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
+      p_location_ids: data.getAll("location_ids").map(text).filter(Boolean),
+      p_shopify_user_ids: [
+        ...new Set(
+          (aliases.data ?? []).map((row) => row.alias_value).filter(Boolean),
+        ),
+      ],
     });
-    if (error) return { ok: false, message: getDashboardAccessErrorMessage(error) };
-    return { ok: true, message: "Dashboard access saved." };
+    return result.error
+      ? { ok: false, message: friendlyAccessError(result.error.message) }
+      : { ok: true, message: "Dashboard access saved." };
   }
-
   return { ok: false, message: "Unknown staff action." };
 }
 
-export function ErrorBoundary() {
-  return <RouteErrorNotice />;
-}
-
-function PageCard({
-  title,
+function Button({
   children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        background: "white",
-        border: "1px solid #e3e3e3",
-        borderRadius: 12,
-        padding: 20,
-      }}
-    >
-      <h2 style={{ marginTop: 0 }}>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function PlainButton({
-  children,
+  primary = false,
   danger = false,
+  type = "button",
+  onClick,
 }: {
   children: React.ReactNode;
+  primary?: boolean;
   danger?: boolean;
+  type?: "button" | "submit";
+  onClick?: () => void;
 }) {
   return (
     <button
-      type="submit"
-      style={{
-        border: "1px solid #c9cccf",
-        borderRadius: 8,
-        background: "white",
-        color: danger ? "#b42318" : "#202223",
-        cursor: "pointer",
-        fontWeight: 700,
-        padding: "7px 10px",
-      }}
+      className={`staff-button ${primary ? "primary" : ""} ${danger ? "danger" : ""}`}
+      type={type}
+      onClick={onClick}
     >
       {children}
     </button>
   );
 }
 
-function AliasMeta({ alias }: { alias: StaffAlias }) {
+function OverlayPanel({
+  title,
+  onClose,
+  children,
+  wide = false,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  wide?: boolean;
+}) {
   return (
-    <div style={{ color: "#616161", fontSize: 13 }}>
-      First seen: {formatDateTime(alias.first_seen_at)} · Last seen: {formatDateTime(alias.last_seen_at)}
+    <div
+      className="staff-overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        className={`staff-panel ${wide ? "wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <header>
+          <h2>{title}</h2>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+        <div className="panel-body">{children}</div>
+      </section>
     </div>
   );
 }
 
-export default function AdminStaffPage() {
-  const { unmappedPosAliases, deferredPosAliases, sellerMetrics, suggestions, profiles, locations } = useLoaderData<LoaderData>();
-  const actionData = useActionData<ActionData>();
-  const navigation = useNavigation();
-  const isSubmitting = navigation.state !== "idle";
-  const activeProfiles = profiles.filter((profile) => profile.is_active);
-
+function AccessForm({
+  profile,
+  locations,
+}: {
+  profile: StaffProfile;
+  locations: LocationRow[];
+}) {
+  const role = profile.permissions[0]?.role ?? "viewer";
+  const allLocations = profile.permissions.some(
+    (row) => row.shopify_location_id === "*",
+  );
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "#f6f6f7",
-        padding: 28,
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-      }}
-    >
-      <div style={{ maxWidth: 1200, margin: "0 auto", display: "grid", gap: 20 }}>
-        <header>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Staff</h1>
-          <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Manage people, POS sales attribution, and dashboard access in one place.
-          </p>
-        </header>
+    <Form method="post" className="form-stack">
+      <input type="hidden" name="intent" value="save_dashboard_access" />
+      <input type="hidden" name="person_id" value={profile.id} />
+      <label>
+        Login email
+        <input
+          name="email"
+          type="email"
+          required
+          defaultValue={profile.email ?? ""}
+        />
+      </label>
+      <label>
+        Role
+        <select name="role" defaultValue={role}>
+          <option value="viewer">Viewer</option>
+          <option value="manager">Manager</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Accessible locations</legend>
+        {locations.map((location) => (
+          <label className="check" key={location.shopify_location_id}>
+            <input
+              type="checkbox"
+              name="location_ids"
+              value={location.shopify_location_id}
+              defaultChecked={
+                allLocations ||
+                profile.permissions.some(
+                  (row) =>
+                    row.shopify_location_id === location.shopify_location_id,
+                )
+              }
+            />
+            {location.name}
+          </label>
+        ))}
+      </fieldset>
+      <p className="hint">
+        Shopify login identities already linked to this person are preserved
+        automatically.
+      </p>
+      <Button primary type="submit">
+        Save access
+      </Button>
+    </Form>
+  );
+}
 
-        {actionData ? (
-          <div
-            style={{
-              border: `1px solid ${actionData.ok ? "#abefc6" : "#fecdca"}`,
-              borderRadius: 10,
-              background: actionData.ok ? "#ecfdf3" : "#fef3f2",
-              color: actionData.ok ? "#067647" : "#b42318",
-              fontWeight: 800,
-              padding: 12,
-            }}
-          >
-            {actionData.message}
+function PendingReview({
+  pending,
+  metrics,
+  profiles,
+}: {
+  pending: StaffAlias[];
+  metrics: Record<string, SellerMetric>;
+  profiles: StaffProfile[];
+}) {
+  const [assigning, setAssigning] = useState<string | null>(null);
+  const [mode, setMode] = useState<"existing" | "new">("existing");
+  const [search, setSearch] = useState("");
+  const people = profiles.filter(
+    (profile) =>
+      profile.is_active &&
+      `${profile.display_name} ${profile.email ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
+  return (
+    <div className="review-list">
+      {pending.map((alias) => {
+        const metric = metrics[metricKey(alias)] ?? blankMetric();
+        return (
+          <article className="seller-row" key={alias.id}>
+            <div className="seller-facts">
+              <span>
+                <b>Last order</b>
+                {metric.lastOrderName ?? "—"}
+              </span>
+              <span>
+                <b>Last activity</b>
+                {date(metric.lastActivityAt)}
+              </span>
+              <span>
+                <b>POS location</b>
+                {metric.lastLocation ?? "—"}
+              </span>
+              <span>
+                <b>Device</b>
+                {metric.lastDevice ?? "—"}
+              </span>
+              <span>
+                <b>Orders</b>
+                {metric.orderCount}
+              </span>
+              <span>
+                <b>Net sales</b>
+                {money(metric.netSales)}
+              </span>
+            </div>
+            {assigning === alias.id ? (
+              <div className="assign-box">
+                <h3>Who is this seller?</h3>
+                <div className="segmented">
+                  <button
+                    type="button"
+                    aria-pressed={mode === "existing"}
+                    onClick={() => setMode("existing")}
+                  >
+                    Existing staff
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={mode === "new"}
+                    onClick={() => setMode("new")}
+                  >
+                    Create new
+                  </button>
+                </div>
+                {mode === "existing" ? (
+                  <Form method="post" className="form-stack">
+                    <input type="hidden" name="intent" value="link_alias" />
+                    <input type="hidden" name="alias_id" value={alias.id} />
+                    <input
+                      aria-label="Search staff"
+                      placeholder="Search by name or email"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                    />
+                    <select
+                      name="person_id"
+                      required
+                      size={Math.min(5, Math.max(2, people.length))}
+                    >
+                      {people.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.display_name}
+                          {profile.email ? ` · ${profile.email}` : ""} ·{" "}
+                          {profile.dashboardAccess}
+                        </option>
+                      ))}
+                    </select>
+                    <Button primary type="submit">
+                      Assign seller
+                    </Button>
+                  </Form>
+                ) : (
+                  <Form method="post" className="form-stack">
+                    <input
+                      type="hidden"
+                      name="intent"
+                      value="create_from_alias"
+                    />
+                    <input type="hidden" name="alias_id" value={alias.id} />
+                    <label>
+                      Display name
+                      <input name="display_name" required />
+                    </label>
+                    <label>
+                      Email <small>Optional</small>
+                      <input name="email" type="email" />
+                    </label>
+                    <Button primary type="submit">
+                      Create and assign
+                    </Button>
+                  </Form>
+                )}
+              </div>
+            ) : (
+              <div className="row-actions">
+                <Button primary onClick={() => setAssigning(alias.id)}>
+                  Assign
+                </Button>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="defer_alias" />
+                  <input type="hidden" name="alias_id" value={alias.id} />
+                  <Button type="submit">Later</Button>
+                </Form>
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function CsvImport({
+  pending,
+  profiles,
+  metrics,
+}: {
+  pending: StaffAlias[];
+  profiles: StaffProfile[];
+  metrics: Record<string, SellerMetric>;
+}) {
+  const [preview, setPreview] = useState<ShopifyStaffCsvResult | null>(null);
+  const [error, setError] = useState("");
+  const [choices, setChoices] = useState<
+    Record<string, { action: "create" | "link" | "skip"; personId?: string }>
+  >({});
+  const [confirmed, setConfirmed] = useState(false);
+  const exactAliases = new Map(
+    pending
+      .filter(
+        (alias) => alias.alias_type === STAFF_ALIAS_TYPES.posAttributedUserId,
+      )
+      .map((alias) => [alias.alias_value, alias]),
+  );
+  const mappedAliases = new Map(
+    profiles.flatMap((profile) =>
+      profile.aliases
+        .filter(
+          (alias) => alias.alias_type === STAFF_ALIAS_TYPES.posAttributedUserId,
+        )
+        .map((alias) => [alias.alias_value, profile] as const),
+    ),
+  );
+  const exactRows =
+    preview?.rows.filter((row) => exactAliases.has(row.sellerId)) ?? [];
+  const mappedRows =
+    preview?.rows.filter((row) => mappedAliases.has(row.sellerId)) ?? [];
+  const unmatchedRows =
+    preview?.rows.filter(
+      (row) =>
+        !exactAliases.has(row.sellerId) && !mappedAliases.has(row.sellerId),
+    ) ?? [];
+  const selected = exactRows.filter(
+    (row) =>
+      choices[row.sellerId]?.action === "create" ||
+      (choices[row.sellerId]?.action === "link" &&
+        choices[row.sellerId]?.personId),
+  );
+  return (
+    <div className="import-flow">
+      <p>
+        Use a Shopify sales export to map many detected sellers to readable
+        names. This never changes dashboard access.
+      </p>
+      <ol>
+        <li>Open Shopify Admin → Analytics → Reports</li>
+        <li>Create a new exploration</li>
+        <li>Open the ShopifyQL editor</li>
+        <li>Paste the query below</li>
+        <li>Run the report</li>
+        <li>Export as CSV</li>
+        <li>Upload the CSV to ShopOps</li>
+      </ol>
+      <div className="query">
+        <pre>{SHOPIFY_QUERY}</pre>
+        <Button
+          onClick={() => void navigator.clipboard.writeText(SHOPIFY_QUERY)}
+        >
+          Copy query
+        </Button>
+      </div>
+      <label className="upload">
+        Upload Shopify CSV
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            void file.text().then((value) => {
+              try {
+                setPreview(parseShopifyStaffCsv(value));
+                setError("");
+                setChoices({});
+                setConfirmed(false);
+              } catch (caught) {
+                setPreview(null);
+                setError(
+                  caught instanceof Error
+                    ? caught.message
+                    : "Could not read CSV.",
+                );
+              }
+            });
+          }}
+        />
+      </label>
+      {error ? <p className="error">{error}</p> : null}
+      {preview ? (
+        <div className="preview">
+          <div className="preview-counts">
+            <span>
+              <b>{exactRows.length}</b> Exact matches
+            </span>
+            <span>
+              <b>{preview.conflicts.length}</b> Conflicts
+            </span>
+            <span>
+              <b>{unmatchedRows.length}</b> No matching sales
+            </span>
+            <span>
+              <b>{mappedRows.length}</b> Already mapped
+            </span>
+          </div>
+          {exactRows.map((row) => {
+            const alias = exactAliases.get(row.sellerId)!;
+            const metric = metrics[metricKey(alias)] ?? blankMetric();
+            const sameName = profiles.find(
+              (profile) =>
+                profile.display_name.toLowerCase() ===
+                row.displayName.toLowerCase(),
+            );
+            const choice = choices[row.sellerId];
+            return (
+              <article className="preview-row" key={row.sellerId}>
+                <div>
+                  <b>{row.displayName}</b>
+                  <span>
+                    Exact POS seller match · {metric.orderCount} orders
+                    {row.locations[0] ? ` · ${row.locations[0]}` : ""}
+                  </span>
+                  {sameName ? (
+                    <small>
+                      Suggestion: existing staff member {sameName.display_name}.
+                      Confirmation required.
+                    </small>
+                  ) : null}
+                </div>
+                <select
+                  aria-label={`Action for ${row.displayName}`}
+                  value={choice?.action ?? "skip"}
+                  onChange={(event) =>
+                    setChoices((current) => ({
+                      ...current,
+                      [row.sellerId]: {
+                        action: event.target.value as
+                          | "create"
+                          | "link"
+                          | "skip",
+                      },
+                    }))
+                  }
+                >
+                  <option value="skip">Skip</option>
+                  <option value="create">Create staff</option>
+                  <option value="link">Link to existing</option>
+                </select>
+                {choice?.action === "link" ? (
+                  <select
+                    aria-label={`Staff member for ${row.displayName}`}
+                    value={choice.personId ?? ""}
+                    onChange={(event) =>
+                      setChoices((current) => ({
+                        ...current,
+                        [row.sellerId]: {
+                          action: "link",
+                          personId: event.target.value,
+                        },
+                      }))
+                    }
+                  >
+                    <option value="">Choose staff member</option>
+                    {profiles.map((profile) => (
+                      <option value={profile.id} key={profile.id}>
+                        {profile.display_name}
+                        {profile.email ? ` · ${profile.email}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+              </article>
+            );
+          })}
+          {preview.conflicts.map((conflict) => (
+            <article className="preview-row warning" key={conflict.sellerId}>
+              <div>
+                <b>Conflicting names</b>
+                <span>
+                  {conflict.names.join(" / ")} · Merchant review required
+                </span>
+              </div>
+            </article>
+          ))}
+          {mappedRows.map((row) => (
+            <article className="preview-row" key={row.sellerId}>
+              <div>
+                <b>{row.displayName}</b>
+                <span>
+                  Already mapped to{" "}
+                  {mappedAliases.get(row.sellerId)?.display_name}
+                </span>
+              </div>
+            </article>
+          ))}
+          {unmatchedRows.map((row) => (
+            <article className="preview-row muted" key={row.sellerId}>
+              <div>
+                <b>{row.displayName}</b>
+                <span>No matching ShopOps sales found</span>
+              </div>
+            </article>
+          ))}
+          {preview.ignoredRows ? (
+            <p className="hint">
+              {preview.ignoredRows} blank or incomplete rows ignored.
+            </p>
+          ) : null}
+          {selected.length ? (
+            <div className="confirm">
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={confirmed}
+                  onChange={(event) => setConfirmed(event.target.checked)}
+                />
+                I confirm {selected.length} mapping
+                {selected.length === 1 ? "" : "s"}. Dashboard access will not be
+                changed.
+              </label>
+              {confirmed ? (
+                <Form method="post" className="bulk-forms">
+                  <input
+                    type="hidden"
+                    name="intent"
+                    value="apply_csv_mappings"
+                  />
+                  <input
+                    type="hidden"
+                    name="mappings"
+                    value={JSON.stringify(
+                      selected.map((row) => ({
+                        aliasId: exactAliases.get(row.sellerId)!.id,
+                        action: choices[row.sellerId].action,
+                        displayName: row.displayName,
+                        personId: choices[row.sellerId].personId,
+                      })),
+                    )}
+                  />
+                  <Button primary type="submit">
+                    Apply {selected.length} mappings
+                  </Button>
+                </Form>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export default function StaffPage() {
+  const data = useLoaderData<LoaderData>();
+  const result = useActionData<ActionData>();
+  const navigation = useNavigation();
+  const [overlay, setOverlay] = useState<Overlay>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [menu, setMenu] = useState<string | null>(null);
+  const selected =
+    data.profiles.find((profile) => profile.id === selectedId) ?? null;
+  const filtered = useMemo(
+    () =>
+      data.profiles.filter((profile) => {
+        const query =
+          `${profile.display_name} ${profile.email ?? ""}`.toLowerCase();
+        if (!query.includes(search.toLowerCase())) return false;
+        if (filter === "access") return profile.dashboardAccess !== "No access";
+        if (filter === "pos") return profile.posMetrics.orderCount > 0;
+        if (filter === "attention")
+          return (
+            !profile.is_active ||
+            (!profile.email && profile.dashboardAccess !== "No access")
+          );
+        return true;
+      }),
+    [data.profiles, filter, search],
+  );
+  const open = (next: Overlay, profile?: StaffProfile) => {
+    setSelectedId(profile?.id ?? null);
+    setOverlay(next);
+    setMenu(null);
+  };
+  const locationLabel = (profile: StaffProfile) => {
+    const names = [
+      ...new Set(
+        profile.permissions.map((row) => row.location_name).filter(Boolean),
+      ),
+    ];
+    if (profile.permissions.some((row) => row.shopify_location_id === "*"))
+      return "All locations";
+    return names.length > 1 ? `${names.length} locations` : (names[0] ?? "—");
+  };
+  return (
+    <main className="staff-page">
+      <style>{STAFF_CSS}</style>
+      <div className="staff-shell">
+        <header className="page-header">
+          <div>
+            <h1>Staff</h1>
+            <p>Manage staff, dashboard access, and POS sales attribution.</p>
+          </div>
+          <Button primary onClick={() => open("add")}>
+            + Add staff
+          </Button>
+        </header>
+        {result ? (
+          <div className={`notice ${result.ok ? "success" : "error"}`}>
+            {result.message}
           </div>
         ) : null}
-
-        <PageCard title="New POS sellers detected">
-          {unmappedPosAliases.length > 0 ? (
-            <div style={{ display: "grid", gap: 12 }}>
-              {unmappedPosAliases.map((alias) => (
-                <div
-                  key={alias.id}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 10,
-                    padding: 12,
-                    display: "grid",
-                    gap: 10,
-                  }}
+        {data.pending.length ? (
+          <div className="pending-notice">
+            <span>
+              <b>
+                {data.pending.length} POS seller
+                {data.pending.length === 1 ? "" : "s"} need assignment
+              </b>
+              <small>Give sales a readable staff name.</small>
+            </span>
+            <Button onClick={() => open("pending")}>Review</Button>
+          </div>
+        ) : null}
+        <section className="roster">
+          <div className="toolbar">
+            <label className="search">
+              <span>⌕</span>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search by name or email"
+                aria-label="Search by name or email"
+              />
+            </label>
+            <div className="filters">
+              {[
+                ["all", "All"],
+                ["access", "Dashboard access"],
+                ["pos", "POS sellers"],
+                ["attention", "Needs attention"],
+              ].map(([value, label]) => (
+                <button
+                  type="button"
+                  aria-pressed={filter === value}
+                  onClick={() => setFilter(value)}
+                  key={value}
                 >
-                  <div>
-                    <div style={{ fontWeight: 900 }}>
-                      POS seller detected
-                    </div>
-                    <AliasMeta alias={alias} />
-                    {(() => {
-                      const metric = sellerMetrics[staffIdentityAliasKey(alias.alias_type, alias.alias_value)];
-                      return metric ? (
-                        <div style={{ color: "#454545", fontSize: 14, marginTop: 6 }}>
-                          {metric.lastOrderName ?? "No order name"} · {formatDateTime(metric.lastActivityAt)} · {metric.lastLocation ?? "Unknown location"} · {metric.lastDevice ?? "Unknown device"}<br />
-                          {metric.orderCount} {metric.orderCount === 1 ? "order" : "orders"} · Net sales {metric.netSales.toFixed(2)}
-                        </div>
-                      ) : null;
-                    })()}
-                    {(() => {
-                      const suggestion = suggestions[staffIdentityAliasKey(alias.alias_type, alias.alias_value)];
-                      return suggestion ? (
-                        <div style={{ background: "#f0f7ff", borderRadius: 8, marginTop: 8, padding: 10 }}>
-                          <strong>Suggested match: {suggestion.displayName}</strong>
-                          <div style={{ color: "#454545", fontSize: 13 }}>{suggestion.reason}</div>
-                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                            <Form method="post">
-                              <input type="hidden" name="intent" value="link_alias" />
-                              <input type="hidden" name="alias_id" value={alias.id} />
-                              <input type="hidden" name="person_id" value={suggestion.personId} />
-                              <PlainButton>Confirm</PlainButton>
-                            </Form>
-                            <Form method="post">
-                              <input type="hidden" name="intent" value="dismiss_suggestion" />
-                              <input type="hidden" name="alias_id" value={alias.id} />
-                              <PlainButton>Dismiss</PlainButton>
-                            </Form>
-                          </div>
-                        </div>
-                      ) : null;
-                    })()}
-                  </div>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "minmax(180px, 1fr) auto",
-                      gap: 8,
-                    }}
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="staff-table">
+            <div className="table-head">
+              <span>Staff</span>
+              <span>Dashboard access</span>
+              <span>POS sales</span>
+              <span>Locations</span>
+              <span>Status</span>
+              <span>Actions</span>
+            </div>
+            {filtered.map((profile) => (
+              <div
+                className="staff-row"
+                key={profile.id}
+                onClick={(event) => {
+                  if (!(event.target as HTMLElement).closest(".actions")) {
+                    open("details", profile);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") open("details", profile);
+                }}
+              >
+                <span className="identity">
+                  <b>{profile.display_name}</b>
+                  <small>{profile.email ?? "No email"}</small>
+                </span>
+                <span>
+                  <StatusBadge
+                    variant={
+                      profile.dashboardAccess === "No access"
+                        ? "neutral"
+                        : "success"
+                    }
                   >
-                    <Form method="post" style={{ display: "contents" }}>
-                      <input type="hidden" name="intent" value="create_from_alias" />
-                      <input type="hidden" name="alias_id" value={alias.id} />
-                      <input
-                        name="display_name"
-                        placeholder="Display name"
-                        required
-                        style={{
-                          border: "1px solid #c9cccf",
-                          borderRadius: 8,
-                          padding: 9,
-                        }}
-                      />
-                      <input
-                        name="email"
-                        type="email"
-                        placeholder="Email (optional)"
-                        style={{ border: "1px solid #c9cccf", borderRadius: 8, padding: 9 }}
-                      />
-                      <PlainButton>Create staff</PlainButton>
-                    </Form>
-                  </div>
-                  {activeProfiles.length > 0 ? (
-                    <Form
-                      method="post"
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "minmax(180px, 1fr) auto",
-                        gap: 8,
-                      }}
-                    >
-                      <input type="hidden" name="intent" value="link_alias" />
-                      <input type="hidden" name="alias_id" value={alias.id} />
-                      <select
-                        name="person_id"
-                        required
-                        style={{
-                          border: "1px solid #c9cccf",
-                          borderRadius: 8,
-                          padding: 9,
-                        }}
+                    {profile.dashboardAccess}
+                  </StatusBadge>
+                </span>
+                <span>
+                  <StatusBadge
+                    variant={profile.posMetrics.orderCount ? "info" : "neutral"}
+                  >
+                    {profile.posMetrics.orderCount ? "Linked" : "Not linked"}
+                  </StatusBadge>
+                </span>
+                <span>{locationLabel(profile)}</span>
+                <span>
+                  <StatusBadge
+                    variant={profile.is_active ? "success" : "warning"}
+                  >
+                    {profile.is_active ? "Active" : "Inactive"}
+                  </StatusBadge>
+                </span>
+                <span className="actions">
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Actions for ${profile.display_name}`}
+                    onClick={() =>
+                      setMenu(menu === profile.id ? null : profile.id)
+                    }
+                  >
+                    •••
+                  </button>
+                  {menu === profile.id ? (
+                    <div className="menu">
+                      <button
+                        type="button"
+                        onClick={() => open("details", profile)}
                       >
-                        <option value="">Link to existing staff profile</option>
-                        {activeProfiles.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {profile.display_name}{profile.email ? ` · ${profile.email}` : ""} · {profile.dashboardAccess}
-                          </option>
-                        ))}
-                      </select>
-                      <PlainButton>Link to staff</PlainButton>
-                    </Form>
+                        View
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => open("access", profile)}
+                      >
+                        {profile.dashboardAccess === "No access"
+                          ? "Enable access"
+                          : "Edit access"}
+                      </button>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="set_active" />
+                        <input
+                          type="hidden"
+                          name="person_id"
+                          value={profile.id}
+                        />
+                        <input
+                          type="hidden"
+                          name="is_active"
+                          value={String(!profile.is_active)}
+                        />
+                        <button type="submit">
+                          {profile.is_active ? "Deactivate" : "Reactivate"}
+                        </button>
+                      </Form>
+                    </div>
                   ) : null}
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="defer_alias" />
-                    <input type="hidden" name="alias_id" value={alias.id} />
-                    <PlainButton>Later</PlainButton>
-                  </Form>
-                  <details>
-                    <summary style={{ cursor: "pointer", fontSize: 13 }}>Advanced details</summary>
-                    <code>
-                      {getAliasLabel(alias.alias_type)}: {alias.alias_value} · Source: {alias.source ?? "unknown"}
-                      {alias.last_device_id ? ` · Device: ${alias.last_device_id}` : ""}
-                    </code>
-                  </details>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p style={{ color: "#616161" }}>
-              No POS sellers need assignment.
-            </p>
-          )}
-        </PageCard>
-
-        <PageCard title="Staff">
-          {profiles.length > 0 ? (
-            <div style={{ display: "grid", gap: 14 }}>
-              {profiles.map((profile) => (
-                <div
-                  key={profile.id}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 10,
-                    opacity: profile.is_active ? 1 : 0.58,
-                    padding: 14,
-                    display: "grid",
-                    gap: 12,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <div>
-                      <div style={{ color: "#616161", fontWeight: 800 }}>Profile</div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <h3 style={{ margin: 0 }}>{profile.display_name}</h3>
-                        <StatusBadge
-                          variant={
-                            profile.dashboardAccess === "No dashboard access"
-                              ? "neutral"
-                              : "success"
-                          }
-                        >
-                          {profile.dashboardAccess}
-                        </StatusBadge>
-                        {!profile.is_active ? (
-                          <StatusBadge variant="warning">Inactive</StatusBadge>
-                        ) : null}
-                      </div>
-                      <div style={{ color: "#616161", fontSize: 13 }}>
-                        Email: {profile.email ?? "-"} · Last POS sale:{" "}
-                        {formatDateTime(profile.lastPosSaleSeen)}
-                      </div>
-                    </div>
-                    <Form method="post" style={{ display: "flex", gap: 8 }}>
-                      <input type="hidden" name="intent" value="rename_person" />
-                      <input type="hidden" name="person_id" value={profile.id} />
-                      <input
-                        name="display_name"
-                        defaultValue={profile.display_name}
-                        required
-                        style={{
-                          border: "1px solid #c9cccf",
-                          borderRadius: 8,
-                          padding: 8,
-                        }}
-                      />
-                      <PlainButton>Rename</PlainButton>
-                    </Form>
-                  </div>
-
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <div style={{ color: "#616161", fontWeight: 800 }}>
-                      POS sales attribution
-                    </div>
-                    <div style={{ color: "#454545", fontSize: 14 }}>
-                      {profile.posMetrics.orderCount > 0
-                        ? `${profile.posMetrics.orderCount} orders · Net sales ${profile.posMetrics.netSales.toFixed(2)} · First/last activity shown below`
-                        : "No POS seller attribution linked."}
-                    </div>
-                    {profile.aliases.some((alias) => POS_ALIAS_TYPES.has(alias.alias_type)) ? (
-                      profile.aliases.filter((alias) => POS_ALIAS_TYPES.has(alias.alias_type)).map((alias) => (
-                        <div
-                          key={alias.id}
-                          style={{
-                            alignItems: "center",
-                            display: "grid",
-                            gap: 8,
-                            gridTemplateColumns: "minmax(0, 1fr) auto",
-                          }}
-                        >
-                          <div>
-                            <div style={{ fontWeight: 800 }}>
-                              POS seller linked
-                            </div>
-                            <AliasMeta alias={alias} />
-                          </div>
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="unlink_alias" />
-                            <input type="hidden" name="alias_id" value={alias.id} />
-                            <PlainButton>Unlink</PlainButton>
-                          </Form>
-                        </div>
-                      ))
-                    ) : (
-                      <div style={{ color: "#616161" }}>No POS seller linked.</div>
-                    )}
-                  </div>
-
-                  <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 10 }}>
-                    <div style={{ color: "#616161", fontWeight: 800, marginBottom: 8 }}>
-                      Dashboard access
-                    </div>
-                    <div style={{ marginBottom: 8 }}>
-                      {profile.dashboardAccess} · Authorization email: {profile.email ?? "Not set"}
-                    </div>
-                    {profile.dashboardAccess !== "No dashboard access" ? (
-                      <Form method="post" style={{ display: "grid", gap: 8 }}>
-                        <input type="hidden" name="intent" value="save_dashboard_access" />
-                        <input type="hidden" name="person_id" value={profile.id} />
-                        <input type="email" name="email" required defaultValue={profile.email ?? ""} placeholder="Login email" />
-                        <select name="role" defaultValue={profile.permissions[0]?.role ?? "viewer"}>
-                          <option value="viewer">Viewer</option>
-                          <option value="manager">Manager</option>
-                          <option value="admin">Admin</option>
-                        </select>
-                        <div><strong>Locations</strong></div>
-                        {locations.map((location) => (
-                          <label key={location.shopify_location_id} style={{ display: "flex", gap: 6 }}>
-                            <input type="checkbox" name="location_ids" value={location.shopify_location_id}
-                              defaultChecked={profile.permissions.some((row) => row.shopify_location_id === location.shopify_location_id || row.shopify_location_id === "*")} />
-                            {location.name}
-                          </label>
-                        ))}
-                        <PlainButton>Save dashboard access</PlainButton>
-                      </Form>
-                    ) : (
-                      <Form method="post" style={{ display: "grid", gap: 8 }}>
-                        <input type="hidden" name="intent" value="save_dashboard_access" />
-                        <input type="hidden" name="person_id" value={profile.id} />
-                        <input type="email" name="email" required defaultValue={profile.email ?? ""} placeholder="Login email" />
-                        <select name="role" defaultValue="viewer">
-                          <option value="viewer">Viewer</option>
-                          <option value="manager">Manager</option>
-                          <option value="admin">Admin</option>
-                        </select>
-                        <div><strong>Locations</strong></div>
-                        {locations.map((location) => (
-                          <label key={location.shopify_location_id} style={{ display: "flex", gap: 6 }}>
-                            <input type="checkbox" name="location_ids" value={location.shopify_location_id} />
-                            {location.name}
-                          </label>
-                        ))}
-                        <PlainButton>Enable dashboard access</PlainButton>
-                      </Form>
-                    )}
-                    {profile.dashboardAccess !== "No dashboard access" ? (
-                      <Form method="post" style={{ marginTop: 8 }}>
-                        <input type="hidden" name="intent" value="remove_dashboard_access" />
-                        <input type="hidden" name="person_id" value={profile.id} />
-                        <PlainButton danger>Remove dashboard access</PlainButton>
-                      </Form>
-                    ) : null}
-                  </div>
-
-                  <details>
-                    <summary style={{ cursor: "pointer", fontWeight: 800 }}>Advanced details</summary>
-                    <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
-                      {profile.aliases.map((alias) => (
-                        <code key={`advanced-${alias.id}`}>
-                          {getAliasLabel(alias.alias_type)}: {alias.alias_value} · Source: {alias.source ?? "unknown"}
-                          {alias.last_device_id ? ` · Device: ${alias.last_device_id}` : ""}
-                        </code>
-                      ))}
-                    </div>
-                  </details>
-
-                  {profile.is_active ? (
-                    <Form method="post">
-                      <input type="hidden" name="intent" value="deactivate_person" />
-                      <input type="hidden" name="person_id" value={profile.id} />
-                      <PlainButton danger>Deactivate</PlainButton>
-                    </Form>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p style={{ color: "#616161" }}>No staff profiles yet.</p>
-          )}
-          {isSubmitting ? (
-            <p style={{ color: "#616161", fontWeight: 800 }}>Saving...</p>
-          ) : null}
-        </PageCard>
-
-        <PageCard title="Review later">
-          {deferredPosAliases.length ? (
-            <div style={{ display: "grid", gap: 10 }}>
-              {deferredPosAliases.map((alias) => (
-                <div key={alias.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
-                  <strong>POS seller</strong> · Last activity {formatDateTime(alias.last_seen_at)}
-                  <Form method="post" style={{ marginTop: 8 }}>
-                    <input type="hidden" name="intent" value="restore_alias" />
-                    <input type="hidden" name="alias_id" value={alias.id} />
-                    <PlainButton>Restore</PlainButton>
-                  </Form>
-                </div>
-              ))}
-            </div>
-          ) : <p style={{ color: "#616161" }}>No sellers are waiting for review.</p>}
-        </PageCard>
+                </span>
+              </div>
+            ))}
+            {!filtered.length ? (
+              <div className="compact-empty">No staff match these filters.</div>
+            ) : null}
+          </div>
+          <footer className="roster-footer">
+            <span>
+              {filtered.length} of {data.profiles.length} staff
+            </span>
+            <button type="button" onClick={() => open("import")}>
+              Import staff names from Shopify
+            </button>
+            {data.deferred.length ? (
+              <button type="button" onClick={() => open("pending")}>
+                {data.deferred.length} saved for later
+              </button>
+            ) : null}
+          </footer>
+        </section>
+        {navigation.state !== "idle" ? (
+          <div className="saving">Saving…</div>
+        ) : null}
       </div>
+      {overlay === "add" ? (
+        <OverlayPanel title="Add staff" onClose={() => setOverlay(null)}>
+          <Form method="post" className="form-stack">
+            <input type="hidden" name="intent" value="create_person" />
+            <label>
+              Display name
+              <input name="display_name" required />
+            </label>
+            <label>
+              Email <small>Optional</small>
+              <input name="email" type="email" />
+            </label>
+            <p className="hint">
+              This creates a staff profile only. Dashboard access and POS sales
+              can be connected afterward.
+            </p>
+            <Button primary type="submit">
+              Add staff
+            </Button>
+          </Form>
+        </OverlayPanel>
+      ) : null}
+      {overlay === "pending" ? (
+        <OverlayPanel
+          title="POS sellers needing assignment"
+          onClose={() => setOverlay(null)}
+          wide
+        >
+          <PendingReview
+            pending={[...data.pending, ...data.deferred]}
+            metrics={data.sellerMetrics}
+            profiles={data.profiles}
+          />
+        </OverlayPanel>
+      ) : null}
+      {overlay === "import" ? (
+        <OverlayPanel
+          title="Import staff names from Shopify"
+          onClose={() => setOverlay(null)}
+          wide
+        >
+          <CsvImport
+            pending={[...data.pending, ...data.deferred]}
+            profiles={data.profiles}
+            metrics={data.sellerMetrics}
+          />
+        </OverlayPanel>
+      ) : null}
+      {selected && overlay === "profile" ? (
+        <OverlayPanel
+          title="Edit profile"
+          onClose={() => setOverlay("details")}
+        >
+          <Form method="post" className="form-stack">
+            <input type="hidden" name="intent" value="update_profile" />
+            <input type="hidden" name="person_id" value={selected.id} />
+            <label>
+              Name
+              <input
+                name="display_name"
+                defaultValue={selected.display_name}
+                required
+              />
+            </label>
+            <label>
+              Email
+              <input
+                name="email"
+                type="email"
+                defaultValue={selected.email ?? ""}
+              />
+            </label>
+            <Button primary type="submit">
+              Save profile
+            </Button>
+          </Form>
+        </OverlayPanel>
+      ) : null}
+      {selected && overlay === "access" ? (
+        <OverlayPanel
+          title={`${selected.dashboardAccess === "No access" ? "Enable" : "Edit"} dashboard access`}
+          onClose={() => setOverlay("details")}
+        >
+          <AccessForm profile={selected} locations={data.locations} />
+          {selected.dashboardAccess !== "No access" ? (
+            <Form method="post" className="remove-access">
+              <input
+                type="hidden"
+                name="intent"
+                value="remove_dashboard_access"
+              />
+              <input type="hidden" name="person_id" value={selected.id} />
+              <Button danger type="submit">
+                Remove dashboard access
+              </Button>
+              <p className="hint">
+                Profile, login aliases, POS attribution, and historical sales
+                are preserved.
+              </p>
+            </Form>
+          ) : null}
+        </OverlayPanel>
+      ) : null}
+      {selected && overlay === "details" ? (
+        <OverlayPanel
+          title={selected.display_name}
+          onClose={() => setOverlay(null)}
+        >
+          <div className="detail-sections">
+            <section>
+              <div>
+                <h3>Profile</h3>
+                <p>
+                  {selected.email ?? "No email"} ·{" "}
+                  {selected.is_active ? "Active" : "Inactive"}
+                </p>
+              </div>
+              <Button onClick={() => setOverlay("profile")}>Edit</Button>
+            </section>
+            <section>
+              <div>
+                <h3>Dashboard access</h3>
+                <p>
+                  <b>
+                    {selected.dashboardAccess === "No access"
+                      ? "No access"
+                      : "Enabled"}
+                  </b>
+                  {selected.dashboardAccess !== "No access"
+                    ? ` · ${selected.dashboardAccess} · ${locationLabel(selected)}`
+                    : ""}
+                </p>
+              </div>
+              <Button onClick={() => setOverlay("access")}>
+                {selected.dashboardAccess === "No access" ? "Enable" : "Edit"}
+              </Button>
+            </section>
+            <section>
+              <div>
+                <h3>POS sales</h3>
+                <p>
+                  <b>
+                    {selected.posMetrics.orderCount ? "Linked" : "Not linked"}
+                  </b>
+                  {selected.posMetrics.orderCount
+                    ? ` · ${selected.posMetrics.orderCount} orders · ${money(selected.posMetrics.netSales)}`
+                    : ""}
+                </p>
+                <small>
+                  First activity {date(selected.posMetrics.firstActivityAt)} ·
+                  Last activity {date(selected.posMetrics.lastActivityAt)}
+                </small>
+              </div>
+              <Button onClick={() => setOverlay("pos")}>Manage</Button>
+            </section>
+            <details>
+              <summary>Advanced details</summary>
+              <div className="advanced">
+                {selected.aliases.length ? (
+                  selected.aliases.map((alias) => (
+                    <code key={alias.id}>
+                      {alias.alias_type}: {alias.alias_value}
+                      <br />
+                      Source: {alias.source ?? "unknown"}
+                    </code>
+                  ))
+                ) : (
+                  <span>No technical identities.</span>
+                )}
+              </div>
+            </details>
+          </div>
+        </OverlayPanel>
+      ) : null}
+      {selected && overlay === "pos" ? (
+        <OverlayPanel
+          title="Manage POS sales"
+          onClose={() => setOverlay("details")}
+        >
+          <div className="pos-summary">
+            <StatusBadge
+              variant={selected.posMetrics.orderCount ? "info" : "neutral"}
+            >
+              {selected.posMetrics.orderCount ? "Linked" : "Not linked"}
+            </StatusBadge>
+            <h3>
+              {selected.posMetrics.orderCount} orders ·{" "}
+              {money(selected.posMetrics.netSales)}
+            </h3>
+            <p>
+              All linked seller identities are combined into this reporting
+              summary. Technical identities are available under Advanced
+              details.
+            </p>
+            <Button
+              onClick={() => {
+                setOverlay("pending");
+                setSelectedId(null);
+              }}
+            >
+              Review unassigned sellers
+            </Button>
+          </div>
+        </OverlayPanel>
+      ) : null}
     </main>
   );
 }
+
+export function ErrorBoundary() {
+  return <RouteErrorNotice />;
+}
+
+const STAFF_CSS = `
+*{box-sizing:border-box}.staff-page{min-height:100vh;background:#f4f5f4;color:#202223;padding:28px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.staff-shell{max-width:1240px;margin:auto}.page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.page-header h1{font-size:30px;letter-spacing:-.5px;margin:0}.page-header p{color:#616161;margin:6px 0 0}.staff-button{background:#fff;border:1px solid #c9cccf;border-radius:8px;color:#202223;cursor:pointer;font-weight:650;padding:8px 12px}.staff-button:hover{background:#f6f6f7}.staff-button.primary{background:#303030;border-color:#303030;color:#fff}.staff-button.danger{color:#b42318}.notice,.pending-notice{border-radius:10px;margin-bottom:14px;padding:12px 14px}.notice.success{background:#eaf7ef;color:#166534}.notice.error{background:#fff0f0;color:#b42318}.pending-notice{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;display:flex;justify-content:space-between}.pending-notice span{display:grid;gap:2px}.pending-notice small{color:#4b5563}.roster{background:#fff;border:1px solid #dedede;border-radius:14px;box-shadow:0 1px 3px #0000000a;overflow:visible}.toolbar{align-items:center;border-bottom:1px solid #e8e8e8;display:flex;gap:14px;padding:14px}.search{align-items:center;border:1px solid #c9cccf;border-radius:8px;display:flex;min-width:260px;padding:0 10px}.search input{border:0;outline:0;padding:9px;width:100%}.filters{display:flex;gap:4px;overflow:auto}.filters button,.segmented button{background:transparent;border:0;border-radius:7px;cursor:pointer;padding:8px 11px;white-space:nowrap}.filters button[aria-pressed=true],.segmented button[aria-pressed=true]{background:#e8e8e8;font-weight:700}.table-head,.staff-row{align-items:center;display:grid;gap:16px;grid-template-columns:minmax(210px,1.5fr) 1fr .8fr 1fr .65fr 52px;padding:0 16px}.table-head{background:#f7f7f7;color:#616161;font-size:12px;font-weight:700;min-height:38px;text-transform:uppercase}.staff-row{border-top:1px solid #ededed;cursor:pointer;min-height:62px}.staff-row:hover{background:#fafafa}.identity{display:grid;min-width:0}.identity b,.identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity small{color:#6d7175;margin-top:3px}.actions{position:relative}.icon-button{background:transparent;border:0;border-radius:7px;cursor:pointer;font-size:18px;padding:6px 8px}.icon-button:hover{background:#e8e8e8}.menu{background:#fff;border:1px solid #d8d8d8;border-radius:9px;box-shadow:0 8px 22px #0002;display:grid;min-width:160px;padding:5px;position:absolute;right:0;top:36px;z-index:4}.menu button{background:transparent;border:0;border-radius:6px;cursor:pointer;padding:8px;text-align:left;width:100%}.menu button:hover{background:#f1f1f1}.compact-empty{text-align:center;color:#6d7175;padding:30px}.roster-footer{align-items:center;border-top:1px solid #ededed;color:#6d7175;display:flex;gap:18px;padding:12px 16px}.roster-footer button{background:transparent;border:0;color:#255aa8;cursor:pointer;margin-left:auto}.roster-footer button+button{margin-left:0}.staff-overlay{align-items:stretch;background:#0006;display:flex;inset:0;justify-content:flex-end;position:fixed;z-index:50}.staff-panel{background:#fff;box-shadow:-8px 0 32px #0002;max-width:92vw;overflow:auto;width:460px}.staff-panel.wide{width:760px}.staff-panel>header{align-items:center;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 22px;position:sticky;top:0;background:#fff;z-index:2}.staff-panel h2{font-size:20px;margin:0}.panel-body{padding:22px}.form-stack{display:grid;gap:16px}.form-stack label{display:grid;font-size:13px;font-weight:650;gap:6px}.form-stack input,.form-stack select,.upload input{border:1px solid #b7b9bb;border-radius:8px;font:inherit;padding:10px}.form-stack fieldset{border:0;margin:0;padding:0}.form-stack legend{font-size:13px;font-weight:650;margin-bottom:8px}.form-stack .check,.check{align-items:center;display:flex;font-weight:400;gap:8px;margin:8px 0}.form-stack .check input,.check input{margin:0}.hint{color:#6d7175;font-size:13px}.detail-sections{display:grid}.detail-sections>section{align-items:flex-start;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 0}.detail-sections h3{font-size:14px;margin:0 0 5px}.detail-sections p{color:#454545;margin:0}.detail-sections small{color:#6d7175;display:block;margin-top:5px}.detail-sections details{padding:18px 0}.detail-sections summary{cursor:pointer;font-weight:650}.advanced{display:grid;gap:8px;margin-top:12px}.advanced code{background:#f6f6f7;border-radius:7px;font-size:11px;overflow-wrap:anywhere;padding:9px}.seller-row{border-bottom:1px solid #e5e5e5;padding:18px 0}.seller-row:first-child{padding-top:0}.seller-facts{display:grid;gap:12px;grid-template-columns:repeat(3,1fr)}.seller-facts span{display:grid;font-size:14px}.seller-facts b{color:#6d7175;font-size:11px;margin-bottom:4px;text-transform:uppercase}.row-actions{display:flex;gap:8px;margin-top:15px}.assign-box{background:#f7f7f7;border-radius:10px;margin-top:15px;padding:15px}.assign-box h3{margin:0 0 10px}.segmented{background:#ededed;border-radius:9px;display:flex;margin-bottom:14px;padding:3px}.segmented button{flex:1}.query{background:#202223;border-radius:10px;color:#fff;margin:16px 0;overflow:auto;padding:14px}.query pre{font-size:12px;white-space:pre-wrap}.query .staff-button{float:right}.upload{display:grid;font-weight:650;gap:8px}.preview{border-top:1px solid #e5e5e5;margin-top:20px;padding-top:20px}.preview-counts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.preview-counts span{background:#f6f6f7;border-radius:8px;display:grid;font-size:12px;padding:10px}.preview-counts b{font-size:18px}.preview-row{align-items:center;border-bottom:1px solid #e5e5e5;display:grid;gap:10px;grid-template-columns:1fr auto;padding:14px 0}.preview-row>div{display:grid}.preview-row span,.preview-row small{color:#6d7175;font-size:13px}.preview-row select{border:1px solid #b7b9bb;border-radius:7px;padding:7px}.preview-row.warning{background:#fff8e6;padding-left:10px}.preview-row.muted{opacity:.7}.confirm{background:#eef5ff;border-radius:10px;margin-top:16px;padding:14px}.bulk-forms{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.remove-access{border-top:1px solid #e5e5e5;margin-top:22px;padding-top:18px}.pos-summary{text-align:center;padding:20px 0}.saving{background:#303030;border-radius:20px;bottom:18px;color:white;padding:9px 15px;position:fixed;right:18px}.error{color:#b42318}
+@media(max-width:800px){.staff-page{padding:16px}.page-header{align-items:flex-start}.toolbar{align-items:stretch;flex-direction:column}.search{min-width:0}.table-head{display:none}.staff-row{grid-template-columns:1fr auto;gap:8px;padding:12px}.staff-row>span:not(.identity):not(.actions){font-size:12px}.actions{grid-column:2;grid-row:1}.roster-footer{align-items:flex-start;flex-direction:column}.roster-footer button{margin-left:0}.seller-facts,.preview-counts{grid-template-columns:repeat(2,1fr)}.preview-row{grid-template-columns:1fr}.staff-panel,.staff-panel.wide{max-width:100vw;width:100%}}
+`;

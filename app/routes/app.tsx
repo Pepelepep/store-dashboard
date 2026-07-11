@@ -139,9 +139,6 @@ export default function App() {
               <a href={`/app/admin/expenses${search}`}>Expense Setup</a>
             ) : null}
             {canAdmin ? (
-              <a href={`/app/admin/staff${search}`}>Staff &amp; access</a>
-            ) : null}
-            {canAdmin ? (
               <a href={`/app/admin/staff${search}`}>Staff</a>
             ) : null}
             {canAdmin ? (
