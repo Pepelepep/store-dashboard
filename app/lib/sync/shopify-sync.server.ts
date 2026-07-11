@@ -282,9 +282,7 @@ type RefundNode = {
   transactions?: ShopifyConnection<OrderTransactionNode> | null;
 };
 
-type StaffSource =
-  | "pos_session"
-  | "unavailable";
+type StaffSource = "pos_session" | "unavailable";
 
 type StaffAttribution = {
   staffMemberId: string | null;
@@ -359,6 +357,7 @@ export type OrdersSyncBatchProgress = {
   cursor?: string | null;
   startDate?: string | null;
   endDate?: string | null;
+  fullHistory?: boolean;
 };
 
 export type OrdersReconciliation48hBatchProgress = {
@@ -1132,7 +1131,8 @@ function getLineDiscountAllocations(lineItem: OrderLineItemNode) {
 
 function getLineDiscountAllocationTotal(lineItem: OrderLineItemNode) {
   return getArrayItems(lineItem.discountAllocations).reduce(
-    (sum, allocation) => sum + getShopMoneyAmount(allocation.allocatedAmountSet),
+    (sum, allocation) =>
+      sum + getShopMoneyAmount(allocation.allocatedAmountSet),
     0,
   );
 }
@@ -2326,9 +2326,15 @@ export async function syncLocations({
   const startedAt = new Date().toISOString();
 
   try {
-    const response = await admin.graphql(`#graphql
-      query getLocationsForSync {
-        locations(first: 50) {
+    const locations: LocationNode[] = [];
+    let cursor: string | null = null;
+    let hasNextPage = true;
+    while (hasNextPage) {
+      const response = await admin.graphql(
+        `#graphql
+      query getLocationsForSync($cursor: String) {
+        locations(first: 50, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
           edges {
             node {
               id
@@ -2343,18 +2349,26 @@ export async function syncLocations({
           }
         }
       }
-    `);
+    `,
+        { variables: { cursor } },
+      );
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if ("errors" in data && data.errors) {
-      throw new Error(JSON.stringify(data.errors));
+      if ("errors" in data && data.errors) {
+        throw new Error(JSON.stringify(data.errors));
+      }
+
+      locations.push(
+        ...(data.data?.locations?.edges?.map(
+          (edge: { node: LocationNode }) => edge.node,
+        ) ?? []),
+      );
+      hasNextPage = Boolean(data.data?.locations?.pageInfo?.hasNextPage);
+      cursor = data.data?.locations?.pageInfo?.endCursor ?? null;
+      if (hasNextPage && !cursor)
+        throw new Error("Location pagination returned no cursor.");
     }
-
-    const locations: LocationNode[] =
-      data.data?.locations?.edges?.map(
-        (edge: { node: LocationNode }) => edge.node,
-      ) ?? [];
 
     const rows = locations.map((location) => ({
       shop_domain: shop,
@@ -4283,21 +4297,6 @@ async function upsertOrderNodes({
     }
   }
 
-  if (replaceExistingLines && orders.length > 0) {
-    const { error } = await supabase
-      .from("order_lines")
-      .delete()
-      .eq("shop_domain", shop)
-      .in(
-        "shopify_order_id",
-        orders.map((order) => order.id),
-      );
-
-    if (error) {
-      throw new Error(error.message);
-    }
-  }
-
   await upsertInBatches({
     supabase,
     table: "orders",
@@ -4311,6 +4310,32 @@ async function upsertOrderNodes({
     rows: orderLineRows,
     onConflict: "shop_domain,shopify_line_item_id",
   });
+
+  if (replaceExistingLines && orders.length > 0) {
+    const incomingLineIds = new Set(
+      orderLineRows.map((line) => line.shopify_line_item_id),
+    );
+    const { data: existingLines, error: existingLinesError } = await supabase
+      .from("order_lines")
+      .select("shopify_line_item_id")
+      .eq("shop_domain", shop)
+      .in(
+        "shopify_order_id",
+        orders.map((order) => order.id),
+      );
+    if (existingLinesError) throw new Error(existingLinesError.message);
+    const staleLineIds = (existingLines ?? [])
+      .map((line) => line.shopify_line_item_id as string)
+      .filter((lineId) => !incomingLineIds.has(lineId));
+    if (staleLineIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from("order_lines")
+        .delete()
+        .eq("shop_domain", shop)
+        .in("shopify_line_item_id", staleLineIds);
+      if (deleteError) throw new Error(deleteError.message);
+    }
+  }
 
   await upsertPosStaffIdentityAliasesFromOrderLines({
     supabase,
@@ -4527,8 +4552,9 @@ export async function syncOrdersBatch({
   supabase: SupabaseAdminClient;
   progress?: OrdersSyncBatchProgress | null;
 }): Promise<SyncBatchResult> {
-  const dateRange =
-    progress?.startDate || progress?.endDate
+  const dateRange = progress?.fullHistory
+    ? { startDate: null, endDate: null }
+    : progress?.startDate || progress?.endDate
       ? {
           startDate: progress.startDate ?? null,
           endDate: progress.endDate ?? null,
@@ -4555,6 +4581,7 @@ export async function syncOrdersBatch({
       cursor: pageResult.hasNextPage ? pageResult.cursor : null,
       startDate: dateRange.startDate,
       endDate: dateRange.endDate,
+      fullHistory: progress?.fullHistory ?? false,
     },
     counts: {
       ordersSynced: pageResult.ordersSynced,

@@ -65,13 +65,15 @@ const marketplaceSyncJobTypes: SyncJobType[] = [
   "products",
   "inventory",
   "orders",
+  "orders_reconciliation_48h",
+  "financial_backfill_30d",
   "full",
   "full_refresh",
 ];
 const STALE_ACTIVE_JOB_MS = 15 * 60 * 1000;
 const MAX_STALE_RETRY_COUNT = 3;
-const MAX_STEP_BATCHES_PER_JOB = 100;
-const ORDERS_RECONCILIATION_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MAX_STEP_BATCHES_PER_TICK = 5;
+const ORDERS_RECONCILIATION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const ORDERS_RECONCILIATION_WINDOW_MS = 48 * 60 * 60 * 1000;
 const FINANCIAL_BACKFILL_RECENT_SUCCESS_MS = 24 * 60 * 60 * 1000;
 const FINANCIAL_BACKFILL_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -173,7 +175,9 @@ function isStaleActiveJob(job: SyncJobRow) {
     return false;
   }
 
-  const activityTime = new Date(job.updated_at ?? job.started_at ?? job.created_at).getTime();
+  const activityTime = new Date(
+    job.updated_at ?? job.started_at ?? job.created_at,
+  ).getTime();
 
   return Number.isFinite(activityTime)
     ? Date.now() - activityTime > STALE_ACTIVE_JOB_MS
@@ -343,6 +347,7 @@ async function getActiveBlockingJob({
             "orders_reconciliation_48h",
             "orders",
             "full",
+            "full_refresh",
             "financial_backfill_30d",
           ]
         : jobType === "financial_backfill_30d"
@@ -351,8 +356,9 @@ async function getActiveBlockingJob({
               "orders_reconciliation_48h",
               "orders",
               "full",
+              "full_refresh",
             ]
-          : [jobType, "full"];
+          : [jobType, "full", "full_refresh"];
 
   await cancelStaleActiveJobs({
     supabase,
@@ -369,9 +375,7 @@ async function getActiveBlockingJob({
     .order("updated_at", { ascending: false })
     .limit(1);
 
-  if (error) {
-    throw new Error(error.message);
-  }
+  if (error) throw new Error(error.message);
 
   return ((data ?? [])[0] ?? null) as SyncJobRow | null;
 }
@@ -380,10 +384,12 @@ export async function createManualSyncJob({
   supabase,
   shop,
   jobType,
+  trigger = "manual",
 }: {
   supabase: SupabaseAdminClient;
   shop: string;
   jobType: SyncJobType;
+  trigger?: "manual" | "initial_setup" | "support";
 }) {
   const activeJob = await getActiveBlockingJob({ supabase, shop, jobType });
 
@@ -401,16 +407,22 @@ export async function createManualSyncJob({
       job_type: jobType,
       status: "pending",
       current_step: getInitialStep(jobType),
-      progress: {},
+      progress:
+        jobType === "full_refresh" ? { orders: { fullHistory: true } } : {},
       counts: {},
       details: {
         source: "manual_admin_sync",
+        trigger,
       },
     })
     .select("*")
     .single();
 
   if (error) {
+    if (error.code === "23505") {
+      const racedJob = await getActiveBlockingJob({ supabase, shop, jobType });
+      if (racedJob) return { job: racedJob, reused: true };
+    }
     throw new Error(error.message);
   }
 
@@ -444,7 +456,7 @@ export async function enqueueOrdersReconciliation48hJob({
   }
 
   const dailySince = new Date(
-    now.getTime() - ORDERS_RECONCILIATION_DAILY_INTERVAL_MS,
+    now.getTime() - ORDERS_RECONCILIATION_INTERVAL_MS,
   ).toISOString();
   const { data: recentSuccessfulJobs, error: recentSuccessfulError } =
     await supabase
@@ -509,7 +521,7 @@ export async function enqueueOrdersReconciliation48hJob({
       counts: {},
       details: {
         source: "cron",
-        cadence: "daily",
+        cadence: "6_hours",
         window,
       },
     })
@@ -819,6 +831,7 @@ async function runStepBatch({
               cursor?: string | null;
               startDate?: string | null;
               endDate?: string | null;
+              fullHistory?: boolean;
               staffAttributionAvailable?: boolean;
             }
           | undefined) ?? null,
@@ -879,7 +892,7 @@ async function runStepToCompletion({
   let accumulatedCounts: Record<string, unknown> = {};
   let batchesProcessed = 0;
 
-  while (batchesProcessed < MAX_STEP_BATCHES_PER_JOB) {
+  while (batchesProcessed < MAX_STEP_BATCHES_PER_TICK) {
     const batchResult = await runStepBatch({
       admin,
       shop,
@@ -904,9 +917,12 @@ async function runStepToCompletion({
     }
   }
 
-  throw new Error(
-    `Sync job step ${step} exceeded ${MAX_STEP_BATCHES_PER_JOB} batches without completing.`,
-  );
+  return {
+    done: false,
+    progress: currentProgress,
+    counts: accumulatedCounts,
+    batchesProcessed,
+  };
 }
 
 export async function processManualSyncJobBatch({
@@ -1116,10 +1132,38 @@ export async function processManualSyncJobBatch({
         ...nextProgress,
         [currentStep]: stepResult.progress,
       };
+      const existingStepCounts =
+        (nextCounts[currentStep] as Record<string, unknown> | undefined) ?? {};
       nextCounts = setStepCounts(nextCounts, currentStep, {
-        ...stepResult.counts,
-        batchesProcessed: stepResult.batchesProcessed,
+        ...addBatchCounts(existingStepCounts, stepResult.counts),
+        batchesProcessed:
+          Number(existingStepCounts.batchesProcessed ?? 0) +
+          stepResult.batchesProcessed,
       });
+
+      if (!stepResult.done) {
+        const { data: continuedJob, error: continuationError } = await supabase
+          .from("sync_jobs")
+          .update({
+            status: "pending",
+            current_step: currentStep,
+            progress: nextProgress,
+            counts: nextCounts,
+            details: {
+              ...(claimedJob.details ?? {}),
+              continued: true,
+            },
+            updated_at: new Date().toISOString(),
+            error_message: null,
+          })
+          .eq("shop_domain", shop)
+          .eq("id", job.id)
+          .eq("status", "running")
+          .select("*")
+          .single();
+        if (continuationError) throw new Error(continuationError.message);
+        return { job: continuedJob as SyncJobRow, processed: true };
+      }
       completedSteps.push(currentStep);
 
       await markStepCompleted({

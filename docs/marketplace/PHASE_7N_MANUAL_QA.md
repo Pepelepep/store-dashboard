@@ -1,0 +1,21 @@
+# Phase 7N manual QA
+
+- [ ] Install on a clean shop and confirm one Initial setup rebuild is queued and completes.
+- [ ] Click Sync now and confirm one parent operation refreshes all four resources with a seven-day order overlap.
+- [ ] Deliver order, product and inventory webhooks and confirm the maintenance tick processes them without manual queue processing.
+- [ ] Call the maintenance endpoint with a valid secret and verify all five structured step summaries.
+- [ ] Make reconciliation due and confirm a single 48-hour updated-order job is queued, automation timestamps update, and the next due time is six hours later.
+- [ ] Confirm Rebuild data requires confirmation, reads older-than-seven-day orders, and does not truncate valid data first.
+- [ ] Double-click Sync now and confirm no duplicate concurrent operation is created.
+- [ ] Run jobs for two shops and confirm claims and writes remain isolated by shop.
+- [ ] Make a running job stale and confirm it is recovered, then fails after the bounded stale retry limit.
+- [ ] Retry a failed job from Advanced diagnostics and confirm one support-triggered replacement is queued.
+- [ ] Rebuild a large order history and verify order, line-item, refund and transaction pagination.
+- [ ] Repeat order synchronization and verify refunds, discounts, net sales, COGS and profit do not inflate.
+- [ ] Repeat synchronization of attributed POS sales and verify effective seller and location attribution remain unchanged.
+- [ ] Confirm Recent activity renders at most 20 parent operations.
+- [ ] Confirm Load more requests the next server-side page and Newer returns to the previous page.
+- [ ] Seed expired successful operational history and confirm cleanup deletes at most the configured bounded batch while preserving active and unresolved failed work.
+- [ ] Call the cron endpoint with a missing/invalid secret and confirm HTTP 401 without secret logging.
+- [ ] Force one maintenance step to fail and confirm safe later steps run and the response reports a partial result.
+- [ ] Leave the app unattended with only the Render cron active and confirm no merchant queue action is needed.

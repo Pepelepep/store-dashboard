@@ -56,6 +56,26 @@ export async function ensureShopInitialized({
     throw new Response(upsertError.message, { status: 500 });
   }
 
+  const { error: initialSyncError } = await supabase.from("sync_jobs").insert({
+    shop_domain: shop,
+    job_type: "full_refresh",
+    status: "pending",
+    current_step: "locations",
+    progress: { orders: { fullHistory: true } },
+    counts: {},
+    details: {
+      source: "manual_admin_sync",
+      trigger: "initial_setup",
+    },
+  });
+  if (initialSyncError && initialSyncError.code !== "23505") {
+    console.error("[fresh-install:init] initial sync enqueue failed", {
+      route,
+      shop,
+      error: initialSyncError.message,
+    });
+  }
+
   return { inserted: true };
 }
 
