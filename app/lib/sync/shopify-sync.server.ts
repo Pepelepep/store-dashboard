@@ -451,6 +451,8 @@ function getFinancialQueryDiscountApplicationFields() {
 }
 
 const POS_ATTRIBUTION_PROPERTY_KEYS = {
+  compactAttributedStaffId: "_shopops_attributed_staff_id",
+  compactSessionStaffId: "_shopops_session_staff_id",
   staffMemberId: "_shopops_staff_member_id",
   userId: "_shopops_user_id",
   locationId: "_shopops_location_id",
@@ -784,20 +786,36 @@ function getCustomAttributeValue(
 }
 
 function getPosLineItemAttribution(lineItem: OrderLineItemNode) {
+  const compactAttributedStaffId = getCustomAttributeValue(
+    lineItem.customAttributes,
+    POS_ATTRIBUTION_PROPERTY_KEYS.compactAttributedStaffId,
+  );
+  const compactSessionStaffId = getCustomAttributeValue(
+    lineItem.customAttributes,
+    POS_ATTRIBUTION_PROPERTY_KEYS.compactSessionStaffId,
+  );
   const source = getCustomAttributeValue(
     lineItem.customAttributes,
     POS_ATTRIBUTION_PROPERTY_KEYS.attributionSource,
   );
-  const staffMemberId = getCustomAttributeValue(
+  const legacyStaffMemberId = getCustomAttributeValue(
     lineItem.customAttributes,
     POS_ATTRIBUTION_PROPERTY_KEYS.staffMemberId,
   );
-  const effectiveStaffId = getCustomAttributeValue(
+  const legacyEffectiveStaffId = getCustomAttributeValue(
     lineItem.customAttributes,
     POS_ATTRIBUTION_PROPERTY_KEYS.effectiveStaffId,
   );
-  const attributionSource =
-    source && POS_ATTRIBUTION_SOURCES.has(source) ? source : null;
+  const staffMemberId = compactSessionStaffId ?? legacyStaffMemberId;
+  const effectiveStaffId =
+    compactAttributedStaffId ?? compactSessionStaffId ?? legacyEffectiveStaffId;
+  const attributionSource = compactAttributedStaffId
+    ? "attributed_user_id"
+    : compactSessionStaffId
+      ? "pos_session_staff_member"
+      : source && POS_ATTRIBUTION_SOURCES.has(source)
+        ? source
+        : null;
 
   return {
     shopops_staff_member_id: staffMemberId,
@@ -821,10 +839,12 @@ function getPosLineItemAttribution(lineItem: OrderLineItemNode) {
       lineItem.customAttributes,
       POS_ATTRIBUTION_PROPERTY_KEYS.staffLabel,
     ),
-    shopops_attributed_user_id: getCustomAttributeValue(
-      lineItem.customAttributes,
-      POS_ATTRIBUTION_PROPERTY_KEYS.attributedUserId,
-    ),
+    shopops_attributed_user_id:
+      compactAttributedStaffId ??
+      getCustomAttributeValue(
+        lineItem.customAttributes,
+        POS_ATTRIBUTION_PROPERTY_KEYS.attributedUserId,
+      ),
     shopops_attributed_staff_member_id: getCustomAttributeValue(
       lineItem.customAttributes,
       POS_ATTRIBUTION_PROPERTY_KEYS.attributedStaffMemberId,

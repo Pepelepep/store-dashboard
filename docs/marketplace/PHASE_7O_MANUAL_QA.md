@@ -1,0 +1,22 @@
+# Phase 7O manual QA
+
+- [ ] Complete a POS sale where the attributed seller differs from the logged-in POS user; confirm V2 writes only `_shopops_attributed_staff_id`.
+- [ ] Complete a sale without `line.attributedUserId`; confirm V2 writes only `_shopops_session_staff_id` using the active session identity.
+- [ ] Confirm no empty ShopOps property is written and no V1 property is added to new cart lines.
+- [ ] Re-sync an old V1 order and confirm its effective seller, financials and reporting remain unchanged.
+- [ ] Sync a new V2 attributed order and confirm effective ID, attributed user ID and `attributed_user_id` source populate the existing columns.
+- [ ] Sync a new V2 session-fallback order and confirm the existing session fallback source populates.
+- [ ] Link two POS IDs to one person and confirm Profit Dashboard and Location Performance show one staff row.
+- [ ] Create two people with the same display name and confirm their internal filters and grouped results remain distinct.
+- [ ] Confirm mapped, unmapped and absent attribution display respectively as the staff name, `Unmapped POS seller`, and `Unassigned` on Location Performance.
+- [ ] Confirm Location Performance title, layout, filters, location calculations and financial results are unchanged.
+- [ ] Review a pending seller and confirm Shopify staff ID, Copy, linked last order, location, last activity and net sales are shown without technical source names.
+- [ ] Give a staff profile a Shopify login ID equal to an unmapped POS ID; confirm the exact-ID suggestion appears with reason `Same Shopify identity`.
+- [ ] Confirming the suggestion links POS reporting only and does not alter dashboard access.
+- [ ] Confirm partial IDs, matching names, devices and locations never create a suggestion.
+- [ ] Confirm Choose someone else opens explicit staff selection and Dismiss removes the suggestion.
+- [ ] Link one numeric value for dashboard login and POS sales; confirm Advanced details shows one grouped value with both uses.
+- [ ] Expand Raw identity sources and confirm technical roles remain available without duplicate primary rows.
+- [ ] Confirm the database uniqueness constraint prevents duplicate `shop_domain + alias_type + alias_value` rows.
+- [ ] Open pending/staff/order links and confirm each targets the correct Shopify Admin order using its stored Shopify order ID.
+- [ ] Confirm a manager who is also a seller retains both dashboard access and POS reporting without cross-authorizing identities.
