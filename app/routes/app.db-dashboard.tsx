@@ -9,9 +9,7 @@ import {
   ensureShopInitialized,
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
-import {
-  fetchStaffIdentityAliasesForOrderLines,
-} from "../lib/staff-identity/staff-identity.server";
+import { fetchStaffIdentityAliasesForOrderLines } from "../lib/staff-identity/staff-identity.server";
 import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
 import { ActiveDrilldownBadge } from "../components/dashboard/ActiveDrilldownBadge";
 import { BestSellersCard } from "../components/dashboard/BestSellersCard";
@@ -24,7 +22,6 @@ import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
 import { PageNotice } from "../components/ui/PageNotice";
 import {
-  buildShopifyOrderUrl,
   applyDashboardDrilldowns,
   computeBestSellers,
   computeExpensesForRange,
@@ -51,6 +48,7 @@ import {
   storeDateToUtcIso,
   UNKNOWN_STAFF_FILTER_VALUE,
 } from "../lib/dashboard/dashboard-metrics";
+import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
 import type {
   ActiveDrilldowns,
   DashboardLoaderData as LoaderData,
@@ -365,15 +363,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
   if (recentSyncFailureError) errors.push(recentSyncFailureError.message);
 
-  const rawOrderLines =
-    (orderLinesResult.data ?? []) as unknown as OrderLineDbRow[];
+  const rawOrderLines = (orderLinesResult.data ??
+    []) as unknown as OrderLineDbRow[];
   const staffAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
     supabase,
     shop: session.shop,
     orderLines: rawOrderLines,
   });
   const orderLines = rawOrderLines.map((row) => {
-    const resolution = resolveStaffDisplayNameForOrderLine(row, staffAliasesByKey);
+    const resolution = resolveStaffDisplayNameForOrderLine(
+      row,
+      staffAliasesByKey,
+    );
 
     return {
       ...row,

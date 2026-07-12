@@ -224,16 +224,6 @@ export function formatStoreDateTime(value: string) {
   }).format(new Date(value));
 }
 
-export function buildShopifyOrderUrl(
-  shopDomain: string,
-  shopifyOrderId: string,
-) {
-  const numericId = shopifyOrderId.split("/").pop();
-  const storeHandle = shopDomain.replace(".myshopify.com", "");
-
-  return `https://admin.shopify.com/store/${storeHandle}/orders/${numericId}`;
-}
-
 type SalesMetricOrderLine = DashboardSalesOrderLineRow & {
   staff_source?: string | null;
 };

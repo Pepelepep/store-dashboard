@@ -7,7 +7,6 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
-  buildShopifyOrderUrl,
   daysBetween,
   formatStoreDateTime,
   getLineNetSales,
@@ -15,6 +14,7 @@ import {
   nextDate,
   storeDateToUtcIso,
 } from "../lib/dashboard/dashboard-metrics";
+import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
 import type {
   LocationRow,
   OrderLineDbRow,
@@ -684,7 +684,8 @@ export default function FinancialQaPage() {
         <header style={{ marginBottom: 24 }}>
           <h1 style={{ margin: 0, fontSize: 32 }}>Support diagnostics</h1>
           <HelperText>
-            Use this page to investigate order-level and line-level reporting differences.
+            Use this page to investigate order-level and line-level reporting
+            differences.
           </HelperText>
         </header>
 
@@ -692,9 +693,7 @@ export default function FinancialQaPage() {
           <PageNotice
             title="No synced orders yet."
             message="Order diagnostics become available after Shopify orders and order lines have synced."
-            bullets={[
-              "Use Sync Status to run or review orders sync.",
-            ]}
+            bullets={["Use Sync Status to run or review orders sync."]}
             cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
             tone="info"
           />
@@ -794,99 +793,99 @@ export default function FinancialQaPage() {
             </HelperText>
           </div>
 
-        {errors.length > 0 ? (
+          {errors.length > 0 ? (
+            <section
+              style={{
+                background: "#fff4f4",
+                border: "1px solid #f2b8b5",
+                borderRadius: 12,
+                color: "#b42318",
+                marginBottom: 20,
+                padding: 14,
+              }}
+            >
+              {errors.join(" · ")}
+            </section>
+          ) : null}
+
           <section
             style={{
-              background: "#fff4f4",
-              border: "1px solid #f2b8b5",
-              borderRadius: 12,
-              color: "#b42318",
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 12,
               marginBottom: 20,
-              padding: 14,
             }}
           >
-            {errors.join(" · ")}
+            <SummaryCard label="Orders" value={summary.ordersCount} />
+            <SummaryCard
+              label="Financial fields populated"
+              value={summary.financialFieldsPopulated}
+            />
+            <SummaryCard
+              label="Incomplete financial data"
+              value={summary.incompleteFinancialData}
+              tone={summary.incompleteFinancialData > 0 ? "error" : "neutral"}
+            />
+            <SummaryCard
+              label="Gross sales"
+              value={formatCurrency(summary.grossSales)}
+              title="Gross Sales: product sales before discounts and returns."
+            />
+            <SummaryCard
+              label="Discounts"
+              value={formatCurrency(summary.discounts)}
+              title="Discounts: Shopify discount allocations applied to orders and line items."
+            />
+            <SummaryCard
+              label="Discount mismatches"
+              value={summary.discountMismatches}
+              tone={summary.discountMismatches > 0 ? "warning" : "neutral"}
+            />
+            <SummaryCard
+              label="Returns"
+              value={formatCurrency(summary.returns)}
+              title="Returns: returned line-item value used in net sales calculations where available."
+            />
+            <SummaryCard
+              label="Order-level Net Sales"
+              value={formatCurrency(summary.orderLevelNetSales)}
+              title="Net Sales: Gross Sales minus Discounts and Returns."
+            />
+            <SummaryCard
+              label="Line-level Net Sales"
+              value={formatCurrency(summary.lineLevelNetSales)}
+            />
+            <SummaryCard
+              label="Order - Line Delta"
+              value={formatCurrency(summary.orderLineDelta)}
+              tone={
+                Math.abs(summary.orderLineDelta) > 0.01 ? "warning" : "neutral"
+              }
+            />
+            <SummaryCard
+              label="Refunds"
+              value={formatCurrency(summary.refunds)}
+              title="Refunds: cash refunded on Shopify orders, reported separately from returns."
+            />
+            <SummaryCard
+              label="Taxes"
+              value={formatCurrency(summary.taxes)}
+              title="Taxes: Shopify tax totals, informational reporting only."
+            />
+            <SummaryCard
+              label="Shipping"
+              value={formatCurrency(summary.shipping)}
+              title="Shipping: Shopify shipping totals, tracked separately from product margin."
+            />
+            <SummaryCard
+              label="Total sales"
+              value={formatCurrency(summary.totalSales)}
+            />
+            <SummaryCard
+              label="Transactions total"
+              value={formatCurrency(summary.transactionsTotal)}
+            />
           </section>
-        ) : null}
-
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 12,
-            marginBottom: 20,
-          }}
-        >
-          <SummaryCard label="Orders" value={summary.ordersCount} />
-          <SummaryCard
-            label="Financial fields populated"
-            value={summary.financialFieldsPopulated}
-          />
-          <SummaryCard
-            label="Incomplete financial data"
-            value={summary.incompleteFinancialData}
-            tone={summary.incompleteFinancialData > 0 ? "error" : "neutral"}
-          />
-          <SummaryCard
-            label="Gross sales"
-            value={formatCurrency(summary.grossSales)}
-            title="Gross Sales: product sales before discounts and returns."
-          />
-          <SummaryCard
-            label="Discounts"
-            value={formatCurrency(summary.discounts)}
-            title="Discounts: Shopify discount allocations applied to orders and line items."
-          />
-          <SummaryCard
-            label="Discount mismatches"
-            value={summary.discountMismatches}
-            tone={summary.discountMismatches > 0 ? "warning" : "neutral"}
-          />
-          <SummaryCard
-            label="Returns"
-            value={formatCurrency(summary.returns)}
-            title="Returns: returned line-item value used in net sales calculations where available."
-          />
-          <SummaryCard
-            label="Order-level Net Sales"
-            value={formatCurrency(summary.orderLevelNetSales)}
-            title="Net Sales: Gross Sales minus Discounts and Returns."
-          />
-          <SummaryCard
-            label="Line-level Net Sales"
-            value={formatCurrency(summary.lineLevelNetSales)}
-          />
-          <SummaryCard
-            label="Order - Line Delta"
-            value={formatCurrency(summary.orderLineDelta)}
-            tone={
-              Math.abs(summary.orderLineDelta) > 0.01 ? "warning" : "neutral"
-            }
-          />
-          <SummaryCard
-            label="Refunds"
-            value={formatCurrency(summary.refunds)}
-            title="Refunds: cash refunded on Shopify orders, reported separately from returns."
-          />
-          <SummaryCard
-            label="Taxes"
-            value={formatCurrency(summary.taxes)}
-            title="Taxes: Shopify tax totals, informational reporting only."
-          />
-          <SummaryCard
-            label="Shipping"
-            value={formatCurrency(summary.shipping)}
-            title="Shipping: Shopify shipping totals, tracked separately from product margin."
-          />
-          <SummaryCard
-            label="Total sales"
-            value={formatCurrency(summary.totalSales)}
-          />
-          <SummaryCard
-            label="Transactions total"
-            value={formatCurrency(summary.transactionsTotal)}
-          />
-        </section>
 
           <HelperText>
             Raw order-level and line-level totals for support review.
@@ -938,7 +937,10 @@ export default function FinancialQaPage() {
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
                     >
                       <a
-                        href={buildShopifyOrderUrl(shop, order.shopify_order_id)}
+                        href={
+                          buildShopifyOrderUrl(shop, order.shopify_order_id) ??
+                          undefined
+                        }
                         target="_blank"
                         rel="noreferrer"
                         style={{ color: "#2563eb", fontWeight: 800 }}
@@ -951,7 +953,10 @@ export default function FinancialQaPage() {
                       style={{ borderBottom: "1px solid #f0f0f0", padding: 10 }}
                     >
                       <a
-                        href={buildShopifyOrderUrl(shop, order.shopify_order_id)}
+                        href={
+                          buildShopifyOrderUrl(shop, order.shopify_order_id) ??
+                          undefined
+                        }
                         target="_blank"
                         rel="noreferrer"
                         style={{

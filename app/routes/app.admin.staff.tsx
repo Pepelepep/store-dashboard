@@ -25,6 +25,7 @@ import {
 } from "../lib/staff-identity/shopify-staff-csv";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
+import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
 
 type PermissionRow = {
   person_id: string | null;
@@ -41,6 +42,7 @@ type LocationRow = {
 };
 type SellerMetric = {
   lastOrderName: string | null;
+  lastOrderId: string | null;
   firstActivityAt: string | null;
   lastActivityAt: string | null;
   lastLocation: string | null;
@@ -59,11 +61,13 @@ type StaffProfile = StaffPersonRow & {
   canHardDelete: boolean;
 };
 type LoaderData = {
+  shop: string;
   profiles: StaffProfile[];
   pending: StaffAlias[];
   deferred: StaffAlias[];
   sellerMetrics: Record<string, SellerMetric>;
   locations: LocationRow[];
+  suggestions: Record<string, { personId: string; displayName: string }>;
   posSetup: {
     status: "not_configured" | "waiting" | "active";
     firstTrackedAt: string | null;
@@ -125,9 +129,38 @@ function advancedAliasLabel(aliasType: StaffAliasType) {
   if (aliasType === STAFF_ALIAS_TYPES.email) return "Login email alias";
   return "Identity alias";
 }
+function groupIdentityAliases(aliases: StaffAlias[]) {
+  const groups = new Map<
+    string,
+    { value: string; uses: Set<string>; aliases: StaffAlias[] }
+  >();
+  for (const alias of aliases) {
+    const normalizedValue =
+      alias.alias_type === STAFF_ALIAS_TYPES.email
+        ? alias.alias_value.trim().toLowerCase()
+        : alias.alias_value.trim();
+    if (!normalizedValue) continue;
+    const group = groups.get(normalizedValue) ?? {
+      value: normalizedValue,
+      uses: new Set<string>(),
+      aliases: [],
+    };
+    if (
+      alias.alias_type === STAFF_ALIAS_TYPES.email ||
+      alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId
+    ) {
+      group.uses.add("Dashboard login");
+    }
+    if (POS_ALIAS_TYPES.has(alias.alias_type)) group.uses.add("POS sales");
+    group.aliases.push(alias);
+    groups.set(normalizedValue, group);
+  }
+  return [...groups.values()].sort((a, b) => a.value.localeCompare(b.value));
+}
 function blankMetric(): SellerMetric {
   return {
     lastOrderName: null,
+    lastOrderId: null,
     firstActivityAt: null,
     lastActivityAt: null,
     lastLocation: null,
@@ -220,7 +253,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase
       .from("staff_pos_seller_metrics")
       .select(
-        "attribution_source, effective_staff_id, last_order_name, last_activity_at, last_location, last_device, order_count, net_sales",
+        "attribution_source, effective_staff_id, last_order_name, last_activity_at, last_location, last_device, order_count, net_sales, last_shopify_order_id",
       )
       .eq("shop_domain", session.shop),
     supabase
@@ -268,6 +301,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       staffIdentityAliasKey(candidate.aliasType, candidate.aliasValue),
       {
         lastOrderName: row.last_order_name,
+        lastOrderId: row.last_shopify_order_id,
         firstActivityAt: alias?.first_seen_at ?? null,
         lastActivityAt: row.last_activity_at,
         lastLocation: row.last_location,
@@ -306,6 +340,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         Object.assign(total, {
           lastActivityAt: item.lastActivityAt,
           lastOrderName: item.lastOrderName,
+          lastOrderId: item.lastOrderId,
           lastLocation: item.lastLocation,
           lastDevice: item.lastDevice,
         });
@@ -330,12 +365,36 @@ export async function loader({ request }: LoaderFunctionArgs) {
       POS_ALIAS_TYPES.has(alias.alias_type) &&
       metrics.has(metricKey(alias)),
   );
+  const peopleById = new Map(people.map((person) => [person.id, person]));
+  const loginIdentityByValue = new Map(
+    aliases
+      .filter(
+        (alias) =>
+          alias.person_id &&
+          alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId,
+      )
+      .map((alias) => [alias.alias_value, alias.person_id as string]),
+  );
+  const suggestions: LoaderData["suggestions"] = {};
+  for (const alias of reviewable) {
+    if (alias.suggestion_dismissed_at) continue;
+    const personId = loginIdentityByValue.get(alias.alias_value);
+    const person = personId ? peopleById.get(personId) : null;
+    if (person?.is_active) {
+      suggestions[alias.id] = {
+        personId: person.id,
+        displayName: person.display_name,
+      };
+    }
+  }
   return {
+    shop: session.shop,
     profiles,
     pending: reviewable.filter((alias) => alias.review_status !== "deferred"),
     deferred: reviewable.filter((alias) => alias.review_status === "deferred"),
     sellerMetrics: Object.fromEntries(metrics),
     locations: (locationsResult.data ?? []) as LocationRow[],
+    suggestions,
     posSetup: {
       status: firstTrackedResult.data?.created_at_shopify
         ? "active"
@@ -519,6 +578,18 @@ export async function action({ request }: ActionFunctionArgs) {
           message: "POS seller assigned. Dashboard access was not changed.",
         };
   }
+  if (intent === "dismiss_suggestion") {
+    if (!aliasId) return { ok: false, message: "POS seller is required." };
+    const result = await supabase
+      .from("staff_identity_aliases")
+      .update({ suggestion_dismissed_at: now, updated_at: now })
+      .eq("shop_domain", session.shop)
+      .eq("id", aliasId)
+      .is("person_id", null);
+    return result.error
+      ? { ok: false, message: result.error.message }
+      : { ok: true, message: "Suggestion dismissed." };
+  }
   if (intent === "defer_alias" || intent === "restore_alias") {
     const result = await supabase
       .from("staff_identity_aliases")
@@ -667,6 +738,25 @@ function Button({
   );
 }
 
+function ShopifyOrderLink({
+  shop,
+  orderId,
+  orderName,
+}: {
+  shop: string;
+  orderId: string | null;
+  orderName: string | null;
+}) {
+  const url = orderId ? buildShopifyOrderUrl(shop, orderId) : null;
+  return url ? (
+    <a href={url} target="_blank" rel="noreferrer">
+      {orderName ?? "Open order"}
+    </a>
+  ) : (
+    <>{orderName ?? "—"}</>
+  );
+}
+
 function OverlayPanel({
   title,
   onClose,
@@ -776,10 +866,14 @@ function PendingReview({
   pending,
   metrics,
   profiles,
+  suggestions,
+  shop,
 }: {
   pending: StaffAlias[];
   metrics: Record<string, SellerMetric>;
   profiles: StaffProfile[];
+  suggestions: LoaderData["suggestions"];
+  shop: string;
 }) {
   const [assigning, setAssigning] = useState<string | null>(null);
   const [mode, setMode] = useState<"existing" | "new">("existing");
@@ -795,34 +889,89 @@ function PendingReview({
     <div className="review-list">
       {pending.map((alias) => {
         const metric = metrics[metricKey(alias)] ?? blankMetric();
+        const suggestion = suggestions[alias.id];
+        const orderUrl = metric.lastOrderId
+          ? buildShopifyOrderUrl(shop, metric.lastOrderId)
+          : null;
         return (
           <article className="seller-row" key={alias.id}>
             <div className="seller-facts">
               <span>
+                <b>Shopify staff ID</b>
+                <span className="copy-value">
+                  {alias.alias_value}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void navigator.clipboard.writeText(alias.alias_value)
+                    }
+                  >
+                    Copy
+                  </button>
+                </span>
+              </span>
+              <span>
                 <b>Last order</b>
-                {metric.lastOrderName ?? "—"}
+                {orderUrl ? (
+                  <a href={orderUrl} target="_blank" rel="noreferrer">
+                    {metric.lastOrderName ?? "Open order"}
+                  </a>
+                ) : (
+                  (metric.lastOrderName ?? "—")
+                )}
+              </span>
+              <span>
+                <b>Location</b>
+                {metric.lastLocation ?? "—"}
               </span>
               <span>
                 <b>Last activity</b>
                 {date(metric.lastActivityAt)}
               </span>
               <span>
-                <b>POS location</b>
-                {metric.lastLocation ?? "—"}
-              </span>
-              <span>
-                <b>Device</b>
-                {metric.lastDevice ?? "—"}
-              </span>
-              <span>
-                <b>Orders</b>
-                {metric.orderCount}
-              </span>
-              <span>
                 <b>Net sales</b>
                 {money(metric.netSales)}
               </span>
             </div>
+            {suggestion && assigning !== alias.id ? (
+              <div className="suggestion">
+                <div>
+                  <b>Suggested match: {suggestion.displayName}</b>
+                  <small>Reason: Same Shopify identity</small>
+                </div>
+                <div className="row-actions">
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="link_alias" />
+                    <input type="hidden" name="alias_id" value={alias.id} />
+                    <input
+                      type="hidden"
+                      name="person_id"
+                      value={suggestion.personId}
+                    />
+                    <Button primary type="submit">
+                      Confirm
+                    </Button>
+                  </Form>
+                  <Button
+                    onClick={() => {
+                      setMode("existing");
+                      setAssigning(alias.id);
+                    }}
+                  >
+                    Choose someone else
+                  </Button>
+                  <Form method="post">
+                    <input
+                      type="hidden"
+                      name="intent"
+                      value="dismiss_suggestion"
+                    />
+                    <input type="hidden" name="alias_id" value={alias.id} />
+                    <Button type="submit">Dismiss</Button>
+                  </Form>
+                </div>
+              </div>
+            ) : null}
             {assigning === alias.id ? (
               <div className="assign-box">
                 <h3>Who is this seller?</h3>
@@ -891,7 +1040,7 @@ function PendingReview({
                   </Form>
                 )}
               </div>
-            ) : (
+            ) : suggestion ? null : (
               <div className="row-actions">
                 <Button primary onClick={() => setAssigning(alias.id)}>
                   Assign
@@ -1459,6 +1608,8 @@ export default function StaffPage() {
             pending={[...data.pending, ...data.deferred]}
             metrics={data.sellerMetrics}
             profiles={data.profiles}
+            suggestions={data.suggestions}
+            shop={data.shop}
           />
         </OverlayPanel>
       ) : null}
@@ -1686,6 +1837,16 @@ export default function StaffPage() {
                   First activity {date(selected.posMetrics.firstActivityAt)} ·
                   Last activity {date(selected.posMetrics.lastActivityAt)}
                 </small>
+                {selected.posMetrics.lastOrderName ? (
+                  <small>
+                    Last order:{" "}
+                    <ShopifyOrderLink
+                      shop={data.shop}
+                      orderId={selected.posMetrics.lastOrderId}
+                      orderName={selected.posMetrics.lastOrderName}
+                    />
+                  </small>
+                ) : null}
                 <small>
                   POS seller matching controls Sales by Staff reporting and does
                   not grant dashboard access.
@@ -1697,13 +1858,24 @@ export default function StaffPage() {
               <summary>Advanced details</summary>
               <div className="advanced">
                 {selected.aliases.length ? (
-                  selected.aliases.map((alias) => (
-                    <code key={alias.id}>
-                      {advancedAliasLabel(alias.alias_type)}:{" "}
-                      {alias.alias_value}
-                      <br />
-                      Attribution source: {alias.source ?? "unknown"}
-                    </code>
+                  groupIdentityAliases(selected.aliases).map((group) => (
+                    <div className="identity-group" key={group.value}>
+                      <code>{group.value}</code>
+                      <span>
+                        Used for: {[...group.uses].join(" · ") || "Identity"}
+                      </span>
+                      <details>
+                        <summary>Raw identity sources</summary>
+                        <div>
+                          {group.aliases.map((alias) => (
+                            <code key={alias.id}>
+                              {advancedAliasLabel(alias.alias_type)} · Source:{" "}
+                              {alias.source ?? "unknown"}
+                            </code>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
                   ))
                 ) : (
                   <span>No technical identities.</span>
@@ -1735,6 +1907,16 @@ export default function StaffPage() {
               {selected.posMetrics.orderCount} orders ·{" "}
               {money(selected.posMetrics.netSales)}
             </h3>
+            {selected.posMetrics.lastOrderName ? (
+              <p>
+                Last order:{" "}
+                <ShopifyOrderLink
+                  shop={data.shop}
+                  orderId={selected.posMetrics.lastOrderId}
+                  orderName={selected.posMetrics.lastOrderName}
+                />
+              </p>
+            ) : null}
             <p>
               All linked seller identities are combined into this reporting
               summary. Technical identities are available under Advanced
@@ -1770,6 +1952,7 @@ const STAFF_LIFECYCLE_CSS = `
 .detail-remove{padding-top:18px}
 .remove-confirmation h3{margin-top:0}
 .remove-confirmation p{color:#454545;line-height:1.5}
+.copy-value{align-items:center!important;display:flex!important;flex-direction:row!important;gap:7px}.copy-value button{background:transparent;border:0;color:#255aa8;cursor:pointer;font-size:12px;padding:0}.suggestion{background:#eef5ff;border-radius:9px;margin-top:14px;padding:12px}.suggestion>div:first-child{display:grid;gap:3px}.suggestion small{color:#516072}.identity-group{border-bottom:1px solid #ededed;display:grid;gap:5px;padding:10px 0}.identity-group>code{background:transparent;padding:0}.identity-group>span{color:#454545;font-size:13px}.identity-group details{padding:2px 0}.identity-group details>div{display:grid;gap:5px;margin-top:7px}
 `;
 
 const STAFF_CSS = `

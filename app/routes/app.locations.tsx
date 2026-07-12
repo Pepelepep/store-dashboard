@@ -41,6 +41,8 @@ import type {
   OrderLineDbRow,
 } from "../lib/dashboard/dashboard-types";
 import { authenticate } from "../shopify.server";
+import { fetchStaffIdentityAliasesForOrderLines } from "../lib/staff-identity/staff-identity.server";
+import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
 
 type LocationMetricRow = {
   locationId: string;
@@ -88,6 +90,9 @@ type LocationsSalesRow = Pick<
   | "staff_member_id"
   | "staff_member_name"
   | "staff_member_email"
+  | "resolved_staff_display_name"
+  | "resolved_staff_status"
+  | "resolved_staff_key"
   | "shopify_order_id"
   | "quantity"
   | "revenue"
@@ -149,7 +154,7 @@ type LoaderData = {
 
 const ORDER_LINES_PAGE_SIZE = 1000;
 const LOCATION_ORDER_LINES_SELECT =
-  "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, staff_member_id, staff_member_name, staff_member_email";
+  "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, staff_member_id, staff_member_name, staff_member_email, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source";
 
 type OrderTransactionDbRow = {
   shopify_order_id: string;
@@ -419,7 +424,7 @@ function buildStaffOptions(orderLines: OrderLineDbRow[]) {
   if (hasUnknownStaff) {
     sortedOptions.push({
       value: UNKNOWN_STAFF_FILTER_VALUE,
-      label: "Unassigned / unavailable",
+      label: "Unassigned",
     });
   }
 
@@ -509,21 +514,11 @@ function getVendorDrilldownValue(row: LocationsSalesRow) {
 }
 
 function getStaffDrilldownValue(row: LocationsSalesRow) {
-  return (
-    row.staff_member_id ||
-    row.staff_member_email ||
-    row.staff_member_name ||
-    "Unassigned / unavailable"
-  );
+  return row.resolved_staff_key || UNKNOWN_STAFF_FILTER_VALUE;
 }
 
 function getStaffDrilldownLabel(row: LocationsSalesRow) {
-  return (
-    row.staff_member_name ||
-    row.staff_member_email ||
-    row.staff_member_id ||
-    "Unassigned / unavailable"
-  );
+  return row.resolved_staff_display_name || "Unassigned";
 }
 
 function applyLocationDrilldowns({
@@ -1096,7 +1091,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
         permissions.allowedLocationIds.has(location.shopify_location_id),
       );
 
-  if (!permissions.isAdmin && allLocations.length > 0 && accessibleLocations.length === 0) {
+  if (
+    !permissions.isAdmin &&
+    allLocations.length > 0 &&
+    accessibleLocations.length === 0
+  ) {
     throw new Response("Forbidden: no location access configured", {
       status: 403,
     });
@@ -1157,7 +1156,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .maybeSingle();
   if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
 
-  const orderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
+  const rawOrderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
+  const staffAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
+    supabase,
+    shop: session.shop,
+    orderLines: rawOrderLines,
+  });
+  const orderLines = rawOrderLines.map((row) => {
+    const resolution = resolveStaffDisplayNameForOrderLine(
+      row,
+      staffAliasesByKey,
+    );
+    return {
+      ...row,
+      resolved_staff_display_name: resolution.label,
+      resolved_staff_status: resolution.status,
+      resolved_staff_key: resolution.staffKey,
+    };
+  });
   const expenses = (expensesResult.data ?? []) as FixedExpenseDbRow[];
   if (allLocations.length === 0 || orderLines.length === 0) {
     logEmptyDataState({
@@ -1190,6 +1206,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     staff_member_id: row.staff_member_id,
     staff_member_name: row.staff_member_name,
     staff_member_email: row.staff_member_email,
+    resolved_staff_display_name: row.resolved_staff_display_name,
+    resolved_staff_status: row.resolved_staff_status,
+    resolved_staff_key: row.resolved_staff_key,
     shopify_order_id: row.shopify_order_id,
     quantity: Number(row.quantity ?? 0),
     revenue: isFinancialMetricsV2
@@ -1477,7 +1496,14 @@ function KpiGrid({
             Metric definitions
           </summary>
           <div style={{ marginTop: 8 }}>
-            Gross Sales: product sales before discounts and returns. Discounts: Shopify discount allocations applied to orders and line items. Net Sales: Gross Sales minus Discounts and Returns. COGS: cost of goods sold from synced Shopify inventory item cost data where available. Gross Profit: Net Sales minus COGS. Margin: Gross Profit divided by Net Sales. Refunds: cash refunded on Shopify orders, reported separately from returns. Returns: returned line-item value used in net sales calculations where available.
+            Gross Sales: product sales before discounts and returns. Discounts:
+            Shopify discount allocations applied to orders and line items. Net
+            Sales: Gross Sales minus Discounts and Returns. COGS: cost of goods
+            sold from synced Shopify inventory item cost data where available.
+            Gross Profit: Net Sales minus COGS. Margin: Gross Profit divided by
+            Net Sales. Refunds: cash refunded on Shopify orders, reported
+            separately from returns. Returns: returned line-item value used in
+            net sales calculations where available.
           </div>
         </details>
       ) : null}
@@ -2923,7 +2949,8 @@ export default function LocationsPage() {
                 Location Performance
               </h1>
               <p style={{ color: "#616161", margin: "6px 0 0" }}>
-                Compare stores by net sales, margin, expenses, discounts, refunds, and inventory health.
+                Compare stores by net sales, margin, expenses, discounts,
+                refunds, and inventory health.
               </p>
             </div>
           </div>

@@ -267,9 +267,13 @@ export function RecentOrderLinesCard({
   const tableRows = recentOrders.map((row) =>
     isFinancialMetricsV2
       ? [
-          <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
-            {row.orderName}
-          </a>,
+          row.orderUrl ? (
+            <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
+              {row.orderName}
+            </a>
+          ) : (
+            row.orderName
+          ),
           formatDate(row.date),
           row.product,
           row.sku,
@@ -300,9 +304,13 @@ export function RecentOrderLinesCard({
             : "-",
         ]
       : [
-          <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
-            {row.orderName}
-          </a>,
+          row.orderUrl ? (
+            <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
+              {row.orderName}
+            </a>
+          ) : (
+            row.orderName
+          ),
           formatDate(row.date),
           row.product,
           row.sku,

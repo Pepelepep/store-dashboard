@@ -13,10 +13,10 @@ import {
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
 import {
-  buildShopifyOrderUrl,
   formatNumber,
   formatStoreDateTime,
 } from "../lib/dashboard/dashboard-metrics";
+import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
 import type { LocationRow } from "../lib/dashboard/dashboard-types";
 import { authenticate } from "../shopify.server";
 
@@ -74,7 +74,9 @@ function numberValue(value: unknown) {
   return Number(value ?? 0);
 }
 
-function getFreshnessStatus(finishedAt: string | null): SyncFreshnessRow["status"] {
+function getFreshnessStatus(
+  finishedAt: string | null,
+): SyncFreshnessRow["status"] {
   if (!finishedAt) return "Unknown";
 
   const timestamp = new Date(finishedAt).getTime();
@@ -133,7 +135,12 @@ function buildIssue({
     title,
     explanation,
     count: issue.count,
-    status: issue.count > 0 ? (severity === "critical" ? "Critical" : "Warning") : "OK",
+    status:
+      issue.count > 0
+        ? severity === "critical"
+          ? "Critical"
+          : "Warning"
+        : "OK",
     optional,
     samples: issue.samples,
   };
@@ -191,7 +198,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
         permissions.allowedLocationIds.has(location.shopify_location_id),
       );
 
-  if (!permissions.isAdmin && allLocations.length > 0 && accessibleLocations.length === 0) {
+  if (
+    !permissions.isAdmin &&
+    allLocations.length > 0 &&
+    accessibleLocations.length === 0
+  ) {
     throw new Response("Forbidden: no location access configured", {
       status: 403,
     });
@@ -270,10 +281,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     errors.push(reportResult.value.error.message);
   }
   if (failed24hResult.status === "rejected") {
-    errors.push(failed24hResult.reason?.message ?? String(failed24hResult.reason));
+    errors.push(
+      failed24hResult.reason?.message ?? String(failed24hResult.reason),
+    );
   }
   if (failed7dResult.status === "rejected") {
-    errors.push(failed7dResult.reason?.message ?? String(failed7dResult.reason));
+    errors.push(
+      failed7dResult.reason?.message ?? String(failed7dResult.reason),
+    );
   }
 
   const latestSyncByType = new Map<string, string | null>();
@@ -307,49 +322,56 @@ export async function loader({ request }: LoaderFunctionArgs) {
       report,
       key: "productsWithoutVariants",
       title: "Products without variants",
-      explanation: "Products without variants cannot map cleanly into sales or inventory reporting.",
+      explanation:
+        "Products without variants cannot map cleanly into sales or inventory reporting.",
       severity: "warning",
     }),
     buildIssue({
       report,
       key: "variantsMissingInventoryItemId",
       title: "Variants missing inventory item ID",
-      explanation: "Missing inventory item IDs prevent inventory levels and cost snapshots from linking reliably.",
+      explanation:
+        "Missing inventory item IDs prevent inventory levels and cost snapshots from linking reliably.",
       severity: "warning",
     }),
     buildIssue({
       report,
       key: "variantsMissingUnitCost",
       title: "Variants missing unit cost",
-      explanation: "Missing current cost forces order lines to use fallback or missing-cost handling.",
+      explanation:
+        "Missing current cost forces order lines to use fallback or missing-cost handling.",
       severity: "warning",
     }),
     buildIssue({
       report,
       key: "orderLinesMissingCogs",
       title: "Order lines missing COGS",
-      explanation: "These rows do not currently have cost of goods sold after the latest recompute.",
+      explanation:
+        "These rows do not currently have cost of goods sold after the latest recompute.",
       severity: "critical",
     }),
     buildIssue({
       report,
       key: "orderLinesUsingFallbackCost",
       title: "Order lines using fallback cost",
-      explanation: "These rows use the 50% fallback because no current cost exists.",
+      explanation:
+        "These rows use the 50% fallback because no current cost exists.",
       severity: "warning",
     }),
     buildIssue({
       report,
       key: "ordersWithoutOrderLines",
       title: "Orders without order lines",
-      explanation: "Orders without lines usually indicate an incomplete orders sync.",
+      explanation:
+        "Orders without lines usually indicate an incomplete orders sync.",
       severity: "critical",
     }),
     buildIssue({
       report,
       key: "inventoryLevelsWithoutMatchingVariantOrProduct",
       title: "Inventory levels without matching variant/product",
-      explanation: "Inventory rows that cannot join to variant/product data can distort stock reporting.",
+      explanation:
+        "Inventory rows that cannot join to variant/product data can distort stock reporting.",
       severity: "critical",
     }),
   ];
@@ -358,7 +380,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       report,
       key: "orderLinesMissingStaffAttribution",
       title: "Missing staff attribution",
-      explanation: "Optional/non-blocking. Shopify does not always provide staff attribution.",
+      explanation:
+        "Optional/non-blocking. Shopify does not always provide staff attribution.",
       severity: "warning",
       optional: true,
     }),
@@ -402,10 +425,16 @@ function getIssueCta(issue: QualityIssue, preservedSearch: string) {
     issue.key === "variantsMissingUnitCost" ||
     issue.key === "orderLinesUsingFallbackCost"
   ) {
-    return { to: `/app/admin/sync${preservedSearch}`, label: "Open Sync Status" };
+    return {
+      to: `/app/admin/sync${preservedSearch}`,
+      label: "Open Sync Status",
+    };
   }
   if (issue.key === "ordersWithoutOrderLines") {
-    return { to: `/app/admin/financial-qa${preservedSearch}`, label: "Open order diagnostics" };
+    return {
+      to: `/app/admin/financial-qa${preservedSearch}`,
+      label: "Open order diagnostics",
+    };
   }
   return { to: `/app/admin/sync${preservedSearch}`, label: "Open Sync Status" };
 }
@@ -502,7 +531,10 @@ function QualityIssueSection({
       </div>
 
       <div style={metricGridStyle}>
-        <SummaryMetric label="Affected rows" value={formatNumber(issue.count)} />
+        <SummaryMetric
+          label="Affected rows"
+          value={formatNumber(issue.count)}
+        />
       </div>
       {issue.count > 0 ? (
         <div style={{ marginBottom: 12 }}>
@@ -560,13 +592,19 @@ function SampleTable({ rows, shop }: { rows: IssueSample[]; shop: string }) {
               {headers.map((header) => {
                 const value = row[header];
                 const isOrder =
-                  header === "order_name" && typeof row.shopify_order_id === "string";
+                  header === "order_name" &&
+                  typeof row.shopify_order_id === "string";
 
                 return (
                   <td key={header} style={tdStyle}>
                     {isOrder ? (
                       <a
-                        href={buildShopifyOrderUrl(shop, row.shopify_order_id as string)}
+                        href={
+                          buildShopifyOrderUrl(
+                            shop,
+                            row.shopify_order_id as string,
+                          ) ?? undefined
+                        }
                         target="_blank"
                         rel="noreferrer"
                       >
@@ -655,9 +693,7 @@ function SyncFreshnessSection({
       <div style={sectionHeaderStyle}>
         <div>
           <h2 style={sectionTitleStyle}>Sync freshness</h2>
-          <HelperText>
-            Last successful Shopify import by data type.
-          </HelperText>
+          <HelperText>Last successful Shopify import by data type.</HelperText>
         </div>
         <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
           Open Sync Status
@@ -799,11 +835,14 @@ export default function DataQualityPage() {
             Sync Status
           </h1>
           <p style={{ color: "#616161", margin: "6px 0 0" }}>
-            See when Shopify data last synced for locations, products, inventory, and orders.
+            See when Shopify data last synced for locations, products,
+            inventory, and orders.
           </p>
           <HelperText>
             Last synced:{" "}
-            {lastSuccessfulSync ? formatStoreDateTime(lastSuccessfulSync) : "No sync yet"}
+            {lastSuccessfulSync
+              ? formatStoreDateTime(lastSuccessfulSync)
+              : "No sync yet"}
           </HelperText>
           <div style={{ marginTop: 14 }}>
             <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>

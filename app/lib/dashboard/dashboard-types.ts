@@ -181,7 +181,7 @@ export type StockAlertRow = {
 
 export type RecentOrderRow = {
   orderName: string;
-  orderUrl: string;
+  orderUrl: string | null;
   date: string;
   product: string;
   sku: string;
