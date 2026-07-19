@@ -21,6 +21,7 @@ database.sqlite
 
 
 /extensions/*/dist
+extensions/shopops-pos-attribution/manifest.json
 
 # Ignore shopify files created during app dev
 .shopify/*
