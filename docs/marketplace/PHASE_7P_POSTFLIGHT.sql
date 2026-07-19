@@ -207,7 +207,17 @@ summary AS (
       ELSE 'Final schema, target identity, uniqueness and active-rebuild checks passed.'
     END detail
 )
+SELECT severity, check_type, object_name, detail
+FROM (
 SELECT * FROM findings
-UNION ALL SELECT * FROM summary
-ORDER BY CASE severity WHEN 'BLOCKED' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END,
-  check_type, object_name;
+UNION ALL
+SELECT * FROM summary
+) results
+ORDER BY
+CASE results.severity
+WHEN 'BLOCKED' THEN 1
+WHEN 'WARNING' THEN 2
+ELSE 3
+END,
+results.check_type,
+results.object_name;
