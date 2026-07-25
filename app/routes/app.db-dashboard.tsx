@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useMemo, useState } from "react";
-import { useLoaderData } from "react-router";
+import { useLoaderData, useLocation } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -21,6 +21,7 @@ import { SalesByStaffCard } from "../components/dashboard/SalesByStaffCard";
 import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
 import { PageNotice } from "../components/ui/PageNotice";
+import { getDataSyncPath } from "../lib/navigation/sync-status";
 import {
   applyDashboardDrilldowns,
   computeBestSellers,
@@ -678,6 +679,7 @@ function isSameDrilldown(
 const emptyDrilldowns: ActiveDrilldowns = {};
 
 export default function DbDashboardPage() {
+  const location = useLocation();
   const {
     shop,
     locations,
@@ -746,7 +748,7 @@ export default function DbDashboardPage() {
     }));
   };
   const syncCenterCta = readiness.canAdmin
-    ? { to: "/app/admin/sync", label: "Open Sync Status" }
+    ? { to: getDataSyncPath(location.search), label: "Open Sync Status" }
     : undefined;
   const isFirstRunPreparing =
     readiness.activeLocationsCount === 0 ||

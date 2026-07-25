@@ -1,4 +1,8 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import {
+  isShopifyAuthenticationRequiredError,
+  SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+} from "../shopify/offline-admin.server";
 import type { SyncBatchResult, SyncSource } from "./shopify-sync.server";
 import {
   syncFinancialBackfill30dBatch,
@@ -192,6 +196,40 @@ function getSafeErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
 
   return message.slice(0, 1000);
+}
+
+export async function markSyncJobAuthenticationRequired({
+  supabase,
+  job,
+}: {
+  supabase: SupabaseAdminClient;
+  job: SyncJobRow;
+}) {
+  const finishedAt = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("sync_jobs")
+    .update({
+      status: "error",
+      error_message: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+      details: {
+        ...(job.details ?? {}),
+        errorCode: "shopify_authentication_required",
+        authenticationRequired: true,
+      },
+      updated_at: finishedAt,
+      finished_at: finishedAt,
+    })
+    .eq("shop_domain", job.shop_domain)
+    .eq("id", job.id)
+    .in("status", ["pending", "running"])
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data as SyncJobRow | null) ?? job;
 }
 
 function summarizeCounts(counts: Record<string, unknown> | null | undefined) {
@@ -1224,6 +1262,9 @@ export async function processManualSyncJobBatch({
   } catch (error) {
     const errorMessage = getSafeErrorMessage(error);
     const errorDetails = getErrorDetails(error);
+    const authenticationRequired =
+      isShopifyAuthenticationRequiredError(error);
+    const keepQueued = preserveQueuedOnFailure && !authenticationRequired;
 
     try {
       await insertSyncRun({
@@ -1253,14 +1294,20 @@ export async function processManualSyncJobBatch({
     const { data: updatedJob, error: updateError } = await supabase
       .from("sync_jobs")
       .update({
-        status: preserveQueuedOnFailure ? "pending" : "error",
+        status: keepQueued ? "pending" : "error",
         current_step: failedStep,
-        error_message: preserveQueuedOnFailure ? null : errorMessage,
+        error_message: keepQueued ? null : errorMessage,
         details: {
           ...(claimedJob.details ?? {}),
           failedStep,
           errorDetails,
-          ...(preserveQueuedOnFailure
+          ...(authenticationRequired
+            ? {
+                errorCode: "shopify_authentication_required",
+                authenticationRequired: true,
+              }
+            : {}),
+          ...(keepQueued
             ? {
                 immediatePassFailedAt: new Date().toISOString(),
                 immediatePassError: errorMessage,
@@ -1269,7 +1316,7 @@ export async function processManualSyncJobBatch({
         },
         started_at: startedAt,
         updated_at: new Date().toISOString(),
-        finished_at: preserveQueuedOnFailure ? null : new Date().toISOString(),
+        finished_at: keepQueued ? null : new Date().toISOString(),
       })
       .eq("shop_domain", shop)
       .eq("id", job.id)
@@ -1368,6 +1415,24 @@ export async function processSyncJobsBatch({
       });
     } catch (error) {
       const errorMessage = getSafeErrorMessage(error);
+      if (isShopifyAuthenticationRequiredError(error)) {
+        const failedJob = await markSyncJobAuthenticationRequired({
+          supabase,
+          job,
+        });
+        summary.failed += 1;
+        summary.processed += 1;
+        summary.jobs.push({
+          id: failedJob.id,
+          type: failedJob.job_type,
+          previousStatus,
+          finalStatus: "error",
+          processed: true,
+          skippedReason: null,
+          errorMessage: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+        });
+        continue;
+      }
       summary.failed += 1;
       summary.jobs.push({
         id: job.id,

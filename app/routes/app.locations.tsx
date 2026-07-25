@@ -1,11 +1,12 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Form, useLoaderData } from "react-router";
+import { Form, useLoaderData, useLocation } from "react-router";
 
 import { AppButton } from "../components/ui/AppButton";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { getDataSyncPath } from "../lib/navigation/sync-status";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
@@ -2771,6 +2772,8 @@ function ActiveLocationsDrilldownChips({
 }
 
 export default function LocationsPage() {
+  const location = useLocation();
+  const dataSyncPath = getDataSyncPath(location.search);
   const {
     locations,
     selectedLocationIds,
@@ -3243,7 +3246,7 @@ export default function LocationsPage() {
               "Open Sync Status to confirm whether locations, products, inventory, and orders have synced.",
               "Location reporting becomes useful once Shopify data is available.",
             ]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
+            cta={{ to: dataSyncPath, label: "Open Sync Status" }}
             tone="info"
           />
         ) : isDataPreparing ? (
@@ -3254,7 +3257,7 @@ export default function LocationsPage() {
               "Location comparisons populate after successful sync runs create sales rows.",
               "ShopOps Studio uses synced Shopify data to report sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health.",
             ]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
+            cta={{ to: dataSyncPath, label: "Open Sync Status" }}
             tone="info"
           />
         ) : hasNoSalesForRange ? (
@@ -3265,7 +3268,7 @@ export default function LocationsPage() {
               "Filters remain available so admins can review another location, staff member, vendor, or date range.",
               "If sales should already be available, check Sync Status for freshness or failures.",
             ]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
+            cta={{ to: dataSyncPath, label: "Open Sync Status" }}
             tone="neutral"
           />
         ) : null}

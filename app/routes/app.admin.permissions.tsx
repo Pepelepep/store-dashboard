@@ -1,5 +1,11 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useLocation,
+  useNavigation,
+} from "react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { authenticate } from "../shopify.server";
@@ -7,6 +13,7 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { AppButtonLink } from "../components/ui/AppButton";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
+import { getDataSyncPath } from "../lib/navigation/sync-status";
 import {
   ensureShopInitialized,
   logEmptyDataState,
@@ -762,6 +769,7 @@ async function upsertStaffIdentityFromAccess({
 }
 
 export default function AdminPermissionsPage() {
+  const location = useLocation();
   const { shop, currentUser, currentAccess, locations, permissions, staffMembers } =
     useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
@@ -1131,7 +1139,10 @@ export default function AdminPermissionsPage() {
                 ) : null}
                 {locations.length === 0 ? (
                   <div>
-                    <AppButtonLink to="/app/admin/sync" compact>
+                    <AppButtonLink
+                      to={getDataSyncPath(location.search)}
+                      compact
+                    >
                       Open Sync Status
                     </AppButtonLink>
                   </div>

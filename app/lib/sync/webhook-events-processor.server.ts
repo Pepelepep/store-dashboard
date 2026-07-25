@@ -1,6 +1,9 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
 import prisma from "../../db.server";
-import { getOfflineAdminClient } from "../shopify/offline-admin.server";
+import {
+  getOfflineAdminClient,
+  isShopifyAuthenticationRequiredError,
+} from "../shopify/offline-admin.server";
 import type { WebhookEventRow } from "../webhooks/webhook-events.server";
 import {
   extractWebhookResourceGids,
@@ -15,6 +18,7 @@ import {
 import {
   enqueueOrdersReconciliation48hJob,
   getRunnableOrdersReconciliation48hJobs,
+  markSyncJobAuthenticationRequired,
   processManualSyncJobBatch,
 } from "./sync-jobs.server";
 
@@ -254,7 +258,9 @@ async function markEventError({
   maxAttempts: number;
 }) {
   const nextAttemptCount = event.attempt_count + 1;
-  const retryable = nextAttemptCount < maxAttempts;
+  const retryable =
+    !isShopifyAuthenticationRequiredError(error) &&
+    nextAttemptCount < maxAttempts;
   const { error: updateError } = await supabase
     .from("webhook_events")
     .update({
@@ -372,8 +378,12 @@ async function getInstalledShopDomains(limit: number) {
   const sessions = await prisma.session.findMany({
     where: {
       isOnline: false,
+      id: {
+        startsWith: "offline_",
+      },
     },
     select: {
+      id: true,
       shop: true,
     },
     distinct: ["shop"],
@@ -383,7 +393,10 @@ async function getInstalledShopDomains(limit: number) {
     take: limit,
   });
 
-  return sessions.map((session) => session.shop).filter(Boolean);
+  return sessions
+    .filter((session) => session.id === `offline_${session.shop}`)
+    .map((session) => session.shop)
+    .filter(Boolean);
 }
 
 async function enqueueDueOrdersReconciliationJobs({
@@ -458,7 +471,10 @@ async function processOrdersReconciliationJobs({
       } else if (result.job.status === "error") {
         summary.failed += 1;
       }
-    } catch {
+    } catch (error) {
+      if (isShopifyAuthenticationRequiredError(error)) {
+        await markSyncJobAuthenticationRequired({ supabase, job });
+      }
       summary.failed += 1;
     }
   }
