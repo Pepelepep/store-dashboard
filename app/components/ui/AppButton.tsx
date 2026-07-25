@@ -17,6 +17,7 @@ type AppButtonProps = {
 
 type AppButtonLinkProps = {
   to: string;
+  reloadDocument?: boolean;
   variant?: AppButtonVariant;
   children: ReactNode;
   compact?: boolean;
@@ -155,6 +156,7 @@ export function AppButton({
 
 export function AppButtonLink({
   to,
+  reloadDocument = false,
   variant = "secondary",
   compact = false,
   fullWidth = false,
@@ -174,6 +176,7 @@ export function AppButtonLink({
   return (
     <Link
       to={to}
+      reloadDocument={reloadDocument}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => {
         setIsHovered(false);
