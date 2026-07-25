@@ -13,9 +13,14 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-import { getOfflineAdminClient } from "../lib/shopify/offline-admin.server";
+import {
+  getOfflineAdminClient,
+  isShopifyAuthenticationRequiredError,
+  SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+} from "../lib/shopify/offline-admin.server";
 import {
   createManualSyncJob,
+  markSyncJobAuthenticationRequired,
   processManualSyncJobBatch,
   processSyncJobsBatch,
   type SyncJobRow,
@@ -272,7 +277,25 @@ export async function action({ request }: ActionFunctionArgs) {
     immediatePassDeferred = Boolean(
       immediate.job.details?.immediatePassFailedAt,
     );
-  } catch {
+    if (immediate.job.details?.authenticationRequired === true) {
+      return {
+        ok: false,
+        message: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+        operationStatus: "authentication_required",
+      };
+    }
+  } catch (error) {
+    if (isShopifyAuthenticationRequiredError(error)) {
+      await markSyncJobAuthenticationRequired({
+        supabase,
+        job: updatedJob,
+      });
+      return {
+        ok: false,
+        message: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+        operationStatus: "authentication_required",
+      };
+    }
     immediatePassDeferred = true;
   }
   const completed = updatedJob.status === "success";

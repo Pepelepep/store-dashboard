@@ -13,6 +13,7 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
 import { getBillingGateState } from "../lib/billing.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
+import { getDataSyncPath } from "../lib/navigation/sync-status";
 
 import { authenticate } from "../shopify.server";
 
@@ -142,7 +143,7 @@ export default function App() {
               <a href={`/app/admin/staff${search}`}>Staff</a>
             ) : null}
             {canAdmin ? (
-              <a href={`/app/admin/sync${search}`}>Data sync</a>
+              <a href={getDataSyncPath(search)}>Data sync</a>
             ) : null}
             {billingEnabled ? (
               <a href={`/app/billing-required${search}`}>Billing</a>

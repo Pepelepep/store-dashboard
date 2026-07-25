@@ -8,6 +8,7 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { getDataSyncPath } from "../lib/navigation/sync-status";
 import {
   ensureShopInitialized,
   logEmptyDataState,
@@ -426,7 +427,7 @@ function getIssueCta(issue: QualityIssue, preservedSearch: string) {
     issue.key === "orderLinesUsingFallbackCost"
   ) {
     return {
-      to: `/app/admin/sync${preservedSearch}`,
+      to: getDataSyncPath(preservedSearch),
       label: "Open Sync Status",
     };
   }
@@ -436,7 +437,10 @@ function getIssueCta(issue: QualityIssue, preservedSearch: string) {
       label: "Open order diagnostics",
     };
   }
-  return { to: `/app/admin/sync${preservedSearch}`, label: "Open Sync Status" };
+  return {
+    to: getDataSyncPath(preservedSearch),
+    label: "Open Sync Status",
+  };
 }
 
 function SummaryMetric({
@@ -695,7 +699,7 @@ function SyncFreshnessSection({
           <h2 style={sectionTitleStyle}>Sync freshness</h2>
           <HelperText>Last successful Shopify import by data type.</HelperText>
         </div>
-        <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
+        <AppButtonLink to={getDataSyncPath(preservedSearch)} compact>
           Open Sync Status
         </AppButtonLink>
       </div>
@@ -845,7 +849,7 @@ export default function DataQualityPage() {
               : "No sync yet"}
           </HelperText>
           <div style={{ marginTop: 14 }}>
-            <AppButtonLink to={`/app/admin/sync${preservedSearch}`} compact>
+            <AppButtonLink to={getDataSyncPath(preservedSearch)} compact>
               Open Sync Status
             </AppButtonLink>
             <span
@@ -889,7 +893,7 @@ export default function DataQualityPage() {
               "After sync finishes, Profit Dashboard and Location Performance will show Shopify reporting data.",
             ]}
             cta={{
-              to: `/app/admin/sync${preservedSearch}`,
+              to: getDataSyncPath(preservedSearch),
               label: "Run first sync",
             }}
             tone="info"

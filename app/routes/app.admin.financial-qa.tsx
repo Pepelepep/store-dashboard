@@ -1,10 +1,11 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { Form, useLoaderData } from "react-router";
+import { Form, useLoaderData, useLocation } from "react-router";
 
 import { HelperText } from "../components/ui/HelperText";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { getDataSyncPath } from "../lib/navigation/sync-status";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
   daysBetween,
@@ -652,6 +653,7 @@ function FlagBadge({ flag }: { flag: string }) {
 }
 
 export default function FinancialQaPage() {
+  const location = useLocation();
   const {
     shop,
     startDate,
@@ -694,7 +696,10 @@ export default function FinancialQaPage() {
             title="No synced orders yet."
             message="Order diagnostics become available after Shopify orders and order lines have synced."
             bullets={["Use Sync Status to run or review orders sync."]}
-            cta={{ to: "/app/admin/sync", label: "Open Sync Status" }}
+            cta={{
+              to: getDataSyncPath(location.search),
+              label: "Open Sync Status",
+            }}
             tone="info"
           />
         ) : null}
