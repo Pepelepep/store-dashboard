@@ -13,6 +13,8 @@ import type {
   VariantDbRow,
   VendorRow,
 } from "./dashboard-types";
+import { calculateRemainingLineCogs } from "../financial/cogs";
+import { allocateExpensesByLocation } from "../financial/expense-allocation";
 
 export const STORE_TIME_ZONE = "America/Toronto";
 export const UNKNOWN_STAFF_FILTER_VALUE = "__unknown_staff__";
@@ -39,6 +41,7 @@ type FinancialMetricLine = {
   refunded_amount?: number | null;
   returned_quantity?: number | null;
   cost_at_sale?: number | null;
+  unit_cost?: number | null;
 };
 
 function hasAnyV2SalesField(row: FinancialMetricLine) {
@@ -85,13 +88,7 @@ export function getLineReturnedQuantity(row: FinancialMetricLine) {
 }
 
 export function getLineCogsV2(row: FinancialMetricLine) {
-  if (row.cost_at_sale !== null && row.cost_at_sale !== undefined) {
-    return (
-      toDashboardNumber(row.cost_at_sale) * toDashboardNumber(row.quantity)
-    );
-  }
-
-  return toDashboardNumber(row.cogs);
+  return calculateRemainingLineCogs(row);
 }
 
 function getDatePartsInStoreTimezone(date: Date) {
@@ -564,71 +561,29 @@ export function isActiveInventoryProduct({
   return product?.status !== "DELETED";
 }
 
-function getDaysInMonth(date: Date) {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-}
-
-function getMonthKey(date: Date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function getMonthKeyFromDateString(value: string | null) {
-  if (!value) return null;
-  return value.slice(0, 7);
-}
-
 export function computeExpensesForRange({
   expenses,
   selectedLocationId,
   selectedDays,
   startDate,
   endDate,
-  activeLocationCount,
+  activeLocationIds,
 }: {
   expenses: FixedExpenseDbRow[];
   selectedLocationId: string | null;
   selectedDays: number;
   startDate: string;
   endDate: string;
-  activeLocationCount: number;
+  activeLocationIds: string[];
 }) {
-  const rangeStart = parseDateOnlyUtc(startDate);
-  const rangeEndExclusive = addDays(parseDateOnlyUtc(endDate), 1);
-  let total = 0;
+  if (selectedDays <= 0 || !selectedLocationId) return null;
 
-  for (
-    let current = new Date(rangeStart);
-    current < rangeEndExclusive;
-    current = addDays(current, 1)
-  ) {
-    const currentMonthKey = getMonthKey(current);
-    const daysInMonth = getDaysInMonth(current);
-
-    for (const expense of expenses) {
-      if (!expense.is_active) continue;
-
-      const expenseStartMonth = getMonthKeyFromDateString(expense.start_month);
-      const expenseEndMonth = getMonthKeyFromDateString(expense.end_month);
-
-      if (expenseStartMonth && currentMonthKey < expenseStartMonth) continue;
-      if (expenseEndMonth && currentMonthKey > expenseEndMonth) continue;
-
-      const isGlobalExpense = !expense.shopify_location_id;
-      const isSelectedLocationExpense =
-        expense.shopify_location_id === selectedLocationId;
-
-      if (!isGlobalExpense && !isSelectedLocationExpense) continue;
-
-      const monthlyAmount = Number(expense.monthly_amount ?? 0);
-      const dailyAmount = monthlyAmount / daysInMonth;
-
-      total += isGlobalExpense
-        ? dailyAmount / Math.max(activeLocationCount, 1)
-        : dailyAmount;
-    }
-  }
-
-  return selectedDays > 0 ? total : null;
+  return (
+    allocateExpensesByLocation({
+      expenses,
+      activeLocationIds,
+      startDate,
+      endDate,
+    }).get(selectedLocationId) ?? 0
+  );
 }

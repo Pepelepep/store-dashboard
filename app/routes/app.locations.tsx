@@ -44,6 +44,9 @@ import type {
 import { authenticate } from "../shopify.server";
 import { fetchStaffIdentityAliasesForOrderLines } from "../lib/staff-identity/staff-identity.server";
 import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
+import { summarizeCogs } from "../lib/financial/cogs";
+import { allocateExpensesByLocation } from "../lib/financial/expense-allocation";
+import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
 
 type LocationMetricRow = {
   locationId: string;
@@ -57,11 +60,12 @@ type LocationMetricRow = {
   refunds?: number;
   ordersCount: number;
   unitsSold: number;
-  cogs: number;
-  grossProfit: number;
+  cogs: number | null;
+  grossProfit: number | null;
   grossMarginPct: number | null;
   expenses: number;
-  netProfit: number;
+  netProfit: number | null;
+  profitComplete: boolean;
   averageOrderValue: number;
 };
 
@@ -104,6 +108,7 @@ type LocationsSalesRow = Pick<
   | "net_sales"
   | "returned_quantity"
   | "cost_at_sale"
+  | "unit_cost"
 >;
 
 type ActiveLocationDrilldowns = {
@@ -148,14 +153,13 @@ type LoaderData = {
   revenueByStaff: RevenueBreakdownRow[];
   salesRows: LocationsSalesRow[];
   refundTransactions: OrderTransactionDbRow[];
-  hasGlobalExpenses: boolean;
   errors: string[];
   debugInfo?: Record<string, string | number | boolean | null | string[]>;
 };
 
 const ORDER_LINES_PAGE_SIZE = 1000;
 const LOCATION_ORDER_LINES_SELECT =
-  "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, staff_member_id, staff_member_name, staff_member_email, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source";
+  "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, returned_quantity, cost_at_sale, staff_member_id, staff_member_name, staff_member_email, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source";
 
 type OrderTransactionDbRow = {
   shopify_order_id: string;
@@ -391,16 +395,6 @@ function getYearKey(date: Date) {
   return String(date.getUTCFullYear());
 }
 
-function getDaysInMonth(date: Date) {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-}
-
-function getMonthKeyFromDateString(value: string | null) {
-  return value ? value.slice(0, 7) : null;
-}
-
 function buildStaffOptions(orderLines: OrderLineDbRow[]) {
   const options = new Map<string, string>();
   let hasUnknownStaff = false;
@@ -465,49 +459,6 @@ function filterOrderLines({
 
     return staffMatches && vendorMatches;
   });
-}
-
-function computeLocationExpenses({
-  expenses,
-  selectedDays,
-  startDate,
-  endDate,
-}: {
-  expenses: FixedExpenseDbRow[];
-  selectedDays: number;
-  startDate: string;
-  endDate: string;
-}) {
-  const totals = new Map<string, number>();
-  const rangeStart = parseDateOnlyUtc(startDate);
-  const rangeEndExclusive = addDays(parseDateOnlyUtc(endDate), 1);
-
-  for (
-    let current = new Date(rangeStart);
-    current < rangeEndExclusive;
-    current = addDays(current, 1)
-  ) {
-    const currentMonthKey = getMonthKey(current);
-    const daysInMonth = getDaysInMonth(current);
-
-    for (const expense of expenses) {
-      if (!expense.is_active || !expense.shopify_location_id) continue;
-
-      const expenseStartMonth = getMonthKeyFromDateString(expense.start_month);
-      const expenseEndMonth = getMonthKeyFromDateString(expense.end_month);
-
-      if (expenseStartMonth && currentMonthKey < expenseStartMonth) continue;
-      if (expenseEndMonth && currentMonthKey > expenseEndMonth) continue;
-
-      const dailyAmount = Number(expense.monthly_amount ?? 0) / daysInMonth;
-      totals.set(
-        expense.shopify_location_id,
-        (totals.get(expense.shopify_location_id) ?? 0) + dailyAmount,
-      );
-    }
-  }
-
-  return selectedDays > 0 ? totals : new Map<string, number>();
 }
 
 function getVendorDrilldownValue(row: LocationsSalesRow) {
@@ -601,19 +552,19 @@ function computeMetrics({
     const netSales = isFinancialMetricsV2
       ? rowsForLocation.reduce((sum, row) => sum + getLineNetSales(row), 0)
       : undefined;
-    const revenue = isFinancialMetricsV2
-      ? (netSales ?? 0)
-      : rowsForLocation.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
     const refunds = isFinancialMetricsV2
       ? (refundsByLocation.get(location.shopify_location_id) ?? 0)
       : undefined;
-    const cogs = rowsForLocation.reduce(
-      (sum, row) =>
-        sum +
-        (isFinancialMetricsV2 ? getLineCogsV2(row) : Number(row.cogs ?? 0)),
-      0,
-    );
-    const grossProfit = revenue - cogs;
+    const revenue = isFinancialMetricsV2
+      ? calculateNetSalesAfterCashRefunds({
+          lineNetSales: netSales ?? 0,
+          merchandiseReturns: returns ?? 0,
+          totalRefunds: refunds ?? 0,
+        })
+      : rowsForLocation.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+    const cogsSummary = summarizeCogs(rowsForLocation);
+    const cogs = cogsSummary.cogs;
+    const grossProfit = cogs === null ? null : revenue - cogs;
     const orderIds = new Set(
       rowsForLocation.map((row) => row.shopify_order_id).filter(Boolean),
     );
@@ -638,9 +589,13 @@ function computeMetrics({
       unitsSold,
       cogs,
       grossProfit,
-      grossMarginPct: revenue > 0 ? (grossProfit / revenue) * 100 : null,
+      grossMarginPct:
+        revenue > 0 && grossProfit !== null
+          ? (grossProfit / revenue) * 100
+          : null,
       expenses,
-      netProfit: grossProfit - expenses,
+      netProfit: grossProfit === null ? null : grossProfit - expenses,
+      profitComplete: cogsSummary.profitComplete,
       averageOrderValue: ordersCount > 0 ? revenue / ordersCount : 0,
     };
   });
@@ -658,12 +613,19 @@ function computeMetrics({
       refunds: sum.refunds + (row.refunds ?? 0),
       ordersCount: sum.ordersCount + row.ordersCount,
       unitsSold: sum.unitsSold + row.unitsSold,
-      cogs: sum.cogs + row.cogs,
-      grossProfit: sum.grossProfit + row.grossProfit,
+      cogs: sum.cogs === null || row.cogs === null ? null : sum.cogs + row.cogs,
+      grossProfit:
+        sum.grossProfit === null || row.grossProfit === null
+          ? null
+          : sum.grossProfit + row.grossProfit,
       grossMarginPct: null,
       expenses: sum.expenses + row.expenses,
-      netProfit: sum.netProfit + row.netProfit,
-      averageOrderValue: null,
+      netProfit:
+        sum.netProfit === null || row.netProfit === null
+          ? null
+          : sum.netProfit + row.netProfit,
+      profitComplete: sum.profitComplete && row.profitComplete,
+      averageOrderValue: 0,
     }),
     {
       revenue: 0,
@@ -675,12 +637,13 @@ function computeMetrics({
       refunds: 0,
       ordersCount: 0,
       unitsSold: 0,
-      cogs: 0,
-      grossProfit: 0,
+      cogs: 0 as number | null,
+      grossProfit: 0 as number | null,
       grossMarginPct: null as number | null,
       expenses: 0,
-      netProfit: 0,
-      averageOrderValue: null as number | null,
+      netProfit: 0 as number | null,
+      profitComplete: true,
+      averageOrderValue: 0,
     },
   );
 
@@ -689,7 +652,9 @@ function computeMetrics({
     totals: {
       ...totals,
       grossMarginPct:
-        totals.revenue > 0 ? (totals.grossProfit / totals.revenue) * 100 : null,
+        totals.revenue > 0 && totals.grossProfit !== null
+          ? (totals.grossProfit / totals.revenue) * 100
+          : null,
       averageOrderValue:
         totals.ordersCount > 0 ? totals.revenue / totals.ordersCount : 0,
     },
@@ -723,21 +688,22 @@ function computeGlobalKpis({
   const netSales = isFinancialMetricsV2
     ? orderLines.reduce((sum, row) => sum + getLineNetSales(row), 0)
     : undefined;
-  const revenue = isFinancialMetricsV2
-    ? (netSales ?? 0)
-    : orderLines.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
   const refunds = isFinancialMetricsV2
     ? Array.from(refundsByLocation.values()).reduce(
         (sum, value) => sum + value,
         0,
       )
     : undefined;
-  const cogs = orderLines.reduce(
-    (sum, row) =>
-      sum + (isFinancialMetricsV2 ? getLineCogsV2(row) : Number(row.cogs ?? 0)),
-    0,
-  );
-  const grossProfit = revenue - cogs;
+  const revenue = isFinancialMetricsV2
+    ? calculateNetSalesAfterCashRefunds({
+        lineNetSales: netSales ?? 0,
+        merchandiseReturns: returns ?? 0,
+        totalRefunds: refunds ?? 0,
+      })
+    : orderLines.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
+  const cogsSummary = summarizeCogs(orderLines);
+  const cogs = cogsSummary.cogs;
+  const grossProfit = cogs === null ? null : revenue - cogs;
   const orderIds = new Set(
     orderLines.map((row) => row.shopify_order_id).filter(Boolean),
   );
@@ -763,9 +729,13 @@ function computeGlobalKpis({
     unitsSold,
     cogs,
     grossProfit,
-    grossMarginPct: revenue > 0 ? (grossProfit / revenue) * 100 : null,
+    grossMarginPct:
+      revenue > 0 && grossProfit !== null
+        ? (grossProfit / revenue) * 100
+        : null,
     expenses,
-    netProfit: grossProfit - expenses,
+    netProfit: grossProfit === null ? null : grossProfit - expenses,
+    profitComplete: cogsSummary.profitComplete,
     averageOrderValue: ordersCount > 0 ? revenue / ordersCount : 0,
   };
 }
@@ -1215,19 +1185,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     revenue: isFinancialMetricsV2
       ? getLineNetSales(row)
       : Number(row.revenue ?? 0),
-    cogs: isFinancialMetricsV2
-      ? getLineCogsV2(row)
-      : row.cogs === null
-        ? null
-        : Number(row.cogs ?? 0),
+    cogs: getLineCogsV2(row),
     gross_sales: isFinancialMetricsV2 ? getLineGrossSales(row) : undefined,
     discounts: isFinancialMetricsV2 ? getLineDiscounts(row) : undefined,
     returns: isFinancialMetricsV2 ? getLineReturns(row) : undefined,
     net_sales: isFinancialMetricsV2 ? getLineNetSales(row) : undefined,
-    returned_quantity: isFinancialMetricsV2
-      ? getLineReturnedQuantity(row)
-      : undefined,
-    cost_at_sale: isFinancialMetricsV2 ? row.cost_at_sale : undefined,
+    returned_quantity: getLineReturnedQuantity(row),
+    cost_at_sale: row.cost_at_sale,
+    unit_cost: row.unit_cost,
   }));
   const orderIdsForRefunds = Array.from(
     new Set(
@@ -1253,17 +1218,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
         refundTransactions: refundTransactionsResult.rows,
       })
     : new Map<string, number>();
-  const locationSpecificExpenses = expenses.filter(
-    (expense) =>
-      expense.shopify_location_id &&
-      selectedLocationIds.includes(expense.shopify_location_id),
-  );
-  const hasGlobalExpenses = expenses.some(
-    (expense) => !expense.shopify_location_id,
-  );
-  const expensesByLocation = computeLocationExpenses({
-    expenses: locationSpecificExpenses,
-    selectedDays,
+  const expensesByLocation = allocateExpensesByLocation({
+    expenses,
+    activeLocationIds: allLocations.map(
+      (location) => location.shopify_location_id,
+    ),
     startDate,
     endDate,
   });
@@ -1368,7 +1327,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     revenueByStaff,
     salesRows,
     refundTransactions: refundTransactionsResult.rows,
-    hasGlobalExpenses,
     errors,
     debugInfo,
   } satisfies LoaderData;
@@ -1395,12 +1353,16 @@ function KpiGrid({
         },
         {
           label: "Gross profit",
-          value: formatCurrency(kpis.grossProfit),
+          value: kpis.profitComplete
+            ? formatCurrency(kpis.grossProfit ?? 0)
+            : "Profit unavailable",
           title: "Gross Profit: Net Sales minus COGS.",
         },
         {
           label: "Gross margin",
-          value: formatPercent(kpis.grossMarginPct),
+          value: kpis.profitComplete
+            ? formatPercent(kpis.grossMarginPct)
+            : "Profit unavailable",
           title: "Margin: Gross Profit divided by Net Sales.",
         },
         {
@@ -1430,22 +1392,33 @@ function KpiGrid({
         { label: "Units sold", value: formatNumber(kpis.unitsSold) },
         {
           label: "COGS",
-          value: formatCurrency(kpis.cogs),
+          value: kpis.profitComplete
+            ? formatCurrency(kpis.cogs ?? 0)
+            : "Incomplete",
           title:
             "COGS: cost of goods sold from synced Shopify inventory item cost data where available.",
         },
         {
           label: "Gross profit",
-          value: formatCurrency(kpis.grossProfit),
+          value: kpis.profitComplete
+            ? formatCurrency(kpis.grossProfit ?? 0)
+            : "Profit unavailable",
           title: "Gross Profit: Net Sales minus COGS.",
         },
         {
           label: "Gross margin",
-          value: formatPercent(kpis.grossMarginPct),
+          value: kpis.profitComplete
+            ? formatPercent(kpis.grossMarginPct)
+            : "Profit unavailable",
           title: "Margin: Gross Profit divided by Net Sales.",
         },
         { label: "Expenses", value: formatCurrency(kpis.expenses) },
-        { label: "Net profit", value: formatCurrency(kpis.netProfit) },
+        {
+          label: "Net profit",
+          value: kpis.profitComplete
+            ? formatCurrency(kpis.netProfit ?? 0)
+            : "Profit unavailable",
+        },
         {
           label: "AOV",
           value: formatCurrency(kpis.averageOrderValue),
@@ -1483,6 +1456,11 @@ function KpiGrid({
           </div>
         ))}
       </section>
+      {!kpis.profitComplete ? (
+        <p style={{ color: "#616161", fontSize: 13, margin: "-8px 0 20px" }}>
+          Add product costs to calculate profit.
+        </p>
+      ) : null}
       {isFinancialMetricsV2 ? (
         <details
           style={{
@@ -2030,7 +2008,7 @@ function LocationTable({
                     >
                       <div style={{ display: "grid", gap: 4 }}>
                         <strong>{row.locationName}</strong>
-                        {row.netProfit < 0 ? (
+                        {row.netProfit !== null && row.netProfit < 0 ? (
                           <StatusBadge variant="warning">
                             Negative net profit
                           </StatusBadge>
@@ -2107,7 +2085,9 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.cogs)}
+                      {row.profitComplete
+                        ? formatCurrency(row.cogs ?? 0)
+                        : "Incomplete"}
                     </td>
                     <td
                       style={{
@@ -2115,7 +2095,9 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.grossProfit)}
+                      {row.profitComplete
+                        ? formatCurrency(row.grossProfit ?? 0)
+                        : "Profit unavailable"}
                     </td>
                     <td
                       style={{
@@ -2139,7 +2121,9 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.netProfit)}
+                      {row.profitComplete
+                        ? formatCurrency(row.netProfit ?? 0)
+                        : "Profit unavailable"}
                     </td>
                     <td
                       style={{
@@ -2183,7 +2167,7 @@ function LocationTable({
                     >
                       <div style={{ display: "grid", gap: 4 }}>
                         <strong>{row.locationName}</strong>
-                        {row.netProfit < 0 ? (
+                        {row.netProfit !== null && row.netProfit < 0 ? (
                           <StatusBadge variant="warning">
                             Negative net profit
                           </StatusBadge>
@@ -2220,7 +2204,9 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.cogs)}
+                      {row.profitComplete
+                        ? formatCurrency(row.cogs ?? 0)
+                        : "Incomplete"}
                     </td>
                     <td
                       style={{
@@ -2228,7 +2214,9 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.grossProfit)}
+                      {row.profitComplete
+                        ? formatCurrency(row.grossProfit ?? 0)
+                        : "Profit unavailable"}
                     </td>
                     <td
                       style={{
@@ -2252,7 +2240,9 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.netProfit)}
+                      {row.profitComplete
+                        ? formatCurrency(row.netProfit ?? 0)
+                        : "Profit unavailable"}
                     </td>
                     <td
                       style={{
@@ -2791,7 +2781,6 @@ export default function LocationsPage() {
     salesRows,
     refundTransactions,
     period,
-    hasGlobalExpenses,
     errors,
     debugInfo,
   } = useLoaderData<LoaderData>();
@@ -3182,9 +3171,8 @@ export default function LocationsPage() {
         </section>
 
         <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
-          Expense estimates include location-specific active fixed expenses.
-          Global/unassigned expenses are not allocated
-          {hasGlobalExpenses ? " in this view." : "."}
+          Expenses include active location-specific amounts. Global expenses are
+          shared equally across all active locations.
           {financialMetricsVersion === "v2"
             ? " Refunds are order-level cash movements allocated to locations from matching order lines."
             : ""}

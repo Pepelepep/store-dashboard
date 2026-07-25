@@ -1,4 +1,6 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import { calculateRemainingLineCogs } from "../financial/cogs";
+import { calculateNetSalesAfterCashRefunds } from "../financial/net-sales";
 import { upsertPosStaffIdentityAliasesFromOrderLines } from "../staff-identity/staff-identity.server";
 import { hasConfiguredScope } from "../shopify/scopes.server";
 
@@ -929,47 +931,35 @@ function buildOrderQuery({
   return filters.join(" ");
 }
 
-function isCustomOrManualLine(lineItem: OrderLineItemNode) {
-  return !lineItem.variant?.id;
-}
-
 function getCostInfo({
-  lineItem,
   variantCost,
   revenue,
   quantity,
+  returnedQuantity = 0,
 }: {
-  lineItem: OrderLineItemNode;
   variantCost?: VariantCostRow;
   revenue: number;
   quantity: number;
+  returnedQuantity?: number;
 }) {
   const unitCost = variantCost?.unit_cost ?? null;
-
-  if (unitCost !== null && unitCost > 0) {
-    const cogs = unitCost * quantity;
+  if (unitCost !== null) {
+    const cogs = calculateRemainingLineCogs({
+      quantity,
+      returned_quantity: returnedQuantity,
+      unit_cost: unitCost,
+    });
 
     return {
       unitCost,
-      cogs,
-      grossProfit: revenue - cogs,
+      cogs: cogs ?? 0,
+      grossProfit: revenue - (cogs ?? 0),
       costSource: "SHOPIFY_UNIT_COST",
     };
   }
 
-  if (isCustomOrManualLine(lineItem) && revenue > 0) {
-    const cogs = revenue * 0.5;
-
-    return {
-      unitCost: null,
-      cogs,
-      grossProfit: revenue - cogs,
-      costSource: "FALLBACK_50_PERCENT_CUSTOM_SALE",
-    };
-  }
-
   return {
-    unitCost: unitCost ?? null,
+    unitCost: null,
     cogs: null,
     grossProfit: null,
     costSource: "MISSING_COST",
@@ -1260,7 +1250,12 @@ function getOrderFinancials({
   const discountCodes = getOrderDiscountCodes(order);
   const discountReconciliationDelta =
     lineDiscounts + shippingDiscounts - discounts;
-  const netSales = grossSales - discounts - returns;
+  const refundTotal = getOrderRefundTotal({ order, transactions });
+  const netSales = calculateNetSalesAfterCashRefunds({
+    lineNetSales: grossSales - discounts - returns,
+    merchandiseReturns: returns,
+    totalRefunds: refundTotal,
+  });
   const taxes = getShopMoneyAmount(order.currentTotalTaxSet);
   const shipping = getShopMoneyAmount(order.currentShippingPriceSet);
 
@@ -1284,7 +1279,7 @@ function getOrderFinancials({
       discountReconciliationDelta,
       returns,
       netSales,
-      refunds: getOrderRefundTotal({ order, transactions }),
+      refunds: refundTotal,
       taxes,
       shipping,
       totalSales: netSales + taxes + shipping,
@@ -4237,21 +4232,22 @@ async function upsertOrderNodes({
         lineItem.discountedUnitPriceSet?.shopMoney?.amount,
       );
       const revenue = unitPrice * lineItem.quantity;
-      const variantCost =
-        (variantId ? costByVariantId.get(variantId) : undefined) ??
-        (sku ? costBySku.get(sku) : undefined);
+      const variantCost = variantId
+        ? (costByVariantId.get(variantId) ??
+          (sku ? costBySku.get(sku) : undefined))
+        : undefined;
+      const lineFinancials = lineFinancialsByLineItemId.get(lineItem.id);
       const costInfo = getCostInfo({
-        lineItem,
         variantCost,
-        revenue,
+        revenue: lineFinancials?.netSales ?? revenue,
         quantity: lineItem.quantity,
+        returnedQuantity: lineFinancials?.returnedQuantity,
       });
       const posAttribution = getPosLineItemAttribution(lineItem);
       const staffAttribution = posAttribution.legacyStaffAttribution
         .staffMemberId
         ? posAttribution.legacyStaffAttribution
         : orderStaff;
-      const lineFinancials = lineFinancialsByLineItemId.get(lineItem.id);
       const existingCostAtSale = existingCostAtSaleByLineItemId.get(
         lineItem.id,
       );
@@ -5129,12 +5125,12 @@ export async function syncOrders({
 
             const revenue = unitPrice * lineItem.quantity;
 
-            const variantCost =
-              (variantId ? costByVariantId.get(variantId) : undefined) ??
-              (sku ? costBySku.get(sku) : undefined);
+            const variantCost = variantId
+              ? (costByVariantId.get(variantId) ??
+                (sku ? costBySku.get(sku) : undefined))
+              : undefined;
 
             const costInfo = getCostInfo({
-              lineItem,
               variantCost,
               revenue,
               quantity: lineItem.quantity,

@@ -530,7 +530,10 @@ export default function AdminExpensesPage() {
                       </option>
                     ))}
                   </select>
-                  <HelperText>Global expenses are shared across locations.</HelperText>
+                  <HelperText>
+                    Global expenses are shared equally across all active
+                    locations.
+                  </HelperText>
                 </label>
               </div>
             </div>
