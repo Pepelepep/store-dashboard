@@ -5,6 +5,9 @@ export type CogsLine = {
   unit_cost?: number | null;
 };
 
+export const COGS_INCOMPLETE_WARNING =
+  "Some product costs are missing. Profit metrics use available costs only and may be overstated.";
+
 function finiteNumber(value: number | null | undefined) {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
@@ -38,22 +41,43 @@ export function calculateRemainingLineCogs(line: CogsLine) {
 
 export function summarizeCogs(lines: CogsLine[]) {
   let knownCogs = 0;
-  let missingCostLineCount = 0;
+  let missingCogsLineCount = 0;
+  let knownCogsLineCount = 0;
 
   for (const line of lines) {
     const lineCogs = calculateRemainingLineCogs(line);
 
     if (lineCogs === null) {
-      missingCostLineCount += 1;
+      missingCogsLineCount += 1;
     } else {
       knownCogs += lineCogs;
+      knownCogsLineCount += 1;
     }
   }
 
   return {
-    cogs: missingCostLineCount > 0 ? null : knownCogs,
+    cogs: knownCogs,
     knownCogs,
-    missingCostLineCount,
-    profitComplete: missingCostLineCount === 0,
+    cogsIncomplete: missingCogsLineCount > 0,
+    missingCogsLineCount,
+    knownCogsLineCount,
+  };
+}
+
+export function calculateProvisionalProfit({
+  netSales,
+  knownCogs,
+  expenses,
+}: {
+  netSales: number;
+  knownCogs: number;
+  expenses: number | null;
+}) {
+  const grossProfit = netSales - knownCogs;
+
+  return {
+    grossProfit,
+    grossMarginPct: netSales > 0 ? (grossProfit / netSales) * 100 : null,
+    netProfit: expenses === null ? null : grossProfit - expenses,
   };
 }
