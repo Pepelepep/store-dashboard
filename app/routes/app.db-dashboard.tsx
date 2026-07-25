@@ -11,6 +11,10 @@ import {
 } from "../lib/shop/shop-initialization.server";
 import { fetchStaffIdentityAliasesForOrderLines } from "../lib/staff-identity/staff-identity.server";
 import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
+import {
+  getSyncFailureBannerState,
+  getUnresolvedSyncFailureState,
+} from "../lib/sync/sync-failure-resolution";
 import { ActiveDrilldownBadge } from "../components/dashboard/ActiveDrilldownBadge";
 import { BestSellersCard } from "../components/dashboard/BestSellersCard";
 import { DashboardHeader } from "../components/dashboard/DashboardHeader";
@@ -302,22 +306,39 @@ export async function loader({ request }: LoaderFunctionArgs) {
       .limit(1)
       .maybeSingle();
 
-  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { count: recentSyncFailureCount, error: recentSyncFailureError } =
-    await supabase
-      .from("sync_runs")
-      .select("*", { count: "exact", head: true })
-      .eq("shop_domain", session.shop)
-      .eq("status", "error")
-      .gte("started_at", since24h);
-
   const [
+    syncRunsResult,
+    syncJobsResult,
+    webhookFailuresResult,
     orderLinesResult,
     inventoryResult,
     variantsResult,
     productsResult,
     expensesResult,
   ] = await Promise.all([
+    supabase
+      .from("sync_runs")
+      .select("id, sync_type, status, started_at, finished_at, details")
+      .eq("shop_domain", session.shop)
+      .in("status", ["success", "error"])
+      .order("finished_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("sync_jobs")
+      .select(
+        "id, job_type, status, current_step, created_at, started_at, updated_at, finished_at, details",
+      )
+      .eq("shop_domain", session.shop)
+      .in("status", ["success", "error"])
+      .order("updated_at", { ascending: false })
+      .limit(500),
+    supabase
+      .from("webhook_events")
+      .select("id, topic, status, attempt_count, received_at, processed_at")
+      .eq("shop_domain", session.shop)
+      .eq("status", "error")
+      .order("processed_at", { ascending: false })
+      .limit(500),
     selectedLocationId
       ? supabase
           .from("order_lines")
@@ -362,7 +383,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (productsResult.error) errors.push(productsResult.error.message);
   if (expensesResult.error) errors.push(expensesResult.error.message);
   if (lastSuccessfulSyncError) errors.push(lastSuccessfulSyncError.message);
-  if (recentSyncFailureError) errors.push(recentSyncFailureError.message);
+  if (syncRunsResult.error) errors.push(syncRunsResult.error.message);
+  if (syncJobsResult.error) errors.push(syncJobsResult.error.message);
+  if (webhookFailuresResult.error)
+    errors.push(webhookFailuresResult.error.message);
+
+  const syncFailureState = getUnresolvedSyncFailureState({
+    runs: syncRunsResult.data ?? [],
+    jobs: syncJobsResult.data ?? [],
+    webhookEvents: webhookFailuresResult.data ?? [],
+  });
+  const syncFailureBanner = getSyncFailureBannerState({
+    resolution: syncFailureState,
+    canAdmin: permissions.isAdmin,
+  });
 
   const rawOrderLines = (orderLinesResult.data ??
     []) as unknown as OrderLineDbRow[];
@@ -605,7 +639,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       orderLinesForSelectedPeriod: orderLines.length,
       productsCount: products.length,
       inventoryRowsCount: inventoryRows.length,
-      hasRecentSyncFailure: (recentSyncFailureCount ?? 0) > 0,
+      syncFailureBanner,
       noAssignedLocations,
     },
     selectedDays,
@@ -750,6 +784,13 @@ export default function DbDashboardPage() {
   const syncCenterCta = readiness.canAdmin
     ? { to: getDataSyncPath(location.search), label: "Open Sync Status" }
     : undefined;
+  const reconnectCta = readiness.syncFailureBanner.showReconnectAction
+    ? {
+        to: `${location.pathname}${location.search}`,
+        label: "Reconnect Shopify",
+        reloadDocument: true,
+      }
+    : undefined;
   const isFirstRunPreparing =
     readiness.activeLocationsCount === 0 ||
     (!lastSuccessfulSync && readiness.orderLinesForSelectedPeriod === 0);
@@ -847,16 +888,12 @@ export default function DbDashboardPage() {
           />
         ) : null}
 
-        {!readiness.noAssignedLocations && readiness.hasRecentSyncFailure ? (
+        {!readiness.noAssignedLocations &&
+        readiness.syncFailureBanner.kind !== "hidden" ? (
           <PageNotice
-            title="Recent sync failures need review."
-            message="Some sync work failed in the last 24 hours, so reports may be incomplete until an admin reviews sync health."
-            bullets={[
-              readiness.canAdmin
-                ? "Open Sync Status to review failed sync runs and recent jobs."
-                : "Ask an app admin to review sync status if reports look incomplete.",
-            ]}
-            cta={syncCenterCta}
+            title={readiness.syncFailureBanner.title}
+            message={readiness.syncFailureBanner.message}
+            cta={reconnectCta}
             tone="warning"
           />
         ) : null}

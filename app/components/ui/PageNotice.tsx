@@ -60,6 +60,7 @@ export function PageNotice({
   cta?: {
     to: string;
     label: string;
+    reloadDocument?: boolean;
   };
   tone?: PageNoticeTone;
   children?: ReactNode;
@@ -137,7 +138,11 @@ export function PageNotice({
 
         {cta ? (
           <div>
-            <AppButtonLink to={cta.to} variant="primary">
+            <AppButtonLink
+              to={cta.to}
+              variant="primary"
+              reloadDocument={cta.reloadDocument}
+            >
               {cta.label}
             </AppButtonLink>
           </div>

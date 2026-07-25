@@ -226,7 +226,17 @@ export type DashboardLoaderData = {
     orderLinesForSelectedPeriod: number;
     productsCount: number;
     inventoryRowsCount: number;
-    hasRecentSyncFailure: boolean;
+    syncFailureBanner:
+      | {
+          kind: "hidden";
+          showReconnectAction: false;
+        }
+      | {
+          kind: "authentication_required" | "delayed_data";
+          title: string;
+          message: string;
+          showReconnectAction: boolean;
+        };
     noAssignedLocations: boolean;
   };
   selectedDays: number;
