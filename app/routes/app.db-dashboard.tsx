@@ -54,6 +54,8 @@ import {
   UNKNOWN_STAFF_FILTER_VALUE,
 } from "../lib/dashboard/dashboard-metrics";
 import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
+import { summarizeCogs } from "../lib/financial/cogs";
+import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
 import type {
   ActiveDrilldowns,
   DashboardLoaderData as LoaderData,
@@ -268,7 +270,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const orderLinesSelect = isFinancialMetricsV2
     ? "*"
-    : "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name";
+    : "order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, returned_quantity, cost_at_sale, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name";
 
   const { data: locationsData, error: locationsError } = await supabase
     .from("locations")
@@ -455,7 +457,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedStaff,
     selectedVendor,
   });
-  const revenue = isFinancialMetricsV2
+  let revenue = isFinancialMetricsV2
     ? filteredOrderLines.reduce((sum, row) => sum + getLineNetSales(row), 0)
     : filteredOrderLines.reduce(
         (sum, row) => sum + Number(row.revenue ?? 0),
@@ -486,16 +488,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
           .map((row) => row.shopify_order_id),
       ).size
     : 0;
-  const cogs = isFinancialMetricsV2
-    ? filteredOrderLines.reduce((sum, row) => sum + getLineCogsV2(row), 0)
-    : filteredOrderLines.reduce((sum, row) => sum + Number(row.cogs ?? 0), 0);
-  const grossProfit = isFinancialMetricsV2
-    ? revenue - cogs
-    : filteredOrderLines.reduce(
-        (sum, row) => sum + Number(row.gross_profit ?? 0),
-        0,
-      );
-  const grossMarginPct = revenue > 0 ? (grossProfit / revenue) * 100 : null;
+  const cogsSummary = summarizeCogs(filteredOrderLines);
+  const cogs = cogsSummary.cogs;
+  let grossProfit = cogs === null ? null : revenue - cogs;
+  let grossMarginPct =
+    revenue > 0 && grossProfit !== null ? (grossProfit / revenue) * 100 : null;
   const uniqueOrders = new Set(
     filteredOrderLines.map((row) => row.shopify_order_id),
   );
@@ -515,6 +512,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     (sum, row) => sum + Number(row.amount ?? 0),
     0,
   );
+  if (isFinancialMetricsV2) {
+    revenue = calculateNetSalesAfterCashRefunds({
+      lineNetSales: revenue,
+      merchandiseReturns: returns,
+      totalRefunds: refunds,
+    });
+    grossProfit = cogs === null ? null : revenue - cogs;
+    grossMarginPct =
+      revenue > 0 && grossProfit !== null
+        ? (grossProfit / revenue) * 100
+        : null;
+  }
   const refundTransactionsCount = refundTransactionsResult.rows.length;
   const refundedOrdersCount = new Set(
     refundTransactionsResult.rows.map((row) => row.shopify_order_id),
@@ -538,10 +547,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedDays,
     startDate,
     endDate,
-    activeLocationCount: locations.length,
+    activeLocationIds: allLocations.map(
+      (location) => location.shopify_location_id,
+    ),
   });
   const netProfit =
-    expensesToDate === null ? null : grossProfit - Number(expensesToDate);
+    expensesToDate === null || grossProfit === null
+      ? null
+      : grossProfit - Number(expensesToDate);
   const stockAlerts = computeStockAlerts({
     inventoryRows: activeInventoryRows,
     orderLines,
@@ -563,16 +576,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       revenue: isFinancialMetricsV2
         ? getLineNetSales(row)
         : Number(row.revenue ?? 0),
-      cogs: isFinancialMetricsV2
-        ? getLineCogsV2(row)
-        : row.cogs === null
+      cogs: getLineCogsV2(row),
+      gross_profit:
+        getLineCogsV2(row) === null
           ? null
-          : Number(row.cogs ?? 0),
-      gross_profit: isFinancialMetricsV2
-        ? getLineNetSales(row) - getLineCogsV2(row)
-        : row.gross_profit === null
-          ? null
-          : Number(row.gross_profit ?? 0),
+          : (isFinancialMetricsV2
+              ? getLineNetSales(row)
+              : Number(row.revenue ?? 0)) - Number(getLineCogsV2(row)),
       gross_sales: isFinancialMetricsV2 ? getLineGrossSales(row) : undefined,
       discounts: isFinancialMetricsV2 ? getLineDiscounts(row) : undefined,
       returns: isFinancialMetricsV2 ? getLineReturns(row) : undefined,
@@ -658,6 +668,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       cogs,
       grossProfit,
       grossMarginPct,
+      missingCostLineCount: cogsSummary.missingCostLineCount,
+      profitComplete: cogsSummary.profitComplete,
       ordersCount,
       unitsSold,
       averageOrderValue,

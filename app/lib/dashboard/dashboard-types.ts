@@ -252,9 +252,11 @@ export type DashboardLoaderData = {
     returnedQuantity?: number;
     returnedOrdersCount?: number;
     refundAllocationWarning?: string | null;
-    cogs: number;
-    grossProfit: number;
+    cogs: number | null;
+    grossProfit: number | null;
     grossMarginPct: number | null;
+    missingCostLineCount: number;
+    profitComplete: boolean;
     ordersCount: number;
     unitsSold: number;
     averageOrderValue: number;

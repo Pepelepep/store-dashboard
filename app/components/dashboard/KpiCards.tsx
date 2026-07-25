@@ -154,15 +154,27 @@ export function KpiCards({
       />
       <KpiCard
         title="COGS"
-        value={formatCurrency(kpis.cogs)}
-        subtitle="Synced product costs"
+        value={kpis.profitComplete ? formatCurrency(kpis.cogs ?? 0) : "Incomplete"}
+        subtitle={
+          kpis.profitComplete
+            ? "Synced product costs"
+            : "Add product costs to calculate profit."
+        }
         explanation={metricDefinitions.cogs}
       />
       <KpiCard
         title="Gross profit"
-        value={formatCurrency(kpis.grossProfit)}
+        value={
+          kpis.profitComplete
+            ? formatCurrency(kpis.grossProfit ?? 0)
+            : "Profit unavailable"
+        }
         subtitle={
-          isFinancialMetricsV2 ? "Net Sales minus COGS" : "Revenue minus COGS"
+          kpis.profitComplete
+            ? isFinancialMetricsV2
+              ? "Net Sales minus COGS"
+              : "Revenue minus COGS"
+            : "Add product costs to calculate profit."
         }
         explanation={
           isFinancialMetricsV2
@@ -172,11 +184,17 @@ export function KpiCards({
       />
       <KpiCard
         title="Gross margin"
-        value={formatPercent(kpis.grossMarginPct)}
+        value={
+          kpis.profitComplete
+            ? formatPercent(kpis.grossMarginPct)
+            : "Profit unavailable"
+        }
         subtitle={
-          isFinancialMetricsV2
-            ? "Gross profit / Net Sales"
-            : "Gross profit / revenue"
+          kpis.profitComplete
+            ? isFinancialMetricsV2
+              ? "Gross profit / Net Sales"
+              : "Gross profit / revenue"
+            : "Add product costs to calculate profit."
         }
         explanation={
           isFinancialMetricsV2
@@ -197,11 +215,17 @@ export function KpiCards({
       <KpiCard
         title="Net profit"
         value={
-          kpis.netProfit === null
+          !kpis.profitComplete
+            ? "Profit unavailable"
+            : kpis.netProfit === null
             ? "Not available"
             : formatCurrency(kpis.netProfit)
         }
-        subtitle="Gross profit minus expenses"
+        subtitle={
+          kpis.profitComplete
+            ? "Gross profit minus expenses"
+            : "Add product costs to calculate profit."
+        }
         explanation="Gross profit minus configured fixed expenses."
       />
       </section>
