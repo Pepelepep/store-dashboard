@@ -54,7 +54,10 @@ import {
   UNKNOWN_STAFF_FILTER_VALUE,
 } from "../lib/dashboard/dashboard-metrics";
 import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
-import { summarizeCogs } from "../lib/financial/cogs";
+import {
+  calculateProvisionalProfit,
+  summarizeCogs,
+} from "../lib/financial/cogs";
 import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
 import type {
   ActiveDrilldowns,
@@ -490,9 +493,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     : 0;
   const cogsSummary = summarizeCogs(filteredOrderLines);
   const cogs = cogsSummary.cogs;
-  let grossProfit = cogs === null ? null : revenue - cogs;
-  let grossMarginPct =
-    revenue > 0 && grossProfit !== null ? (grossProfit / revenue) * 100 : null;
   const uniqueOrders = new Set(
     filteredOrderLines.map((row) => row.shopify_order_id),
   );
@@ -518,11 +518,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       merchandiseReturns: returns,
       totalRefunds: refunds,
     });
-    grossProfit = cogs === null ? null : revenue - cogs;
-    grossMarginPct =
-      revenue > 0 && grossProfit !== null
-        ? (grossProfit / revenue) * 100
-        : null;
   }
   const refundTransactionsCount = refundTransactionsResult.rows.length;
   const refundedOrdersCount = new Set(
@@ -551,10 +546,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       (location) => location.shopify_location_id,
     ),
   });
-  const netProfit =
-    expensesToDate === null || grossProfit === null
-      ? null
-      : grossProfit - Number(expensesToDate);
+  const { grossProfit, grossMarginPct, netProfit } =
+    calculateProvisionalProfit({
+      netSales: revenue,
+      knownCogs: cogs,
+      expenses: expensesToDate,
+    });
   const stockAlerts = computeStockAlerts({
     inventoryRows: activeInventoryRows,
     orderLines,
@@ -668,8 +665,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       cogs,
       grossProfit,
       grossMarginPct,
-      missingCostLineCount: cogsSummary.missingCostLineCount,
-      profitComplete: cogsSummary.profitComplete,
+      cogsIncomplete: cogsSummary.cogsIncomplete,
+      missingCogsLineCount: cogsSummary.missingCogsLineCount,
+      knownCogsLineCount: cogsSummary.knownCogsLineCount,
       ordersCount,
       unitsSold,
       averageOrderValue,

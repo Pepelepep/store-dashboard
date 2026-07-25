@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { getDataSyncPath } from "../app/lib/navigation/sync-status.ts";
@@ -13,7 +14,9 @@ import {
   SYNC_FAILURE_WARNING_THRESHOLD_MS,
 } from "../app/lib/sync/sync-failure-resolution.ts";
 import {
+  calculateProvisionalProfit,
   calculateRemainingLineCogs,
+  COGS_INCOMPLETE_WARNING,
   summarizeCogs,
 } from "../app/lib/financial/cogs.ts";
 import { allocateExpensesByLocation } from "../app/lib/financial/expense-allocation.ts";
@@ -509,16 +512,124 @@ test("cash-only refund does not reverse product COGS", () => {
   );
 });
 
-test("one missing COGS line makes aggregate profit incomplete", () => {
+test("some missing COGS preserves known totals and completeness metadata", () => {
   const result = summarizeCogs([
     { quantity: 1, unit_cost: 12 },
     { quantity: 1, unit_cost: null },
   ]);
+  const profit = calculateProvisionalProfit({
+    netSales: 100,
+    knownCogs: result.cogs,
+    expenses: 10,
+  });
 
-  assert.equal(result.cogs, null);
+  assert.equal(result.cogs, 12);
   assert.equal(result.knownCogs, 12);
-  assert.equal(result.missingCostLineCount, 1);
-  assert.equal(result.profitComplete, false);
+  assert.equal(result.missingCogsLineCount, 1);
+  assert.equal(result.knownCogsLineCount, 1);
+  assert.equal(result.cogsIncomplete, true);
+  assert.deepEqual(profit, {
+    grossProfit: 88,
+    grossMarginPct: 88,
+    netProfit: 78,
+  });
+});
+
+test("all known COGS returns exact totals without an incomplete state", () => {
+  const result = summarizeCogs([
+    { quantity: 2, unit_cost: 10 },
+    { quantity: 1, unit_cost: 5 },
+  ]);
+
+  assert.equal(result.cogs, 25);
+  assert.equal(result.missingCogsLineCount, 0);
+  assert.equal(result.knownCogsLineCount, 2);
+  assert.equal(result.cogsIncomplete, false);
+});
+
+test("all missing COGS displays zero known COGS with numeric provisional profit", () => {
+  const result = summarizeCogs([
+    { quantity: 1, unit_cost: null },
+    { quantity: 2, cost_at_sale: null, unit_cost: null },
+  ]);
+  const profit = calculateProvisionalProfit({
+    netSales: 1000,
+    knownCogs: result.cogs,
+    expenses: 100,
+  });
+
+  assert.equal(result.cogs, 0);
+  assert.equal(result.missingCogsLineCount, 2);
+  assert.equal(result.knownCogsLineCount, 0);
+  assert.equal(result.cogsIncomplete, true);
+  assert.deepEqual(profit, {
+    grossProfit: 1000,
+    grossMarginPct: 100,
+    netProfit: 900,
+  });
+});
+
+test("an explicit real zero cost is known and complete", () => {
+  const result = summarizeCogs([{ quantity: 3, unit_cost: 0 }]);
+
+  assert.equal(result.cogs, 0);
+  assert.equal(result.missingCogsLineCount, 0);
+  assert.equal(result.knownCogsLineCount, 1);
+  assert.equal(result.cogsIncomplete, false);
+});
+
+test("provisional profit keeps margin safe for zero and negative Net Sales", () => {
+  assert.equal(
+    calculateProvisionalProfit({
+      netSales: 0,
+      knownCogs: 10,
+      expenses: 0,
+    }).grossMarginPct,
+    null,
+  );
+  assert.equal(
+    calculateProvisionalProfit({
+      netSales: -10,
+      knownCogs: 10,
+      expenses: 0,
+    }).grossMarginPct,
+    null,
+  );
+});
+
+test("dashboard sections show one incomplete-cost warning without unavailable profit copy", () => {
+  const profitDashboard = readFileSync(
+    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+    "utf8",
+  );
+  const dashboardCards = readFileSync(
+    new URL("../app/components/dashboard/KpiCards.tsx", import.meta.url),
+    "utf8",
+  );
+  const locationPerformance = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(
+    COGS_INCOMPLETE_WARNING,
+    "Some product costs are missing. Profit metrics use available costs only and may be overstated.",
+  );
+  assert.equal(
+    dashboardCards.match(/\{COGS_INCOMPLETE_WARNING\}/g)?.length,
+    1,
+  );
+  assert.equal(
+    locationPerformance.match(/\{COGS_INCOMPLETE_WARNING\}/g)?.length,
+    1,
+  );
+  assert.equal(dashboardCards.includes("Profit unavailable"), false);
+  assert.equal(locationPerformance.includes("Profit unavailable"), false);
+  assert.equal(profitDashboard.includes("calculateProvisionalProfit"), true);
+  assert.equal(
+    locationPerformance.includes("calculateProvisionalProfit"),
+    true,
+  );
 });
 
 function expense(overrides = {}) {

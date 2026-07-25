@@ -5,6 +5,7 @@ import {
   formatNumber,
   formatPercent,
 } from "../../lib/dashboard/dashboard-metrics";
+import { COGS_INCOMPLETE_WARNING } from "../../lib/financial/cogs";
 import type {
   DashboardLoaderData,
   FinancialMetricsVersion,
@@ -154,27 +155,25 @@ export function KpiCards({
       />
       <KpiCard
         title="COGS"
-        value={kpis.profitComplete ? formatCurrency(kpis.cogs ?? 0) : "Incomplete"}
+        value={formatCurrency(kpis.cogs)}
         subtitle={
-          kpis.profitComplete
-            ? "Synced product costs"
-            : "Add product costs to calculate profit."
+          kpis.cogsIncomplete
+            ? `Partial · ${formatNumber(kpis.missingCogsLineCount)} ${
+                kpis.missingCogsLineCount === 1 ? "product" : "products"
+              } missing costs`
+            : "Synced product costs"
         }
         explanation={metricDefinitions.cogs}
       />
       <KpiCard
         title="Gross profit"
-        value={
-          kpis.profitComplete
-            ? formatCurrency(kpis.grossProfit ?? 0)
-            : "Profit unavailable"
-        }
+        value={formatCurrency(kpis.grossProfit)}
         subtitle={
-          kpis.profitComplete
-            ? isFinancialMetricsV2
+          kpis.cogsIncomplete
+            ? "Based on available costs"
+            : isFinancialMetricsV2
               ? "Net Sales minus COGS"
               : "Revenue minus COGS"
-            : "Add product costs to calculate profit."
         }
         explanation={
           isFinancialMetricsV2
@@ -184,17 +183,13 @@ export function KpiCards({
       />
       <KpiCard
         title="Gross margin"
-        value={
-          kpis.profitComplete
-            ? formatPercent(kpis.grossMarginPct)
-            : "Profit unavailable"
-        }
+        value={formatPercent(kpis.grossMarginPct)}
         subtitle={
-          kpis.profitComplete
-            ? isFinancialMetricsV2
+          kpis.cogsIncomplete
+            ? "Based on available costs"
+            : isFinancialMetricsV2
               ? "Gross profit / Net Sales"
               : "Gross profit / revenue"
-            : "Add product costs to calculate profit."
         }
         explanation={
           isFinancialMetricsV2
@@ -215,20 +210,34 @@ export function KpiCards({
       <KpiCard
         title="Net profit"
         value={
-          !kpis.profitComplete
-            ? "Profit unavailable"
-            : kpis.netProfit === null
+          kpis.netProfit === null
             ? "Not available"
             : formatCurrency(kpis.netProfit)
         }
         subtitle={
-          kpis.profitComplete
-            ? "Gross profit minus expenses"
-            : "Add product costs to calculate profit."
+          kpis.cogsIncomplete
+            ? "Based on available costs"
+            : "Gross profit minus expenses"
         }
         explanation="Gross profit minus configured fixed expenses."
       />
       </section>
+      {kpis.cogsIncomplete ? (
+        <p
+          role="status"
+          style={{
+            background: "#fff8e5",
+            border: "1px solid #e5c07b",
+            borderRadius: 10,
+            color: "#5c4813",
+            fontSize: 13,
+            margin: "0 0 22px",
+            padding: "10px 12px",
+          }}
+        >
+          {COGS_INCOMPLETE_WARNING}
+        </p>
+      ) : null}
       {isFinancialMetricsV2 ? (
         <details
           style={{

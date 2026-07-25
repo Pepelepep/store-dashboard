@@ -44,7 +44,11 @@ import type {
 import { authenticate } from "../shopify.server";
 import { fetchStaffIdentityAliasesForOrderLines } from "../lib/staff-identity/staff-identity.server";
 import { resolveStaffDisplayNameForOrderLine } from "../lib/staff-identity/staff-identity";
-import { summarizeCogs } from "../lib/financial/cogs";
+import {
+  calculateProvisionalProfit,
+  COGS_INCOMPLETE_WARNING,
+  summarizeCogs,
+} from "../lib/financial/cogs";
 import { allocateExpensesByLocation } from "../lib/financial/expense-allocation";
 import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
 
@@ -60,12 +64,14 @@ type LocationMetricRow = {
   refunds?: number;
   ordersCount: number;
   unitsSold: number;
-  cogs: number | null;
-  grossProfit: number | null;
+  cogs: number;
+  grossProfit: number;
   grossMarginPct: number | null;
   expenses: number;
   netProfit: number | null;
-  profitComplete: boolean;
+  cogsIncomplete: boolean;
+  missingCogsLineCount: number;
+  knownCogsLineCount: number;
   averageOrderValue: number;
 };
 
@@ -564,7 +570,6 @@ function computeMetrics({
       : rowsForLocation.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
     const cogsSummary = summarizeCogs(rowsForLocation);
     const cogs = cogsSummary.cogs;
-    const grossProfit = cogs === null ? null : revenue - cogs;
     const orderIds = new Set(
       rowsForLocation.map((row) => row.shopify_order_id).filter(Boolean),
     );
@@ -574,6 +579,12 @@ function computeMetrics({
       0,
     );
     const expenses = expensesByLocation.get(location.shopify_location_id) ?? 0;
+    const { grossProfit, grossMarginPct, netProfit } =
+      calculateProvisionalProfit({
+        netSales: revenue,
+        knownCogs: cogs,
+        expenses,
+      });
 
     return {
       locationId: location.shopify_location_id,
@@ -589,13 +600,12 @@ function computeMetrics({
       unitsSold,
       cogs,
       grossProfit,
-      grossMarginPct:
-        revenue > 0 && grossProfit !== null
-          ? (grossProfit / revenue) * 100
-          : null,
+      grossMarginPct,
       expenses,
-      netProfit: grossProfit === null ? null : grossProfit - expenses,
-      profitComplete: cogsSummary.profitComplete,
+      netProfit,
+      cogsIncomplete: cogsSummary.cogsIncomplete,
+      missingCogsLineCount: cogsSummary.missingCogsLineCount,
+      knownCogsLineCount: cogsSummary.knownCogsLineCount,
       averageOrderValue: ordersCount > 0 ? revenue / ordersCount : 0,
     };
   });
@@ -613,18 +623,15 @@ function computeMetrics({
       refunds: sum.refunds + (row.refunds ?? 0),
       ordersCount: sum.ordersCount + row.ordersCount,
       unitsSold: sum.unitsSold + row.unitsSold,
-      cogs: sum.cogs === null || row.cogs === null ? null : sum.cogs + row.cogs,
-      grossProfit:
-        sum.grossProfit === null || row.grossProfit === null
-          ? null
-          : sum.grossProfit + row.grossProfit,
+      cogs: sum.cogs + row.cogs,
+      grossProfit: sum.grossProfit + row.grossProfit,
       grossMarginPct: null,
       expenses: sum.expenses + row.expenses,
-      netProfit:
-        sum.netProfit === null || row.netProfit === null
-          ? null
-          : sum.netProfit + row.netProfit,
-      profitComplete: sum.profitComplete && row.profitComplete,
+      netProfit: (sum.netProfit ?? 0) + (row.netProfit ?? 0),
+      cogsIncomplete: sum.cogsIncomplete || row.cogsIncomplete,
+      missingCogsLineCount:
+        sum.missingCogsLineCount + row.missingCogsLineCount,
+      knownCogsLineCount: sum.knownCogsLineCount + row.knownCogsLineCount,
       averageOrderValue: 0,
     }),
     {
@@ -637,12 +644,14 @@ function computeMetrics({
       refunds: 0,
       ordersCount: 0,
       unitsSold: 0,
-      cogs: 0 as number | null,
-      grossProfit: 0 as number | null,
+      cogs: 0,
+      grossProfit: 0,
       grossMarginPct: null as number | null,
       expenses: 0,
-      netProfit: 0 as number | null,
-      profitComplete: true,
+      netProfit: 0,
+      cogsIncomplete: false,
+      missingCogsLineCount: 0,
+      knownCogsLineCount: 0,
       averageOrderValue: 0,
     },
   );
@@ -652,7 +661,7 @@ function computeMetrics({
     totals: {
       ...totals,
       grossMarginPct:
-        totals.revenue > 0 && totals.grossProfit !== null
+        totals.revenue > 0
           ? (totals.grossProfit / totals.revenue) * 100
           : null,
       averageOrderValue:
@@ -703,7 +712,6 @@ function computeGlobalKpis({
     : orderLines.reduce((sum, row) => sum + Number(row.revenue ?? 0), 0);
   const cogsSummary = summarizeCogs(orderLines);
   const cogs = cogsSummary.cogs;
-  const grossProfit = cogs === null ? null : revenue - cogs;
   const orderIds = new Set(
     orderLines.map((row) => row.shopify_order_id).filter(Boolean),
   );
@@ -716,6 +724,12 @@ function computeGlobalKpis({
     (sum, value) => sum + value,
     0,
   );
+  const { grossProfit, grossMarginPct, netProfit } =
+    calculateProvisionalProfit({
+      netSales: revenue,
+      knownCogs: cogs,
+      expenses,
+    });
 
   return {
     revenue,
@@ -729,13 +743,12 @@ function computeGlobalKpis({
     unitsSold,
     cogs,
     grossProfit,
-    grossMarginPct:
-      revenue > 0 && grossProfit !== null
-        ? (grossProfit / revenue) * 100
-        : null,
+    grossMarginPct,
     expenses,
-    netProfit: grossProfit === null ? null : grossProfit - expenses,
-    profitComplete: cogsSummary.profitComplete,
+    netProfit,
+    cogsIncomplete: cogsSummary.cogsIncomplete,
+    missingCogsLineCount: cogsSummary.missingCogsLineCount,
+    knownCogsLineCount: cogsSummary.knownCogsLineCount,
     averageOrderValue: ordersCount > 0 ? revenue / ordersCount : 0,
   };
 }
@@ -1353,16 +1366,12 @@ function KpiGrid({
         },
         {
           label: "Gross profit",
-          value: kpis.profitComplete
-            ? formatCurrency(kpis.grossProfit ?? 0)
-            : "Profit unavailable",
+          value: formatCurrency(kpis.grossProfit),
           title: "Gross Profit: Net Sales minus COGS.",
         },
         {
           label: "Gross margin",
-          value: kpis.profitComplete
-            ? formatPercent(kpis.grossMarginPct)
-            : "Profit unavailable",
+          value: formatPercent(kpis.grossMarginPct),
           title: "Margin: Gross Profit divided by Net Sales.",
         },
         {
@@ -1392,32 +1401,24 @@ function KpiGrid({
         { label: "Units sold", value: formatNumber(kpis.unitsSold) },
         {
           label: "COGS",
-          value: kpis.profitComplete
-            ? formatCurrency(kpis.cogs ?? 0)
-            : "Incomplete",
+          value: formatCurrency(kpis.cogs),
           title:
             "COGS: cost of goods sold from synced Shopify inventory item cost data where available.",
         },
         {
           label: "Gross profit",
-          value: kpis.profitComplete
-            ? formatCurrency(kpis.grossProfit ?? 0)
-            : "Profit unavailable",
+          value: formatCurrency(kpis.grossProfit),
           title: "Gross Profit: Net Sales minus COGS.",
         },
         {
           label: "Gross margin",
-          value: kpis.profitComplete
-            ? formatPercent(kpis.grossMarginPct)
-            : "Profit unavailable",
+          value: formatPercent(kpis.grossMarginPct),
           title: "Margin: Gross Profit divided by Net Sales.",
         },
         { label: "Expenses", value: formatCurrency(kpis.expenses) },
         {
           label: "Net profit",
-          value: kpis.profitComplete
-            ? formatCurrency(kpis.netProfit ?? 0)
-            : "Profit unavailable",
+          value: formatCurrency(kpis.netProfit ?? 0),
         },
         {
           label: "AOV",
@@ -1456,9 +1457,20 @@ function KpiGrid({
           </div>
         ))}
       </section>
-      {!kpis.profitComplete ? (
-        <p style={{ color: "#616161", fontSize: 13, margin: "-8px 0 20px" }}>
-          Add product costs to calculate profit.
+      {kpis.cogsIncomplete ? (
+        <p
+          role="status"
+          style={{
+            background: "#fff8e5",
+            border: "1px solid #e5c07b",
+            borderRadius: 10,
+            color: "#5c4813",
+            fontSize: 13,
+            margin: "-8px 0 20px",
+            padding: "10px 12px",
+          }}
+        >
+          {COGS_INCOMPLETE_WARNING}
         </p>
       ) : null}
       {isFinancialMetricsV2 ? (
@@ -2085,9 +2097,7 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {row.profitComplete
-                        ? formatCurrency(row.cogs ?? 0)
-                        : "Incomplete"}
+                      {formatCurrency(row.cogs)}
                     </td>
                     <td
                       style={{
@@ -2095,9 +2105,7 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {row.profitComplete
-                        ? formatCurrency(row.grossProfit ?? 0)
-                        : "Profit unavailable"}
+                      {formatCurrency(row.grossProfit)}
                     </td>
                     <td
                       style={{
@@ -2121,9 +2129,7 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {row.profitComplete
-                        ? formatCurrency(row.netProfit ?? 0)
-                        : "Profit unavailable"}
+                      {formatCurrency(row.netProfit ?? 0)}
                     </td>
                     <td
                       style={{
@@ -2204,9 +2210,7 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {row.profitComplete
-                        ? formatCurrency(row.cogs ?? 0)
-                        : "Incomplete"}
+                      {formatCurrency(row.cogs)}
                     </td>
                     <td
                       style={{
@@ -2214,9 +2218,7 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {row.profitComplete
-                        ? formatCurrency(row.grossProfit ?? 0)
-                        : "Profit unavailable"}
+                      {formatCurrency(row.grossProfit)}
                     </td>
                     <td
                       style={{
@@ -2240,9 +2242,7 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {row.profitComplete
-                        ? formatCurrency(row.netProfit ?? 0)
-                        : "Profit unavailable"}
+                      {formatCurrency(row.netProfit ?? 0)}
                     </td>
                     <td
                       style={{
