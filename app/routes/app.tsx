@@ -71,6 +71,9 @@ export default function App() {
   } = useLoaderData<typeof loader>();
   const location = useLocation();
   const search = location.search;
+  const setupSearchParams = new URLSearchParams(search);
+  setupSearchParams.set("tab", "product-costs");
+  const setupPath = `/app/admin/setup?${setupSearchParams.toString()}`;
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -137,7 +140,7 @@ export default function App() {
               <a href={`/app/locations${search}`}>Location Performance</a>
             ) : null}
             {canAdmin ? (
-              <a href={`/app/admin/expenses${search}`}>Expense Setup</a>
+              <a href={setupPath}>Setup</a>
             ) : null}
             {canAdmin ? (
               <a href={`/app/admin/staff${search}`}>Staff</a>

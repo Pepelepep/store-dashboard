@@ -14,9 +14,12 @@ import {
   SYNC_FAILURE_WARNING_THRESHOLD_MS,
 } from "../app/lib/sync/sync-failure-resolution.ts";
 import {
-  calculateProvisionalProfit,
+  calculateReportedProfit,
   calculateRemainingLineCogs,
-  COGS_INCOMPLETE_WARNING,
+  getPreDiscountUnitPrice,
+  isValidEstimatePercent,
+  previewEstimateImpact,
+  resolveLineCogs,
   summarizeCogs,
 } from "../app/lib/financial/cogs.ts";
 import { allocateExpensesByLocation } from "../app/lib/financial/expense-allocation.ts";
@@ -452,7 +455,7 @@ test("missing product and custom-sale costs remain missing without a fallback", 
       returned_quantity: 1,
       unit_cost: null,
     }),
-    null,
+    0,
   );
 });
 
@@ -512,123 +515,468 @@ test("cash-only refund does not reverse product COGS", () => {
   );
 });
 
-test("some missing COGS preserves known totals and completeness metadata", () => {
-  const result = summarizeCogs([
-    { quantity: 1, unit_cost: 12 },
-    { quantity: 1, unit_cost: null },
-  ]);
-  const profit = calculateProvisionalProfit({
-    netSales: 100,
-    knownCogs: result.cogs,
-    expenses: 10,
-  });
+const estimatesDisabled = {
+  enabled: false,
+  percent: null,
+  estimateCustomSales: false,
+};
 
-  assert.equal(result.cogs, 12);
-  assert.equal(result.knownCogs, 12);
-  assert.equal(result.missingCogsLineCount, 1);
-  assert.equal(result.knownCogsLineCount, 1);
-  assert.equal(result.cogsIncomplete, true);
-  assert.deepEqual(profit, {
-    grossProfit: 88,
-    grossMarginPct: 88,
-    netProfit: 78,
-  });
-});
-
-test("all known COGS returns exact totals without an incomplete state", () => {
-  const result = summarizeCogs([
-    { quantity: 2, unit_cost: 10 },
-    { quantity: 1, unit_cost: 5 },
-  ]);
-
-  assert.equal(result.cogs, 25);
-  assert.equal(result.missingCogsLineCount, 0);
-  assert.equal(result.knownCogsLineCount, 2);
-  assert.equal(result.cogsIncomplete, false);
-});
-
-test("all missing COGS displays zero known COGS with numeric provisional profit", () => {
-  const result = summarizeCogs([
-    { quantity: 1, unit_cost: null },
-    { quantity: 2, cost_at_sale: null, unit_cost: null },
-  ]);
-  const profit = calculateProvisionalProfit({
-    netSales: 1000,
-    knownCogs: result.cogs,
-    expenses: 100,
-  });
-
-  assert.equal(result.cogs, 0);
-  assert.equal(result.missingCogsLineCount, 2);
-  assert.equal(result.knownCogsLineCount, 0);
-  assert.equal(result.cogsIncomplete, true);
-  assert.deepEqual(profit, {
-    grossProfit: 1000,
-    grossMarginPct: 100,
-    netProfit: 900,
-  });
-});
-
-test("an explicit real zero cost is known and complete", () => {
-  const result = summarizeCogs([{ quantity: 3, unit_cost: 0 }]);
-
-  assert.equal(result.cogs, 0);
-  assert.equal(result.missingCogsLineCount, 0);
-  assert.equal(result.knownCogsLineCount, 1);
-  assert.equal(result.cogsIncomplete, false);
-});
-
-test("provisional profit keeps margin safe for zero and negative Net Sales", () => {
-  assert.equal(
-    calculateProvisionalProfit({
-      netSales: 0,
-      knownCogs: 10,
-      expenses: 0,
-    }).grossMarginPct,
-    null,
-  );
-  assert.equal(
-    calculateProvisionalProfit({
-      netSales: -10,
-      knownCogs: 10,
-      expenses: 0,
-    }).grossMarginPct,
-    null,
-  );
-});
-
-test("dashboard sections show one incomplete-cost warning without unavailable profit copy", () => {
-  const profitDashboard = readFileSync(
-    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+test("COGS estimates are disabled by default and missing cost stays missing", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260726120000_add_shop_cogs_estimates.sql",
+      import.meta.url,
+    ),
     "utf8",
   );
+
+  assert.match(
+    migration,
+    /cogs_estimate_enabled boolean NOT NULL DEFAULT false/,
+  );
+  assert.equal(
+    resolveLineCogs(
+      { quantity: 1, shopify_variant_id: "variant-1" },
+      estimatesDisabled,
+    ).kind,
+    "missing",
+  );
+});
+
+test("actual at-sale and current Shopify costs take priority over estimates", () => {
+  assert.deepEqual(
+    resolveLineCogs(
+      {
+        quantity: 2,
+        cost_at_sale: 4,
+        unit_cost: 9,
+        gross_sales: 100,
+        shopify_variant_id: "variant-1",
+      },
+      { enabled: true, percent: 50, estimateCustomSales: true },
+    ),
+    {
+      kind: "actual",
+      cogs: 8,
+      unitCost: 4,
+      estimatePercent: null,
+    },
+  );
+  assert.equal(
+    resolveLineCogs(
+      {
+        quantity: 3,
+        unit_cost: 0,
+        gross_sales: 90,
+        shopify_variant_id: "variant-1",
+      },
+      { enabled: true, percent: 50, estimateCustomSales: false },
+    ).kind,
+    "actual",
+  );
+});
+
+test("missing product cost uses the shop percentage before discounts", () => {
+  const line = {
+    quantity: 2,
+    returned_quantity: 0,
+    gross_sales: 100,
+    net_sales: 70,
+    unit_price: 35,
+    shopify_variant_id: "variant-1",
+  };
+  const result = resolveLineCogs(line, {
+    enabled: true,
+    percent: 40,
+    estimateCustomSales: false,
+  });
+
+  assert.equal(getPreDiscountUnitPrice(line), 50);
+  assert.deepEqual(result, {
+    kind: "estimated",
+    cogs: 40,
+    unitCost: 20,
+    estimatePercent: 40,
+  });
+});
+
+test("custom sales estimate only when the custom-sale option is enabled", () => {
+  const customLine = { quantity: 1, gross_sales: 100 };
+
+  assert.equal(
+    resolveLineCogs(customLine, {
+      enabled: true,
+      percent: 40,
+      estimateCustomSales: false,
+    }).kind,
+    "missing",
+  );
+  assert.equal(
+    resolveLineCogs(customLine, {
+      enabled: true,
+      percent: 40,
+      estimateCustomSales: true,
+    }).cogs,
+    40,
+  );
+});
+
+test("estimate percentage boundaries are inclusive and reject invalid values", () => {
+  assert.equal(isValidEstimatePercent(0), true);
+  assert.equal(isValidEstimatePercent(100), true);
+  assert.equal(isValidEstimatePercent(-0.01), false);
+  assert.equal(isValidEstimatePercent(100.01), false);
+  assert.equal(isValidEstimatePercent(Number.NaN), false);
+});
+
+test("partial and full returns reverse estimated COGS proportionally", () => {
+  const settings = {
+    enabled: true,
+    percent: 50,
+    estimateCustomSales: false,
+  };
+
+  assert.equal(
+    resolveLineCogs(
+      {
+        quantity: 2,
+        returned_quantity: 1,
+        gross_sales: 40,
+        shopify_variant_id: "variant-1",
+      },
+      settings,
+    ).cogs,
+    10,
+  );
+  assert.equal(
+    resolveLineCogs(
+      {
+        quantity: 2,
+        returned_quantity: 2,
+        gross_sales: 40,
+        shopify_variant_id: "variant-1",
+      },
+      settings,
+    ).cogs,
+    0,
+  );
+});
+
+test("fully returned missing-cost line does not block profit", () => {
+  const summary = summarizeCogs([
+    {
+      quantity: 1,
+      returned_quantity: 1,
+      cost_source: "MISSING_COST",
+    },
+  ]);
+
+  assert.equal(calculateRemainingLineCogs({
+    quantity: 1,
+    returned_quantity: 1,
+  }), 0);
+  assert.equal(summary.cogs, 0);
+  assert.equal(summary.cogsIncomplete, false);
+  assert.equal(summary.missingCogsLineCount, 0);
+  assert.deepEqual(
+    calculateReportedProfit({
+      netSales: 0,
+      knownCogs: summary.cogs,
+      expenses: 0,
+      cogsIncomplete: summary.cogsIncomplete,
+    }),
+    {
+      grossProfit: 0,
+      grossMarginPct: null,
+      netProfit: 0,
+    },
+  );
+});
+
+test("fully returned lines are excluded from coverage and preview", () => {
+  const returnedLines = [
+    {
+      quantity: 1,
+      returned_quantity: 1,
+      unit_cost: 10,
+      cost_source: "ACTUAL_SHOPIFY_COST",
+      net_sales: 0,
+    },
+    {
+      quantity: 1,
+      returned_quantity: 1,
+      unit_cost: 40,
+      cogs: 40,
+      cost_source: "SHOP_PERCENT_ESTIMATE",
+      gross_sales: 100,
+      net_sales: 0,
+      shopify_variant_id: "variant-1",
+    },
+    {
+      quantity: 1,
+      returned_quantity: 1,
+      cost_source: "MISSING_COST",
+      gross_sales: 100,
+      net_sales: 0,
+      shopify_variant_id: "variant-2",
+    },
+  ];
+  const summary = summarizeCogs(returnedLines);
+  const preview = previewEstimateImpact(returnedLines, estimatesDisabled);
+
+  assert.equal(summary.actualCogsLineCount, 0);
+  assert.equal(summary.estimatedCogsLineCount, 0);
+  assert.equal(summary.missingCogsLineCount, 0);
+  assert.deepEqual(preview, {
+    affectedLineCount: 0,
+    estimatedCogs: 0,
+    estimatedProfit: 0,
+    missingLineCount: 0,
+  });
+});
+
+test("stored actual order-line cost survives a missing variant", () => {
+  assert.deepEqual(
+    resolveLineCogs(
+      {
+        quantity: 2,
+        unit_cost: 12,
+        cost_source: "ACTUAL_SHOPIFY_COST",
+        shopify_variant_id: "deleted-variant",
+      },
+      estimatesDisabled,
+    ),
+    {
+      kind: "actual",
+      cogs: 24,
+      unitCost: 12,
+      estimatePercent: null,
+    },
+  );
+});
+
+test("stored estimated unit cost is never promoted to actual", () => {
+  const line = {
+    quantity: 1,
+    unit_cost: 40,
+    cogs: 40,
+    cost_source: "SHOP_PERCENT_ESTIMATE",
+    gross_sales: 100,
+    shopify_variant_id: "variant-1",
+  };
+
+  assert.equal(resolveLineCogs(line, estimatesDisabled).kind, "missing");
+  assert.deepEqual(
+    resolveLineCogs(line, {
+      enabled: true,
+      percent: 20,
+      estimateCustomSales: false,
+    }),
+    {
+      kind: "estimated",
+      cogs: 20,
+      unitCost: 20,
+      estimatePercent: 20,
+    },
+  );
+});
+
+test("percentage changes recalculate estimates and disabling returns them to missing", () => {
+  const line = {
+    quantity: 1,
+    gross_sales: 100,
+    shopify_variant_id: "variant-1",
+  };
+
+  assert.equal(
+    resolveLineCogs(line, {
+      enabled: true,
+      percent: 30,
+      estimateCustomSales: false,
+    }).cogs,
+    30,
+  );
+  assert.equal(
+    resolveLineCogs(line, {
+      enabled: true,
+      percent: 45,
+      estimateCustomSales: false,
+    }).cogs,
+    45,
+  );
+  assert.equal(resolveLineCogs(line, estimatesDisabled).kind, "missing");
+});
+
+test("a later Shopify cost replaces an estimate", () => {
+  const settings = {
+    enabled: true,
+    percent: 40,
+    estimateCustomSales: false,
+  };
+  const estimated = resolveLineCogs(
+    { quantity: 1, gross_sales: 100, shopify_variant_id: "variant-1" },
+    settings,
+  );
+  const actual = resolveLineCogs(
+    {
+      quantity: 1,
+      gross_sales: 100,
+      unit_cost: 25,
+      shopify_variant_id: "variant-1",
+    },
+    settings,
+  );
+
+  assert.equal(estimated.kind, "estimated");
+  assert.deepEqual(actual, {
+    kind: "actual",
+    cogs: 25,
+    unitCost: 25,
+    estimatePercent: null,
+  });
+});
+
+test("coverage distinguishes actual, estimated, and missing COGS", () => {
+  const result = summarizeCogs([
+    { quantity: 1, unit_cost: 10, cost_source: "ACTUAL_SHOPIFY_COST" },
+    {
+      quantity: 1,
+      cogs: 20,
+      cost_source: "SHOP_PERCENT_ESTIMATE",
+    },
+    { quantity: 1, cost_source: "MISSING_COST" },
+  ]);
+
+  assert.equal(result.actualCogs, 10);
+  assert.equal(result.estimatedCogs, 20);
+  assert.equal(result.actualCogsLineCount, 1);
+  assert.equal(result.estimatedCogsLineCount, 1);
+  assert.equal(result.missingCogsLineCount, 1);
+  assert.equal(result.includesEstimatedCogs, true);
+});
+
+test("profit is unavailable with missing COGS and marked when estimates are used", () => {
+  assert.deepEqual(
+    calculateReportedProfit({
+      netSales: 100,
+      knownCogs: 20,
+      expenses: 10,
+      cogsIncomplete: true,
+    }),
+    {
+      grossProfit: null,
+      grossMarginPct: null,
+      netProfit: null,
+    },
+  );
+
   const dashboardCards = readFileSync(
     new URL("../app/components/dashboard/KpiCards.tsx", import.meta.url),
     "utf8",
   );
-  const locationPerformance = readFileSync(
-    new URL("../app/routes/app.locations.tsx", import.meta.url),
+  assert.match(dashboardCards, /Profit unavailable/);
+  assert.match(dashboardCards, /Includes estimated product costs/);
+  assert.match(dashboardCards, /Review product costs/);
+});
+
+test("estimate preview changes without persistence", () => {
+  const lines = [
+    {
+      quantity: 1,
+      gross_sales: 100,
+      net_sales: 80,
+      shopify_variant_id: "variant-1",
+    },
+  ];
+  const preview = previewEstimateImpact(lines, {
+    enabled: true,
+    percent: 40,
+    estimateCustomSales: false,
+  });
+
+  assert.deepEqual(preview, {
+    affectedLineCount: 1,
+    estimatedCogs: 40,
+    estimatedProfit: 40,
+    missingLineCount: 0,
+  });
+});
+
+test("Setup remains admin-only and navigation order is stable", () => {
+  const setupRoute = readFileSync(
+    new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
+    "utf8",
+  );
+  const appRoute = readFileSync(
+    new URL("../app/routes/app.tsx", import.meta.url),
     "utf8",
   );
 
-  assert.equal(
-    COGS_INCOMPLETE_WARNING,
-    "Some product costs are missing. Profit metrics use available costs only and may be overstated.",
+  assert.match(setupRoute, /assertAdminAccess/);
+  assert.ok(appRoute.indexOf("Profit Dashboard") < appRoute.indexOf("Location Performance"));
+  assert.ok(appRoute.indexOf("Location Performance") < appRoute.indexOf(">Setup<"));
+  assert.ok(appRoute.indexOf(">Setup<") < appRoute.indexOf(">Staff<"));
+  assert.ok(appRoute.indexOf(">Staff<") < appRoute.indexOf(">Data sync<"));
+});
+
+test("COGS recompute functions and settings update are service-role-only", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260726120000_add_shop_cogs_estimates.sql",
+      import.meta.url,
+    ),
+    "utf8",
   );
-  assert.equal(
-    dashboardCards.match(/\{COGS_INCOMPLETE_WARNING\}/g)?.length,
-    1,
+
+  for (const signature of [
+    "recompute_order_line_cogs_for_shop\\(text\\)",
+    "recompute_order_line_cogs_for_variants\\(text, text\\[\\]\\)",
+  ]) {
+    assert.match(
+      migration,
+      new RegExp(`REVOKE ALL ON FUNCTION public\\.${signature}[\\s\\S]*?FROM PUBLIC`),
+    );
+    assert.match(
+      migration,
+      new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${signature}[\\s\\S]*?TO service_role`),
+    );
+  }
+
+  assert.match(
+    migration,
+    /order_line\.cost_at_sale,[\s\S]*?variant\.unit_cost,[\s\S]*?order_line\.cost_source IS DISTINCT FROM[\s\S]*?'SHOP_PERCENT_ESTIMATE'[\s\S]*?order_line\.unit_cost/,
   );
-  assert.equal(
-    locationPerformance.match(/\{COGS_INCOMPLETE_WARNING\}/g)?.length,
-    1,
+});
+
+test("product-cost save disables and reports pending recalculation", () => {
+  const component = readFileSync(
+    new URL(
+      "../app/components/setup/ProductCostsSetup.tsx",
+      import.meta.url,
+    ),
+    "utf8",
   );
-  assert.equal(dashboardCards.includes("Profit unavailable"), false);
-  assert.equal(locationPerformance.includes("Profit unavailable"), false);
-  assert.equal(profitDashboard.includes("calculateProvisionalProfit"), true);
-  assert.equal(
-    locationPerformance.includes("calculateProvisionalProfit"),
-    true,
+
+  assert.match(component, /useNavigation/);
+  assert.match(
+    component,
+    /navigation\.formData\?\.get\("intent"\) === "save-product-costs"/,
+  );
+  assert.match(component, /disabled=\{isSaving \|\|/);
+  assert.match(component, /Saving and recalculating\.\.\./);
+});
+
+test("old expense route redirects to the Setup expenses tab with context", () => {
+  const oldExpenseRoute = readFileSync(
+    new URL("../app/routes/app.admin.expenses.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(oldExpenseRoute, /new URLSearchParams\(url\.searchParams\)/);
+  assert.match(oldExpenseRoute, /searchParams\.set\("tab", "expenses"\)/);
+  assert.match(
+    oldExpenseRoute,
+    /redirect\(`\/app\/admin\/setup\?\$\{searchParams\.toString\(\)\}`\)/,
   );
 });
 

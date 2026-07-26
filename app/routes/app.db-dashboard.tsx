@@ -55,7 +55,7 @@ import {
 } from "../lib/dashboard/dashboard-metrics";
 import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
 import {
-  calculateProvisionalProfit,
+  calculateReportedProfit,
   summarizeCogs,
 } from "../lib/financial/cogs";
 import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
@@ -547,10 +547,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ),
   });
   const { grossProfit, grossMarginPct, netProfit } =
-    calculateProvisionalProfit({
+    calculateReportedProfit({
       netSales: revenue,
       knownCogs: cogs,
       expenses: expensesToDate,
+      cogsIncomplete: cogsSummary.cogsIncomplete,
     });
   const stockAlerts = computeStockAlerts({
     inventoryRows: activeInventoryRows,
@@ -666,8 +667,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
       grossProfit,
       grossMarginPct,
       cogsIncomplete: cogsSummary.cogsIncomplete,
+      includesEstimatedCogs: cogsSummary.includesEstimatedCogs,
       missingCogsLineCount: cogsSummary.missingCogsLineCount,
       knownCogsLineCount: cogsSummary.knownCogsLineCount,
+      actualCogsLineCount: cogsSummary.actualCogsLineCount,
+      estimatedCogsLineCount: cogsSummary.estimatedCogsLineCount,
+      actualCogs: cogsSummary.actualCogs,
+      estimatedCogs: cogsSummary.estimatedCogs,
       ordersCount,
       unitsSold,
       averageOrderValue,
@@ -675,6 +681,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       criticalStockCount,
       expenses: expensesToDate,
       netProfit,
+      hasOperatingExpenses: expenses.some((expense) => expense.is_active),
     },
     stockAlerts,
     salesOrderLines,
@@ -913,6 +920,7 @@ export default function DbDashboardPage() {
             <KpiCards
               kpis={kpis}
               financialMetricsVersion={financialMetricsVersion}
+              canAdmin={readiness.canAdmin}
             />
 
             <ActiveDrilldownBadge
