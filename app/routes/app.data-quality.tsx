@@ -646,7 +646,10 @@ function ExpensesCoverageSection({
             Locations without expenses may have overstated net profit.
           </HelperText>
         </div>
-        <AppButtonLink to={`/app/admin/expenses${preservedSearch}`} compact>
+        <AppButtonLink
+          to={`/app/admin/setup?tab=expenses${preservedSearch ? `&${preservedSearch.slice(1)}` : ""}`}
+          compact
+        >
           Open Expense Setup
         </AppButtonLink>
       </div>

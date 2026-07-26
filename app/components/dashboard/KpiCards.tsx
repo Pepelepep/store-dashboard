@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
+import { Link, useLocation } from "react-router";
 
 import {
   formatCurrency,
   formatNumber,
   formatPercent,
 } from "../../lib/dashboard/dashboard-metrics";
-import { COGS_INCOMPLETE_WARNING } from "../../lib/financial/cogs";
 import type {
   DashboardLoaderData,
   FinancialMetricsVersion,
@@ -72,11 +72,20 @@ function KpiCard({
 export function KpiCards({
   kpis,
   financialMetricsVersion,
+  canAdmin,
 }: {
   kpis: DashboardLoaderData["kpis"];
   financialMetricsVersion: FinancialMetricsVersion;
+  canAdmin: boolean;
 }) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+  const location = useLocation();
+  const productCostsSearch = new URLSearchParams(location.search);
+  productCostsSearch.set("tab", "product-costs");
+  const expensesSearch = new URLSearchParams(location.search);
+  expensesSearch.set("tab", "expenses");
+  const productCostsPath = `/app/admin/setup?${productCostsSearch.toString()}`;
+  const expensesPath = `/app/admin/setup?${expensesSearch.toString()}`;
   const grossSales = kpis.grossSales ?? kpis.revenue;
   const discounts = kpis.discounts ?? 0;
   const discountPercent =
@@ -157,20 +166,33 @@ export function KpiCards({
         title="COGS"
         value={formatCurrency(kpis.cogs)}
         subtitle={
-          kpis.cogsIncomplete
-            ? `Partial · ${formatNumber(kpis.missingCogsLineCount)} ${
-                kpis.missingCogsLineCount === 1 ? "product" : "products"
-              } missing costs`
-            : "Synced product costs"
+          <>
+            <div>
+              Actual: {formatCurrency(kpis.actualCogs)} · Estimated:{" "}
+              {formatCurrency(kpis.estimatedCogs)}
+            </div>
+            {kpis.missingCogsLineCount > 0 ? (
+              <div>
+                {formatNumber(kpis.missingCogsLineCount)} sales lines missing
+                costs
+              </div>
+            ) : null}
+          </>
         }
         explanation={metricDefinitions.cogs}
       />
       <KpiCard
         title="Gross profit"
-        value={formatCurrency(kpis.grossProfit)}
+        value={
+          kpis.grossProfit === null
+            ? "—"
+            : formatCurrency(kpis.grossProfit)
+        }
         subtitle={
           kpis.cogsIncomplete
-            ? "Based on available costs"
+            ? "Requires complete product costs"
+            : kpis.includesEstimatedCogs
+              ? "Includes estimated product costs"
             : isFinancialMetricsV2
               ? "Net Sales minus COGS"
               : "Revenue minus COGS"
@@ -186,7 +208,9 @@ export function KpiCards({
         value={formatPercent(kpis.grossMarginPct)}
         subtitle={
           kpis.cogsIncomplete
-            ? "Based on available costs"
+            ? "Requires complete product costs"
+            : kpis.includesEstimatedCogs
+              ? "Includes estimated product costs"
             : isFinancialMetricsV2
               ? "Gross profit / Net Sales"
               : "Gross profit / revenue"
@@ -204,7 +228,13 @@ export function KpiCards({
             ? "Not configured"
             : formatCurrency(kpis.expenses)
         }
-        subtitle="Fixed expenses from DB"
+        subtitle={
+          kpis.hasOperatingExpenses || !canAdmin ? (
+            "Fixed expenses from DB"
+          ) : (
+            <Link to={expensesPath}>Add expenses</Link>
+          )
+        }
         explanation="Fixed expenses allocated to the selected location and date range."
       />
       <KpiCard
@@ -216,14 +246,16 @@ export function KpiCards({
         }
         subtitle={
           kpis.cogsIncomplete
-            ? "Based on available costs"
-            : "Gross profit minus expenses"
+            ? "Requires complete product costs"
+            : kpis.includesEstimatedCogs
+              ? "Includes estimated product costs"
+              : "Gross profit minus expenses"
         }
         explanation="Gross profit minus configured fixed expenses."
       />
       </section>
       {kpis.cogsIncomplete ? (
-        <p
+        <section
           role="status"
           style={{
             background: "#fff8e5",
@@ -235,8 +267,43 @@ export function KpiCards({
             padding: "10px 12px",
           }}
         >
-          {COGS_INCOMPLETE_WARNING}
-        </p>
+          <strong>Profit unavailable</strong>
+          <div style={{ marginTop: 3 }}>
+            Add product costs to calculate profit.
+          </div>
+          {canAdmin ? (
+            <Link
+              style={{
+                color: "#1d4ed8",
+                display: "inline-block",
+                fontWeight: 800,
+                marginTop: 8,
+              }}
+              to={productCostsPath}
+            >
+              Review product costs
+            </Link>
+          ) : null}
+        </section>
+      ) : kpis.includesEstimatedCogs ? (
+        <section
+          role="status"
+          style={{
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            borderRadius: 10,
+            color: "#1e3a5f",
+            fontSize: 13,
+            margin: "0 0 22px",
+            padding: "10px 12px",
+          }}
+        >
+          <strong>Includes estimated product costs</strong>
+          <div style={{ marginTop: 3 }}>
+            Profit uses {formatCurrency(kpis.estimatedCogs)} of ShopOps
+            estimated COGS.
+          </div>
+        </section>
       ) : null}
       {isFinancialMetricsV2 ? (
         <details

@@ -42,6 +42,7 @@ type FinancialMetricLine = {
   returned_quantity?: number | null;
   cost_at_sale?: number | null;
   unit_cost?: number | null;
+  cost_source?: string | null;
 };
 
 function hasAnyV2SalesField(row: FinancialMetricLine) {

@@ -253,11 +253,16 @@ export type DashboardLoaderData = {
     returnedOrdersCount?: number;
     refundAllocationWarning?: string | null;
     cogs: number;
-    grossProfit: number;
+    grossProfit: number | null;
     grossMarginPct: number | null;
     cogsIncomplete: boolean;
+    includesEstimatedCogs: boolean;
     missingCogsLineCount: number;
     knownCogsLineCount: number;
+    actualCogsLineCount: number;
+    estimatedCogsLineCount: number;
+    actualCogs: number;
+    estimatedCogs: number;
     ordersCount: number;
     unitsSold: number;
     averageOrderValue: number;
@@ -265,6 +270,7 @@ export type DashboardLoaderData = {
     criticalStockCount: number;
     expenses: number | null;
     netProfit: number | null;
+    hasOperatingExpenses: boolean;
   };
   stockAlerts: StockAlertRow[];
   salesOrderLines: DashboardSalesOrderLineRow[];
