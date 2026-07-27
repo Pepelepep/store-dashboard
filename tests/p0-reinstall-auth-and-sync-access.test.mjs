@@ -44,9 +44,12 @@ import { limitRankedBreakdownRows } from "../app/lib/dashboard/ranked-breakdown.
 import {
   formatCurrencyAxis,
   formatIntegerAxis,
+  formatNonZeroCurrencyLabel,
+  formatNonZeroIntegerLabel,
+  formatTrendPeriodLabel,
+  hasMirrorChartActivity,
 } from "../app/lib/dashboard/chart-formatters.ts";
 import { computeHourlySalesRows } from "../app/lib/dashboard/hourly-sales.ts";
-import { buildMirrorChartScale } from "../app/lib/dashboard/mirror-sales-chart.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -2093,39 +2096,33 @@ test("an empty store day preserves every zero-value hour from 00:00 through 23:0
   );
 });
 
-test("mirrored chart scale sends sales upward, orders downward, and detects zero-only data", () => {
-  const activeScale = buildMirrorChartScale([
-    { sales: 100, orders: 4 },
-    { sales: 50, orders: 2 },
-    { sales: 0, orders: 0 },
-  ]);
-  const emptyScale = buildMirrorChartScale([
-    { sales: 0, orders: 0 },
-    { sales: 0, orders: 0 },
-  ]);
-
-  assert.equal(activeScale.hasActivity, true);
-  assert.deepEqual(
-    activeScale.points.map(({ upperMirror, lowerMirror }) => ({
-      lowerMirror,
-      upperMirror,
-    })),
-    [
-      { upperMirror: 1, lowerMirror: -1 },
-      { upperMirror: 0.5, lowerMirror: -0.5 },
-      { upperMirror: 0, lowerMirror: 0 },
-    ],
-  );
-  assert.equal(emptyScale.hasActivity, false);
+test("chart display helpers separate currency, integer, period, and zero states", () => {
   assert.equal(
-    emptyScale.points.every(
-      (point) => point.upperMirror === 0 && point.lowerMirror === 0,
-    ),
+    hasMirrorChartActivity([
+      { sales: 0, orders: 0 },
+      { sales: 0, orders: 0 },
+    ]),
+    false,
+  );
+  assert.equal(
+    hasMirrorChartActivity([
+      { sales: 0, orders: 0 },
+      { sales: 0, orders: 2 },
+    ]),
     true,
   );
+  assert.equal(hasMirrorChartActivity([{ sales: 100, orders: 0 }]), true);
+  assert.equal(formatNonZeroCurrencyLabel(367), "$367");
+  assert.equal(formatNonZeroCurrencyLabel(0), "");
+  assert.equal(formatNonZeroIntegerLabel(7), "7");
+  assert.equal(formatNonZeroIntegerLabel(0), "");
+  assert.equal(formatTrendPeriodLabel("2026-07-01", "day"), "Jul 1");
+  assert.equal(formatTrendPeriodLabel("2026-W27", "week"), "W27");
+  assert.equal(formatTrendPeriodLabel("2026-07", "month"), "Jul 2026");
+  assert.equal(formatTrendPeriodLabel("2026", "year"), "2026");
 });
 
-test("shared mirrored charts keep aligned sales and order bars with accessible selection", () => {
+test("shared mirrored charts use separate synchronized sales and order plots", () => {
   const locationRoute = readFileSync(
     new URL("../app/routes/app.locations.tsx", import.meta.url),
     "utf8",
@@ -2163,6 +2160,16 @@ test("shared mirrored charts keep aligned sales and order bars with accessible s
     new URL("../package-lock.json", import.meta.url),
     "utf8",
   );
+  const trendSection = locationRoute.slice(
+    locationRoute.indexOf("function TrendChart"),
+    locationRoute.indexOf("function LocationTable"),
+  );
+  const staffSection = locationRoute.slice(
+    locationRoute.indexOf("function StaffLeaderboard"),
+    locationRoute.indexOf("function RevenueByVendorCard"),
+  );
+  const mirrorPlots =
+    mirrorChart.match(/<BarChart\b[\s\S]*?<\/BarChart>/g) ?? [];
 
   assert.equal(locationRoute.includes("conic-gradient"), false);
   assert.equal(locationRoute.includes("breakdownColors"), false);
@@ -2171,18 +2178,45 @@ test("shared mirrored charts keep aligned sales and order bars with accessible s
   assert.match(locationRoute, /LOCATION_CHART_EMPTY_STYLE/);
   assert.match(locationRoute, /shopops-vendor-bars/);
   assert.match(locationRoute, /shopops-staff-leaderboard/);
-  assert.match(locationRoute, /<ol/);
-  assert.match(locationRoute, /Rank/);
-  assert.match(locationRoute, /Orders/);
-  assert.match(locationRoute, /<option value="day">Day<\/option>/);
-  assert.match(locationRoute, /<option value="week">Week<\/option>/);
-  assert.match(locationRoute, /<option value="month">Month<\/option>/);
-  assert.match(locationRoute, /<option value="year">Year<\/option>/);
   assert.notEqual(
     locationRoute.indexOf("function RankedBreakdownBars"),
     locationRoute.indexOf("function StaffLeaderboard"),
   );
   assert.equal(locationRoute.includes('from "recharts"'), false);
+
+  assert.match(trendSection, /role="radiogroup"/);
+  assert.match(trendSection, /aria-label="Group by"/);
+  assert.match(trendSection, /type="radio"/);
+  assert.match(trendSection, /form="locations-filter-form"/);
+  assert.match(trendSection, /name="period"/);
+  assert.match(trendSection, /defaultChecked=\{period === option\.value\}/);
+  assert.match(trendSection, /onChange=\{onFilterChange\}/);
+  assert.match(trendSection, /PERIOD_OPTIONS\.map/);
+  assert.match(locationRoute, /\{ value: "day", label: "Day" \}/);
+  assert.match(locationRoute, /\{ value: "week", label: "Week" \}/);
+  assert.match(locationRoute, /\{ value: "month", label: "Month" \}/);
+  assert.match(locationRoute, /\{ value: "year", label: "Year" \}/);
+  assert.match(trendSection, /overflowX: "auto"/);
+  assert.doesNotMatch(trendSection, /<select/);
+  assert.doesNotMatch(trendSection, /<option/);
+
+  assert.match(staffSection, /<table/);
+  assert.match(staffSection, /<colgroup>/);
+  assert.match(staffSection, /<thead>/);
+  assert.match(staffSection, /<tbody>/);
+  assert.match(staffSection, /scope="col"/);
+  assert.match(staffSection, /\["Rank", "Staff", revenueLabel, "Orders"\]/);
+  assert.match(staffSection, /tableLayout: "fixed"/);
+  assert.match(staffSection, /fontVariantNumeric: "tabular-nums"/);
+  assert.match(staffSection, /textAlign: "right"/);
+  assert.match(staffSection, /aria-pressed=\{isSelected\}/);
+  assert.match(staffSection, /onClick=\{\(\) => onSelect\?\.\(row\)\}/);
+  assert.match(staffSection, /borderLeft: `3px solid/);
+  assert.match(staffSection, /title=\{row\.label\}/);
+  assert.doesNotMatch(staffSection, /<ol/);
+  assert.doesNotMatch(staffSection, /maxRevenue/);
+  assert.doesNotMatch(staffSection, /gridColumn: "2 \/ -1"/);
+  assert.doesNotMatch(staffSection, /width: `\$\{width\}%`/);
 
   assert.match(hourlyChart, /Hourly product sales/);
   assert.match(hourlyChart, /Product sales/);
@@ -2191,8 +2225,10 @@ test("shared mirrored charts keep aligned sales and order bars with accessible s
   assert.match(hourlyChart, /orders: row\.ordersCount/);
   assert.match(hourlyChart, /unitsSold: row\.unitsSold/);
   assert.match(hourlyChart, /Array\.from\(\{ length: 24 \}/);
-  assert.match(hourlyChart, /maximumTickLabels=\{9\}/);
+  assert.match(hourlyChart, /maximumTickLabels=\{8\}/);
   assert.match(hourlyChart, /distinct Orders below/);
+  assert.match(hourlyChart, /showPermanentLabels/);
+  assert.match(hourlyChart, /tooltipBucketLabel="Hour"/);
   assert.match(hourlyChart, /onSelectHour\?\.\(rows\[index\]\.hour\)/);
   assert.doesNotMatch(hourlyChart, /from "recharts"/);
   assert.doesNotMatch(hourlyChart, /<button/);
@@ -2202,30 +2238,64 @@ test("shared mirrored charts keep aligned sales and order bars with accessible s
   assert.match(trendChart, /sales: row\.revenue/);
   assert.match(trendChart, /orders: row\.ordersCount/);
   assert.match(trendChart, /unitsSold: row\.unitsSold/);
+  assert.match(trendChart, /tooltipBucketLabel="Period"/);
+  assert.doesNotMatch(trendChart, /showPermanentLabels/);
   assert.match(trendChart, /onSelectPeriod\?\.\(rows\[index\]\)/);
   assert.doesNotMatch(trendChart, /from "recharts"/);
   assert.doesNotMatch(trendChart, /<button/);
 
   assert.match(mirrorChart, /export function MirrorSalesChart/);
-  assert.match(mirrorChart, /ResponsiveContainer/);
-  assert.match(mirrorChart, /ComposedChart/);
+  assert.equal(
+    (mirrorChart.match(/<ResponsiveContainer\b/g) ?? []).length,
+    2,
+  );
+  assert.equal(mirrorPlots.length, 2);
   assert.equal((mirrorChart.match(/<Bar\b/g) ?? []).length, 2);
-  assert.match(mirrorChart, /dataKey="upperMirror"/);
-  assert.match(mirrorChart, /dataKey="lowerMirror"/);
-  assert.equal((mirrorChart.match(/stackId="mirror"/g) ?? []).length, 2);
+  assert.equal((mirrorChart.match(/data=\{chartData\}/g) ?? []).length, 2);
+  assert.match(mirrorChart, /const chartData = points\.map\(\(point\) => \(\{/);
+  assert.match(mirrorChart, /\.\.\.point/);
+  assert.match(mirrorPlots[0], /dataKey="sales"/);
+  assert.doesNotMatch(mirrorPlots[0], /dataKey="orders"/);
+  assert.match(mirrorPlots[1], /dataKey="orders"/);
+  assert.doesNotMatch(mirrorPlots[1], /dataKey="sales"/);
+  assert.equal((mirrorChart.match(/syncId=\{syncId\}/g) ?? []).length, 2);
+  assert.equal((mirrorChart.match(/syncMethod="index"/g) ?? []).length, 2);
+  assert.match(mirrorPlots[0], /CartesianGrid/);
+  assert.doesNotMatch(mirrorPlots[1], /CartesianGrid/);
+  assert.match(mirrorPlots[0], /tickFormatter=\{formatCurrencyAxis\}/);
+  assert.doesNotMatch(mirrorPlots[1], /formatCurrencyAxis/);
+  assert.match(mirrorPlots[1], /reversed/);
+  assert.match(mirrorPlots[1], /tick=\{false\}/);
+  assert.match(mirrorPlots[0], /dataKey="salesLabel"/);
+  assert.match(mirrorPlots[1], /dataKey="ordersLabel"/);
+  assert.match(mirrorChart, /formatNonZeroCurrencyLabel/);
+  assert.match(mirrorChart, /formatNonZeroIntegerLabel/);
+  assert.equal((mirrorChart.match(/<XAxis\b/g) ?? []).length, 2);
+  assert.match(mirrorPlots[0], /<XAxis[^>]*hide/);
+  assert.doesNotMatch(mirrorPlots[1], /<XAxis[^>]*hide/);
+  assert.doesNotMatch(mirrorChart, /stackId=/);
+  assert.doesNotMatch(mirrorChart, /upperMirror|lowerMirror/);
+  assert.doesNotMatch(mirrorChart, /buildMirrorChartScale/);
+  assert.doesNotMatch(mirrorChart, /maximumOrders|point\.orders\s*\//);
+  assert.doesNotMatch(mirrorChart, /ComposedChart/);
   assert.doesNotMatch(mirrorChart, /<Line\b/);
   assert.doesNotMatch(mirrorChart, /<Area\b/);
   assert.doesNotMatch(mirrorChart, /minPointSize/);
+  assert.equal((mirrorChart.match(/<LabelList\b/g) ?? []).length, 2);
   assert.doesNotMatch(mirrorChart, /<button/);
   assert.match(mirrorChart, /CartesianGrid/);
-  assert.match(mirrorChart, /ReferenceLine/);
+  assert.match(mirrorChart, /ReferenceArea/);
+  assert.match(mirrorChart, /shopops-mirror-sales-chart__baseline/);
   assert.match(mirrorChart, /ShopOpsChartTooltip/);
   assert.match(mirrorChart, /ShopOpsChartEmptyState/);
-  assert.match(mirrorChart, /buildMirrorChartScale/);
-  assert.match(mirrorChart, /showValueLabels/);
+  assert.match(mirrorChart, /hasMirrorChartActivity/);
+  assert.match(mirrorChart, /showPermanentLabels/);
   assert.match(mirrorChart, /point\.sales !== 0/);
   assert.match(mirrorChart, /point\.orders !== 0/);
-  assert.match(mirrorChart, /accessibilityLayer/);
+  assert.equal(
+    (mirrorChart.match(/accessibilityLayer=\{false\}/g) ?? []).length,
+    2,
+  );
   assert.match(mirrorChart, /onKeyDown=\{handleKeyDown\}/);
   assert.match(mirrorChart, /ArrowRight/);
   assert.match(mirrorChart, /ArrowLeft/);

@@ -8,6 +8,9 @@ import {
 export {
   formatCurrencyAxis,
   formatIntegerAxis,
+  formatNonZeroCurrencyLabel,
+  formatNonZeroIntegerLabel,
+  hasMirrorChartActivity,
 } from "../../lib/dashboard/chart-formatters";
 
 export const SHOP_OPS_CHART_MARGIN = {
@@ -25,7 +28,7 @@ export const SHOP_OPS_GRID_PROPS = {
 
 type ShopOpsTooltipDatum = {
   tooltipLabel?: string;
-  upperValue?: number;
+  sales?: number;
   productSales?: number;
   netSales?: number;
   orders?: number;
@@ -36,10 +39,12 @@ export function ShopOpsChartTooltip({
   active,
   payload,
   label,
+  labelLabel,
   valueKey,
   valueLabel,
 }: TooltipContentProps & {
-  valueKey: "upperValue" | "productSales" | "netSales";
+  labelLabel?: string;
+  valueKey: "sales" | "productSales" | "netSales";
   valueLabel: string;
 }) {
   if (!active || !payload?.length) {
@@ -63,7 +68,10 @@ export function ShopOpsChartTooltip({
         padding: "9px 11px",
       }}
     >
-      <strong>{datum?.tooltipLabel ?? String(label ?? "")}</strong>
+      <strong>
+        {labelLabel ? `${labelLabel}: ` : ""}
+        {datum?.tooltipLabel ?? String(label ?? "")}
+      </strong>
       <div>
         {valueLabel}: {formatCurrency(value)}
       </div>
