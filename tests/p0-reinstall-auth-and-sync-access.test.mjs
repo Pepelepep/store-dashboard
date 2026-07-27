@@ -2228,6 +2228,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(hourlyChart, /maximumTickLabels=\{8\}/);
   assert.match(hourlyChart, /distinct Orders below/);
   assert.match(hourlyChart, /showPermanentLabels/);
+  assert.doesNotMatch(hourlyChart, /showDensityAwareLabels/);
   assert.match(hourlyChart, /tooltipBucketLabel="Hour"/);
   assert.match(hourlyChart, /onSelectHour\?\.\(rows\[index\]\.hour\)/);
   assert.doesNotMatch(hourlyChart, /from "recharts"/);
@@ -2239,6 +2240,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(trendChart, /orders: row\.ordersCount/);
   assert.match(trendChart, /unitsSold: row\.unitsSold/);
   assert.match(trendChart, /tooltipBucketLabel="Period"/);
+  assert.match(trendChart, /showDensityAwareLabels/);
   assert.doesNotMatch(trendChart, /showPermanentLabels/);
   assert.match(trendChart, /onSelectPeriod\?\.\(rows\[index\]\)/);
   assert.doesNotMatch(trendChart, /from "recharts"/);
@@ -2252,7 +2254,10 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.equal(mirrorPlots.length, 2);
   assert.equal((mirrorChart.match(/<Bar\b/g) ?? []).length, 2);
   assert.equal((mirrorChart.match(/data=\{chartData\}/g) ?? []).length, 2);
-  assert.match(mirrorChart, /const chartData = points\.map\(\(point\) => \(\{/);
+  assert.match(
+    mirrorChart,
+    /const chartData = points\.map\(\(point, index\) => \(\{/,
+  );
   assert.match(mirrorChart, /\.\.\.point/);
   assert.match(mirrorPlots[0], /dataKey="sales"/);
   assert.doesNotMatch(mirrorPlots[0], /dataKey="orders"/);
@@ -2290,6 +2295,20 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(mirrorChart, /ShopOpsChartEmptyState/);
   assert.match(mirrorChart, /hasMirrorChartActivity/);
   assert.match(mirrorChart, /showPermanentLabels/);
+  assert.match(mirrorChart, /showDensityAwareLabels/);
+  assert.match(mirrorChart, /points\.length <= 12/);
+  assert.match(mirrorChart, /points\.length > 12/);
+  assert.match(mirrorChart, /index === hoveredIndex/);
+  assert.match(mirrorChart, /index === focusedIndex/);
+  assert.match(mirrorChart, /index === selectedIndex/);
+  assert.match(
+    mirrorChart,
+    /showLabelForIndex\(index\) && point\.sales !== 0/,
+  );
+  assert.match(
+    mirrorChart,
+    /showLabelForIndex\(index\) && point\.orders !== 0/,
+  );
   assert.match(mirrorChart, /point\.sales !== 0/);
   assert.match(mirrorChart, /point\.orders !== 0/);
   assert.equal(
