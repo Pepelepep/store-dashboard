@@ -1,4 +1,8 @@
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  ShouldRevalidateFunctionArgs,
+} from "react-router";
 import {
   Form,
   Link,
@@ -50,11 +54,12 @@ type ExpenseRow = {
 
 type LoaderData = {
   shop: string;
-  tab: "product-costs" | "expenses";
   locations: LocationRow[];
   expenses: ExpenseRow[];
-  productCosts: ProductCostSetupData | null;
+  productCosts: ProductCostSetupData;
 };
+
+type SetupTab = "expenses" | "product-costs";
 
 type ActionData = {
   ok: boolean;
@@ -109,11 +114,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 
   await assertAdminAccess({ request, session, supabase });
-  const url = new URL(request.url);
-  const tab = url.searchParams.get("tab") === "expenses"
-    ? "expenses"
-    : "product-costs";
-
   const [
     { data: locationsData, error: locationsError },
     { data: expensesData, error: expensesError },
@@ -134,12 +134,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
         .eq("shop_domain", session.shop)
         .order("start_month", { ascending: false })
         .order("expense_name", { ascending: true }),
-      tab === "product-costs"
-        ? loadProductCostSetup({
-            supabase,
-            shop: session.shop,
-          })
-        : Promise.resolve(null),
+      loadProductCostSetup({
+        supabase,
+        shop: session.shop,
+      }),
     ]);
 
   if (locationsError) throw new Response(locationsError.message, { status: 500 });
@@ -161,11 +159,36 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     shop: session.shop,
-    tab,
     locations,
     expenses,
     productCosts,
   } satisfies LoaderData;
+}
+
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (formMethod && formMethod !== "GET") return defaultShouldRevalidate;
+  if (currentUrl.pathname !== nextUrl.pathname) return defaultShouldRevalidate;
+
+  const currentSearch = new URLSearchParams(currentUrl.search);
+  const nextSearch = new URLSearchParams(nextUrl.search);
+  const tabChanged =
+    currentSearch.get("tab") !== nextSearch.get("tab");
+  currentSearch.delete("tab");
+  nextSearch.delete("tab");
+
+  if (
+    tabChanged &&
+    currentSearch.toString() === nextSearch.toString()
+  ) {
+    return false;
+  }
+
+  return defaultShouldRevalidate;
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -348,9 +371,9 @@ function formatMonth(value: string | null) {
   return value.slice(0, 7);
 }
 
-function SetupTabs({ activeTab }: { activeTab: LoaderData["tab"] }) {
+function SetupTabs({ activeTab }: { activeTab: SetupTab }) {
   const location = useLocation();
-  const buildTabUrl = (tab: LoaderData["tab"]) => {
+  const buildTabUrl = (tab: SetupTab) => {
     const searchParams = new URLSearchParams(location.search);
     searchParams.set("tab", tab);
     return `${location.pathname}?${searchParams.toString()}`;
@@ -359,29 +382,37 @@ function SetupTabs({ activeTab }: { activeTab: LoaderData["tab"] }) {
   return (
     <nav
       aria-label="Setup sections"
+      className="setup-segmented-control"
       style={{
-        borderBottom: "1px solid #dcdcdc",
-        display: "flex",
-        gap: 6,
+        display: "grid",
+        gap: 8,
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
         marginBottom: 24,
+        width: "100%",
       }}
     >
       {[
-        { value: "product-costs" as const, label: "Product costs" },
         { value: "expenses" as const, label: "Expenses" },
+        { value: "product-costs" as const, label: "Product costs" },
       ].map((tab) => (
         <Link
+          aria-current={activeTab === tab.value ? "page" : undefined}
           key={tab.value}
           to={buildTabUrl(tab.value)}
           style={{
-            borderBottom:
+            background: activeTab === tab.value ? "#eaf2ff" : "white",
+            border:
               activeTab === tab.value
-                ? "3px solid #2563eb"
-                : "3px solid transparent",
-            color: activeTab === tab.value ? "#1d4ed8" : "#4b5563",
+                ? "2px solid #2563eb"
+                : "1px solid #c9cccf",
+            borderRadius: 12,
+            color: activeTab === tab.value ? "#174ea6" : "#374151",
             fontWeight: 800,
-            padding: "10px 14px",
+            padding: "13px 16px",
+            textAlign: "center",
             textDecoration: "none",
+            boxSizing: "border-box",
+            width: "100%",
           }}
         >
           {tab.label}
@@ -392,10 +423,15 @@ function SetupTabs({ activeTab }: { activeTab: LoaderData["tab"] }) {
 }
 
 export default function AdminSetupPage() {
-  const { shop, tab, locations, expenses, productCosts } =
+  const { shop, locations, expenses, productCosts } =
     useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
+  const location = useLocation();
   const navigation = useNavigation();
+  const tab: SetupTab =
+    new URLSearchParams(location.search).get("tab") === "product-costs"
+      ? "product-costs"
+      : "expenses";
   const [formState, setFormState] = useState<ExpenseFormState>(emptyExpenseForm);
   const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
   const isSubmitting = navigation.state !== "idle";
@@ -439,33 +475,6 @@ export default function AdminSetupPage() {
     });
   }
 
-  if (tab === "product-costs") {
-    if (!productCosts) {
-      throw new Error("Product cost setup data is unavailable.");
-    }
-
-    return (
-      <main
-        style={{
-          minHeight: "100vh",
-          background: "#f6f6f7",
-          padding: 28,
-          fontFamily:
-            "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-        }}
-      >
-        <div style={{ maxWidth: 1280, margin: "0 auto" }}>
-          <SetupTabs activeTab={tab} />
-          <ProductCostsSetup
-            actionData={actionData}
-            data={productCosts}
-            shop={shop}
-          />
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main
       style={{
@@ -477,14 +486,29 @@ export default function AdminSetupPage() {
       }}
     >
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
-        <SetupTabs activeTab={tab} />
         <header style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Expenses</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Setup</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Add fixed monthly costs so ShopOps can estimate location-level profitability.
+            Configure the inputs ShopOps uses to calculate profit.
           </p>
         </header>
+        <style>{`
+          @media (max-width: 420px) {
+            .setup-segmented-control {
+              grid-template-columns: 1fr !important;
+            }
+          }
+        `}</style>
+        <SetupTabs activeTab={tab} />
 
+        {tab === "product-costs" ? (
+          <ProductCostsSetup
+            actionData={actionData}
+            data={productCosts}
+            shop={shop}
+          />
+        ) : (
+          <>
         <section
           style={{
             background: "white",
@@ -822,6 +846,8 @@ export default function AdminSetupPage() {
             </table>
           </div>
         </section>
+          </>
+        )}
       </div>
     </main>
   );

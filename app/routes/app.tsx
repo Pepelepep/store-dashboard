@@ -72,8 +72,9 @@ export default function App() {
   const location = useLocation();
   const search = location.search;
   const setupSearchParams = new URLSearchParams(search);
-  setupSearchParams.set("tab", "product-costs");
-  const setupPath = `/app/admin/setup?${setupSearchParams.toString()}`;
+  setupSearchParams.delete("tab");
+  const setupQuery = setupSearchParams.toString();
+  const setupPath = `/app/admin/setup${setupQuery ? `?${setupQuery}` : ""}`;
 
   return (
     <AppProvider embedded apiKey={apiKey}>

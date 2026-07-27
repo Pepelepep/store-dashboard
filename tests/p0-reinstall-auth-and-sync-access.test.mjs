@@ -22,6 +22,7 @@ import {
   resolveLineCogs,
   summarizeCogs,
 } from "../app/lib/financial/cogs.ts";
+import { formatRelativeUpdatedAt } from "../app/lib/financial/cogs-setup.ts";
 import { allocateExpensesByLocation } from "../app/lib/financial/expense-allocation.ts";
 import { calculateNetSalesAfterCashRefunds } from "../app/lib/financial/net-sales.ts";
 
@@ -874,9 +875,10 @@ test("profit is unavailable with missing COGS and marked when estimates are used
     new URL("../app/components/dashboard/KpiCards.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(dashboardCards, /Profit unavailable/);
+  assert.match(dashboardCards, /missing[\s\n]+product costs\./);
   assert.match(dashboardCards, /Includes estimated product costs/);
   assert.match(dashboardCards, /Review product costs/);
+  assert.equal(dashboardCards.includes("Profit unavailable"), false);
 });
 
 test("estimate preview changes without persistence", () => {
@@ -962,8 +964,210 @@ test("product-cost save disables and reports pending recalculation", () => {
     component,
     /navigation\.formData\?\.get\("intent"\) === "save-product-costs"/,
   );
-  assert.match(component, /disabled=\{isSaving \|\|/);
+  assert.match(component, /disabled=\{[\s\S]*?isSaving[\s\S]*?!settingsChanged/);
   assert.match(component, /Saving and recalculating\.\.\./);
+});
+
+test("Setup defaults to Expenses with equal-width segmented navigation", () => {
+  const setupRoute = readFileSync(
+    new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
+    "utf8",
+  );
+  const expensesIndex = setupRoute.indexOf(
+    '{ value: "expenses" as const, label: "Expenses" }',
+  );
+  const productCostsIndex = setupRoute.indexOf(
+    '{ value: "product-costs" as const, label: "Product costs" }',
+  );
+
+  assert.ok(expensesIndex >= 0);
+  assert.ok(expensesIndex < productCostsIndex);
+  assert.match(
+    setupRoute,
+    /get\("tab"\) === "product-costs"[\s\S]*?\? "product-costs"[\s\S]*?: "expenses"/,
+  );
+  assert.match(
+    setupRoute,
+    /gridTemplateColumns: "repeat\(2, minmax\(0, 1fr\)\)"/,
+  );
+  assert.match(setupRoute, /className="setup-segmented-control"/);
+});
+
+test("tab-only Setup navigation does not revalidate the route loader", () => {
+  const setupRoute = readFileSync(
+    new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(setupRoute, /export function shouldRevalidate/);
+  assert.match(setupRoute, /currentSearch\.delete\("tab"\)/);
+  assert.match(setupRoute, /nextSearch\.delete\("tab"\)/);
+  assert.match(
+    setupRoute,
+    /currentSearch\.toString\(\) === nextSearch\.toString\(\)[\s\S]*?return false/,
+  );
+});
+
+test("Product costs uses bounded SQL aggregation instead of loading order lines", () => {
+  const setupServer = readFileSync(
+    new URL("../app/lib/financial/cogs-setup.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(setupServer.includes("fetchAllOrderLines"), false);
+  assert.equal(setupServer.includes('.from("order_lines")'), false);
+  assert.match(setupServer, /get_product_cost_coverage_summary/);
+  assert.match(setupServer, /get_missing_product_costs_page/);
+  assert.match(setupServer, /PRODUCT_COST_PAGE_SIZE = 25/);
+});
+
+test("Product-cost SQL provides summary, pagination, search, and exact count", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260727120000_add_product_cost_setup_aggregation.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(migration, /get_product_cost_coverage_summary/);
+  assert.match(migration, /actual_line_count bigint/);
+  assert.match(migration, /estimated_line_count bigint/);
+  assert.match(migration, /missing_line_count bigint/);
+  assert.match(migration, /affected_product_count bigint/);
+  assert.match(migration, /remaining_quantity > 0/);
+  assert.match(migration, /get_missing_product_costs_page/);
+  assert.match(migration, /ILIKE '%' \|\| TRIM\(p_search\) \|\| '%'/);
+  assert.match(migration, /COUNT\(\*\) OVER \(\) AS total_count/);
+  assert.match(migration, /ORDER BY grouped_line\.sales_affected DESC/);
+  assert.match(migration, /LIMIT LEAST\(GREATEST\(p_limit, 1\), 25\)/);
+  assert.match(migration, /OFFSET GREATEST\(p_offset, 0\)/);
+});
+
+test("Product-cost aggregation RPCs are service-role-only", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260727120000_add_product_cost_setup_aggregation.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  for (const signature of [
+    "get_product_cost_coverage_summary\\(text\\)",
+    "get_missing_product_costs_page\\([\\s\\S]*?text,[\\s\\S]*?text,[\\s\\S]*?integer,[\\s\\S]*?integer[\\s\\S]*?\\)",
+  ]) {
+    assert.match(
+      migration,
+      new RegExp(
+        `REVOKE ALL ON FUNCTION public\\.${signature}[\\s\\S]*?FROM PUBLIC`,
+      ),
+    );
+    assert.match(
+      migration,
+      new RegExp(
+        `GRANT EXECUTE ON FUNCTION public\\.${signature}[\\s\\S]*?TO service_role`,
+      ),
+    );
+  }
+});
+
+test("relative Product-cost update timestamps are merchant-friendly", () => {
+  const now = new Date("2026-07-27T12:00:00.000Z");
+
+  assert.equal(
+    formatRelativeUpdatedAt("2026-07-27T11:59:40.000Z", now),
+    "Updated just now",
+  );
+  assert.equal(
+    formatRelativeUpdatedAt("2026-07-27T11:55:00.000Z", now),
+    "Updated 5 minutes ago",
+  );
+  assert.equal(
+    formatRelativeUpdatedAt("2026-07-26T11:59:00.000Z", now),
+    "Updated yesterday",
+  );
+});
+
+test("Product-cost controls use selection cards and hide preview in Shopify-only mode", () => {
+  const component = readFileSync(
+    new URL(
+      "../app/components/setup/ProductCostsSetup.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(component, /className="cost-method-options"/);
+  assert.match(
+    component,
+    /gridTemplateColumns: "repeat\(2, minmax\(0, 1fr\)\)"/,
+  );
+  assert.match(component, /title: "Shopify costs only"/);
+  assert.match(component, /title: "Estimate missing costs"/);
+  assert.match(
+    component,
+    /\{enabled \? \([\s\S]*?<h2 style=\{\{ marginTop: 0 \}\}>Estimated impact preview/,
+  );
+  assert.match(component, /!settingsChanged/);
+  assert.match(component, /Profit remains unavailable while relevant product costs are/);
+});
+
+test("missing-product table uses a bounded fetcher with pagination", () => {
+  const component = readFileSync(
+    new URL(
+      "../app/components/setup/ProductCostsSetup.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const resourceRoute = readFileSync(
+    new URL(
+      "../app/routes/app.admin.setup.missing-products.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(component, /useFetcher<MissingProductCostsPageData>/);
+  assert.match(component, /Search product or variant/);
+  assert.match(component, /Showing \$\{formatNumber\(showingStart\)\}/);
+  assert.match(component, />\s*Previous\s*</);
+  assert.match(component, />\s*Next\s*</);
+  assert.match(component, /position: "sticky"/);
+  assert.match(resourceRoute, /assertAdminAccess/);
+  assert.match(resourceRoute, /loadMissingProductCostsPage/);
+});
+
+test("dashboard notices live only in their relevant profit KPI cards", () => {
+  const dashboardCards = readFileSync(
+    new URL("../app/components/dashboard/KpiCards.tsx", import.meta.url),
+    "utf8",
+  );
+  const grossProfitStart = dashboardCards.indexOf('title="Gross profit"');
+  const grossMarginStart = dashboardCards.indexOf('title="Gross margin"');
+  const expensesStart = dashboardCards.indexOf('title="Expenses"');
+  const netProfitStart = dashboardCards.indexOf('title="Net profit"');
+  const detailsStart = dashboardCards.indexOf("{isFinancialMetricsV2 ? (", netProfitStart);
+  const grossMarginSection = dashboardCards.slice(
+    grossMarginStart,
+    expensesStart,
+  );
+  const netProfitSection = dashboardCards.slice(netProfitStart, detailsStart);
+
+  assert.ok(grossProfitStart >= 0);
+  assert.match(dashboardCards, /sales[\s\S]*?missing[\s\n]+product costs\./);
+  assert.equal(
+    dashboardCards.match(/Includes estimated product costs/g)?.length,
+    1,
+  );
+  assert.equal(grossMarginSection.includes("Review product costs"), false);
+  assert.equal(
+    grossMarginSection.includes("Includes estimated product costs"),
+    false,
+  );
+  assert.match(netProfitSection, /No operating expenses configured\./);
+  assert.match(netProfitSection, /Add expenses/);
 });
 
 test("old expense route redirects to the Setup expenses tab with context", () => {

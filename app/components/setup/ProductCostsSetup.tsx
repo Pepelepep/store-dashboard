@@ -1,7 +1,16 @@
-import { useMemo, useState } from "react";
-import { Form, useNavigation } from "react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Form,
+  useFetcher,
+  useLocation,
+  useNavigation,
+} from "react-router";
 
-import type { ProductCostSetupData } from "../../lib/financial/cogs-setup.server";
+import { formatRelativeUpdatedAt } from "../../lib/financial/cogs-setup";
+import type {
+  MissingProductCostsPageData,
+  ProductCostSetupData,
+} from "../../lib/financial/cogs-setup.server";
 import { AppButton } from "../ui/AppButton";
 import { HelperText } from "../ui/HelperText";
 import { InlineResult } from "../ui/InlineResult";
@@ -28,7 +37,7 @@ function formatNumber(value: number) {
 }
 
 function formatTimestamp(value: string | null) {
-  if (!value) return "Not available";
+  if (!value) return "Timestamp unavailable";
 
   return new Intl.DateTimeFormat("en-CA", {
     dateStyle: "medium",
@@ -46,7 +55,9 @@ export function ProductCostsSetup({
   data,
   actionData,
 }: ProductCostsSetupProps) {
+  const location = useLocation();
   const navigation = useNavigation();
+  const missingProductsFetcher = useFetcher<MissingProductCostsPageData>();
   const [enabled, setEnabled] = useState(data.settings.enabled);
   const [percent, setPercent] = useState(
     String(data.settings.percent ?? 40),
@@ -54,15 +65,72 @@ export function ProductCostsSetup({
   const [estimateCustomSales, setEstimateCustomSales] = useState(
     data.settings.estimateCustomSales,
   );
+  const [search, setSearch] = useState(data.missingProducts.search);
+  const [missingProducts, setMissingProducts] = useState(
+    data.missingProducts,
+  );
+  const didMountSearch = useRef(false);
+
+  useEffect(() => {
+    setEnabled(data.settings.enabled);
+    setPercent(String(data.settings.percent ?? 40));
+    setEstimateCustomSales(data.settings.estimateCustomSales);
+  }, [data.settings]);
+
+  useEffect(() => {
+    setMissingProducts(data.missingProducts);
+    setSearch(data.missingProducts.search);
+  }, [data.missingProducts]);
+
+  useEffect(() => {
+    if (missingProductsFetcher.data) {
+      setMissingProducts(missingProductsFetcher.data);
+    }
+  }, [missingProductsFetcher.data]);
+
+  function loadMissingProducts(page: number, nextSearch = search) {
+    const searchParams = new URLSearchParams(location.search);
+    searchParams.set("page", String(page));
+    if (nextSearch.trim()) {
+      searchParams.set("search", nextSearch.trim());
+    } else {
+      searchParams.delete("search");
+    }
+    missingProductsFetcher.load(
+      `/app/admin/setup/missing-products?${searchParams.toString()}`,
+    );
+  }
+
+  useEffect(() => {
+    if (!didMountSearch.current) {
+      didMountSearch.current = true;
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      loadMissingProducts(1, search);
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+    // Only search changes should trigger the debounced request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
   const numericPercent = Number(percent);
   const percentIsValid =
     percent.trim() !== "" &&
     Number.isFinite(numericPercent) &&
     numericPercent >= 0 &&
     numericPercent <= 100;
+  const settingsChanged =
+    enabled !== data.settings.enabled ||
+    (enabled &&
+      (numericPercent !== data.settings.percent ||
+        estimateCustomSales !== data.settings.estimateCustomSales));
   const isSaving =
     navigation.state !== "idle" &&
     navigation.formData?.get("intent") === "save-product-costs";
+  const isLoadingMissingProducts = missingProductsFetcher.state !== "idle";
   const preview = useMemo(() => {
     const productEstimateCogs = percentIsValid
       ? data.previewBasis.productEstimateBasis * (numericPercent / 100)
@@ -71,23 +139,15 @@ export function ProductCostsSetup({
       percentIsValid && estimateCustomSales
         ? data.previewBasis.customEstimateBasis * (numericPercent / 100)
         : 0;
-    const affectedLineCount = enabled
-      ? data.previewBasis.productMissingLineCount +
-        (estimateCustomSales
-          ? data.previewBasis.customMissingLineCount
-          : 0)
-      : 0;
-    const unresolvedLineCount = enabled
-      ? estimateCustomSales
-        ? 0
-        : data.previewBasis.customMissingLineCount
-      : data.previewBasis.productMissingLineCount +
-        data.previewBasis.customMissingLineCount;
-    const estimatedCogs = enabled
-      ? productEstimateCogs + customEstimateCogs
-      : 0;
+    const affectedLineCount =
+      data.previewBasis.productMissingLineCount +
+      (estimateCustomSales ? data.previewBasis.customMissingLineCount : 0);
+    const unresolvedLineCount = estimateCustomSales
+      ? 0
+      : data.previewBasis.customMissingLineCount;
+    const estimatedCogs = productEstimateCogs + customEstimateCogs;
     const estimatedProfit =
-      enabled && percentIsValid && unresolvedLineCount === 0
+      percentIsValid && unresolvedLineCount === 0
         ? data.previewBasis.totalNetSales -
           data.previewBasis.actualCogs -
           estimatedCogs
@@ -100,7 +160,6 @@ export function ProductCostsSetup({
     };
   }, [
     data.previewBasis,
-    enabled,
     estimateCustomSales,
     numericPercent,
     percentIsValid,
@@ -108,17 +167,20 @@ export function ProductCostsSetup({
   const confirmation = enabled
     ? `Apply a ${numericPercent}% estimated cost rate?\n\n${preview.affectedLineCount} sales lines will use estimated costs.\nExisting Shopify costs will not be changed.`
     : "Disable estimated product costs?\n\nEstimated rows will return to missing cost. Existing Shopify costs will not be changed.";
+  const showingStart =
+    missingProducts.totalCount === 0
+      ? 0
+      : (missingProducts.page - 1) * missingProducts.pageSize + 1;
+  const showingEnd =
+    showingStart === 0
+      ? 0
+      : Math.min(
+          showingStart + missingProducts.rows.length - 1,
+          missingProducts.totalCount,
+        );
 
   return (
     <>
-      <header style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 32, margin: 0 }}>Product costs</h1>
-        <p style={{ color: "#616161", margin: "8px 0 0" }}>
-          Review product cost coverage and choose how ShopOps handles missing
-          costs.
-        </p>
-      </header>
-
       <section
         style={{
           background: "white",
@@ -128,7 +190,24 @@ export function ProductCostsSetup({
           padding: 20,
         }}
       >
-        <h2 style={{ marginTop: 0 }}>Product cost coverage</h2>
+        <div
+          style={{
+            alignItems: "baseline",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px 12px",
+            justifyContent: "space-between",
+            marginBottom: 16,
+          }}
+        >
+          <h2 style={{ margin: 0 }}>Product cost coverage</h2>
+          <span
+            style={{ color: "#616161", fontSize: 13 }}
+            title={formatTimestamp(data.coverage.lastCalculatedAt)}
+          >
+            {formatRelativeUpdatedAt(data.coverage.lastCalculatedAt)}
+          </span>
+        </div>
         <div
           style={{
             display: "grid",
@@ -154,12 +233,8 @@ export function ProductCostsSetup({
               value: formatCurrency(data.coverage.missingSalesAmount),
             },
             {
-              label: "Affected products or variants",
+              label: "Products affected",
               value: formatNumber(data.coverage.affectedProductCount),
-            },
-            {
-              label: "Last calculated",
-              value: formatTimestamp(data.coverage.lastCalculatedAt),
             },
           ].map((item) => (
             <div
@@ -185,7 +260,7 @@ export function ProductCostsSetup({
       <Form
         method="post"
         onSubmit={(event) => {
-          if (isSaving) {
+          if (isSaving || !settingsChanged) {
             event.preventDefault();
             return;
           }
@@ -212,39 +287,77 @@ export function ProductCostsSetup({
           }}
         >
           <h2 style={{ marginTop: 0 }}>Missing-cost method</h2>
-          <div style={{ display: "grid", gap: 12 }}>
-            <label style={{ alignItems: "flex-start", display: "flex", gap: 10 }}>
-              <input
-                aria-label="Use Shopify costs only"
-                checked={!enabled}
-                name="missing_cost_method"
-                onChange={() => setEnabled(false)}
-                type="radio"
-                value="shopify-only"
-              />
-              <span>
-                <strong>Use Shopify costs only</strong>
-                <HelperText>
-                  Products without a Shopify cost remain missing.
-                </HelperText>
-              </span>
-            </label>
-            <label style={{ alignItems: "flex-start", display: "flex", gap: 10 }}>
-              <input
-                aria-label="Estimate missing costs"
-                checked={enabled}
-                name="missing_cost_method"
-                onChange={() => setEnabled(true)}
-                type="radio"
-                value="estimate"
-              />
-              <span>
-                <strong>Estimate missing costs</strong>
-                <HelperText>
-                  Shopify costs always take priority over estimates.
-                </HelperText>
-              </span>
-            </label>
+          <style>{`
+            @media (max-width: 520px) {
+              .cost-method-options {
+                grid-template-columns: 1fr !important;
+              }
+            }
+          `}</style>
+          <div
+            className="cost-method-options"
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            }}
+          >
+            {[
+              {
+                enabled: false,
+                title: "Shopify costs only",
+                description:
+                  "Products without a Shopify cost remain missing.",
+              },
+              {
+                enabled: true,
+                title: "Estimate missing costs",
+                description:
+                  "Apply your store rate only when Shopify has no product cost.",
+              },
+            ].map((option) => {
+              const selected = enabled === option.enabled;
+
+              return (
+                <label
+                  key={option.title}
+                  style={{
+                    alignItems: "flex-start",
+                    background: selected ? "#eef5ff" : "white",
+                    border: selected
+                      ? "2px solid #2563eb"
+                      : "1px solid #c9cccf",
+                    borderRadius: 14,
+                    cursor: "pointer",
+                    display: "flex",
+                    gap: 10,
+                    minHeight: 82,
+                    padding: 16,
+                  }}
+                >
+                  <input
+                    aria-label={option.title}
+                    checked={selected}
+                    name="missing_cost_method"
+                    onChange={() => setEnabled(option.enabled)}
+                    type="radio"
+                    value={option.enabled ? "estimate" : "shopify-only"}
+                  />
+                  <span style={{ display: "grid", gap: 6 }}>
+                    <strong>{option.title}</strong>
+                    <span
+                      style={{
+                        color: "#616161",
+                        fontSize: 13,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {option.description}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
           </div>
 
           {enabled ? (
@@ -291,7 +404,13 @@ export function ProductCostsSetup({
                 </HelperText>
               </label>
 
-              <label style={{ alignItems: "flex-start", display: "flex", gap: 10 }}>
+              <label
+                style={{
+                  alignItems: "flex-start",
+                  display: "flex",
+                  gap: 10,
+                }}
+              >
                 <input
                   aria-label="Estimate costs for custom sales"
                   checked={estimateCustomSales}
@@ -309,45 +428,62 @@ export function ProductCostsSetup({
                 </span>
               </label>
             </div>
+          ) : data.coverage.missingLineCount > 0 ? (
+            <div
+              style={{
+                background: "#fff8e5",
+                border: "1px solid #e5c07b",
+                borderRadius: 10,
+                color: "#5c4813",
+                fontSize: 13,
+                marginTop: 18,
+                padding: "10px 12px",
+              }}
+            >
+              Profit remains unavailable while relevant product costs are
+              missing.
+            </div>
           ) : null}
         </section>
 
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 16,
-            marginBottom: 20,
-            padding: 20,
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>Estimated impact preview</h2>
-          <div
+        {enabled ? (
+          <section
             style={{
-              display: "grid",
-              gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              background: "white",
+              border: "1px solid #e3e3e3",
+              borderRadius: 16,
+              marginBottom: 20,
+              padding: 20,
             }}
           >
-            <div>
-              <HelperText>Affected sales lines</HelperText>
-              <strong>{formatNumber(preview.affectedLineCount)}</strong>
+            <h2 style={{ marginTop: 0 }}>Estimated impact preview</h2>
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              }}
+            >
+              <div>
+                <HelperText>Affected sales lines</HelperText>
+                <strong>{formatNumber(preview.affectedLineCount)}</strong>
+              </div>
+              <div>
+                <HelperText>Estimated COGS</HelperText>
+                <strong>{formatCurrency(preview.estimatedCogs)}</strong>
+              </div>
+              <div>
+                <HelperText>Estimated profit</HelperText>
+                <strong>
+                  {preview.estimatedProfit === null
+                    ? "Not calculable"
+                    : formatCurrency(preview.estimatedProfit)}
+                </strong>
+              </div>
             </div>
-            <div>
-              <HelperText>Estimated COGS</HelperText>
-              <strong>{formatCurrency(preview.estimatedCogs)}</strong>
-            </div>
-            <div>
-              <HelperText>Estimated profit</HelperText>
-              <strong>
-                {preview.estimatedProfit === null
-                  ? "Not calculable"
-                  : formatCurrency(preview.estimatedProfit)}
-              </strong>
-            </div>
-          </div>
-          <HelperText>This preview is not saved until you confirm.</HelperText>
-        </section>
+            <HelperText>This preview is not saved until you confirm.</HelperText>
+          </section>
+        ) : null}
 
         <div
           style={{
@@ -358,7 +494,11 @@ export function ProductCostsSetup({
           }}
         >
           <AppButton
-            disabled={isSaving || (enabled && !percentIsValid)}
+            disabled={
+              isSaving ||
+              !settingsChanged ||
+              (enabled && !percentIsValid)
+            }
             type="submit"
             variant="primary"
           >
@@ -380,35 +520,82 @@ export function ProductCostsSetup({
           padding: 20,
         }}
       >
-        <h2 style={{ marginTop: 0 }}>Products missing costs</h2>
-        <HelperText>
-          Highest affected sales amounts are shown first. Add costs in Shopify
-          when available.
-        </HelperText>
+        <h2 style={{ margin: 0 }}>Products missing costs</h2>
+        <div
+          style={{
+            alignItems: "end",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 12,
+            justifyContent: "space-between",
+            marginTop: 14,
+          }}
+        >
+          <label
+            style={{
+              display: "grid",
+              fontSize: 13,
+              fontWeight: 700,
+              gap: 6,
+              maxWidth: 360,
+              width: "100%",
+            }}
+          >
+            Search
+            <input
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search product or variant"
+              style={{
+                border: "1px solid #c9cccf",
+                borderRadius: 8,
+                padding: 10,
+                width: "100%",
+              }}
+              type="search"
+              value={search}
+            />
+          </label>
+          <div aria-live="polite" style={{ color: "#616161", fontSize: 13 }}>
+            {isLoadingMissingProducts
+              ? "Loading..."
+              : `Showing ${formatNumber(showingStart)}–${formatNumber(
+                  showingEnd,
+                )} of ${formatNumber(missingProducts.totalCount)}`}
+          </div>
+        </div>
         <div style={{ marginTop: 12, overflowX: "auto" }}>
           <table
             style={{ borderCollapse: "collapse", fontSize: 14, width: "100%" }}
           >
             <thead>
               <tr>
-                {["Product", "Variant", "Units sold", "Sales affected", "Action"].map(
-                  (header) => (
-                    <th
-                      key={header}
-                      style={{
-                        borderBottom: "1px solid #ddd",
-                        padding: 10,
-                        textAlign: "left",
-                      }}
-                    >
-                      {header}
-                    </th>
-                  ),
-                )}
+                {[
+                  "Product",
+                  "Variant",
+                  "Units sold",
+                  "Sales affected",
+                  "Action",
+                ].map((header) => (
+                  <th
+                    key={header}
+                    style={{
+                      background: "white",
+                      borderBottom: "1px solid #ddd",
+                      padding: 10,
+                      position: "sticky",
+                      textAlign: "left",
+                      top: 0,
+                      whiteSpace: "nowrap",
+                      zIndex: 1,
+                    }}
+                  >
+                    {header}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {data.missingProducts.map((row) => (
+              {missingProducts.rows.map((row) => (
                 <tr key={row.key}>
                   <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
                     {row.product}
@@ -440,15 +627,51 @@ export function ProductCostsSetup({
                   </td>
                 </tr>
               ))}
-              {data.missingProducts.length === 0 ? (
+              {missingProducts.rows.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ color: "#616161", padding: 16 }}>
-                    All synced sales lines have product costs.
+                    {search
+                      ? "No missing-cost products match this search."
+                      : "All synced sales lines have product costs."}
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            justifyContent: "flex-end",
+            marginTop: 14,
+          }}
+        >
+          <AppButton
+            compact
+            disabled={isLoadingMissingProducts || missingProducts.page <= 1}
+            onClick={() =>
+              loadMissingProducts(missingProducts.page - 1)
+            }
+            type="button"
+            variant="secondary"
+          >
+            Previous
+          </AppButton>
+          <AppButton
+            compact
+            disabled={
+              isLoadingMissingProducts ||
+              showingEnd >= missingProducts.totalCount
+            }
+            onClick={() =>
+              loadMissingProducts(missingProducts.page + 1)
+            }
+            type="button"
+            variant="secondary"
+          >
+            Next
+          </AppButton>
         </div>
       </section>
     </>

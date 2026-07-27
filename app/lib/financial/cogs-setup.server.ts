@@ -1,14 +1,25 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
-import {
-  calculateRemainingLineCogs,
-  getPreDiscountUnitPrice,
-  getActualUnitCost,
-  getRemainingProductQuantity,
-  summarizeCogs,
-  type EstimateLine,
-} from "./cogs";
 
 type SupabaseAdminClient = ReturnType<typeof getSupabaseAdminClient>;
+
+export const PRODUCT_COST_PAGE_SIZE = 25;
+
+export type MissingProductCostRow = {
+  key: string;
+  product: string;
+  variant: string;
+  unitsSold: number;
+  salesAffected: number;
+  shopifyProductId: string | null;
+};
+
+export type MissingProductCostsPageData = {
+  rows: MissingProductCostRow[];
+  page: number;
+  pageSize: number;
+  search: string;
+  totalCount: number;
+};
 
 export type ProductCostSetupData = {
   settings: {
@@ -35,82 +46,80 @@ export type ProductCostSetupData = {
     customMissingLineCount: number;
     customEstimateBasis: number;
   };
-  missingProducts: Array<{
-    key: string;
-    product: string;
-    variant: string;
-    unitsSold: number;
-    salesAffected: number;
-    shopifyProductId: string | null;
-  }>;
+  missingProducts: MissingProductCostsPageData;
 };
 
-type SetupOrderLine = EstimateLine & {
-  shopify_line_item_id: string;
+type CoverageSummaryRpcRow = {
+  actual_line_count: number | string | null;
+  estimated_line_count: number | string | null;
+  missing_line_count: number | string | null;
+  missing_sales_amount: number | string | null;
+  affected_product_count: number | string | null;
+  actual_cogs: number | string | null;
+  estimated_cogs: number | string | null;
+  total_net_sales: number | string | null;
+  product_missing_line_count: number | string | null;
+  product_estimate_basis: number | string | null;
+  custom_missing_line_count: number | string | null;
+  custom_estimate_basis: number | string | null;
+};
+
+type MissingProductRpcRow = {
+  group_key: string;
   product_title: string | null;
   variant_title: string | null;
-  shopify_variant_id: string | null;
+  units_sold: number | string | null;
+  sales_affected: number | string | null;
+  shopify_product_id: string | null;
+  total_count: number | string | null;
 };
 
-async function fetchAllOrderLines({
-  supabase,
-  shop,
-}: {
-  supabase: SupabaseAdminClient;
-  shop: string;
-}) {
-  const rows: SetupOrderLine[] = [];
-  const pageSize = 1000;
-
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from("order_lines")
-      .select(
-        "shopify_line_item_id, product_title, variant_title, shopify_variant_id, quantity, returned_quantity, unit_price, gross_sales, net_sales, revenue, cost_at_sale, unit_cost, cogs, cost_source",
-      )
-      .eq("shop_domain", shop)
-      .order("created_at_shopify", { ascending: false })
-      .range(from, from + pageSize - 1);
-
-    if (error) throw new Response(error.message, { status: 500 });
-
-    const page = (data ?? []) as SetupOrderLine[];
-    rows.push(...page);
-
-    if (page.length < pageSize) return rows;
-  }
+function numberValue(value: number | string | null | undefined) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function fetchProductIdsByVariant({
+export async function loadMissingProductCostsPage({
   supabase,
   shop,
-  variantIds,
+  page = 1,
+  search = "",
 }: {
   supabase: SupabaseAdminClient;
   shop: string;
-  variantIds: string[];
-}) {
-  const result = new Map<string, string>();
-  const uniqueIds = Array.from(new Set(variantIds)).filter(Boolean);
+  page?: number;
+  search?: string;
+}): Promise<MissingProductCostsPageData> {
+  const normalizedPage = Math.max(Math.floor(numberValue(page)), 1);
+  const normalizedSearch = search.trim().slice(0, 120);
+  const { data, error } = await supabase.rpc(
+    "get_missing_product_costs_page",
+    {
+      p_shop_domain: shop,
+      p_search: normalizedSearch || null,
+      p_limit: PRODUCT_COST_PAGE_SIZE,
+      p_offset: (normalizedPage - 1) * PRODUCT_COST_PAGE_SIZE,
+    },
+  );
 
-  for (let index = 0; index < uniqueIds.length; index += 500) {
-    const batch = uniqueIds.slice(index, index + 500);
-    const { data, error } = await supabase
-      .from("variants")
-      .select("shopify_variant_id, shopify_product_id")
-      .eq("shop_domain", shop)
-      .in("shopify_variant_id", batch);
+  if (error) throw new Response(error.message, { status: 500 });
 
-    if (error) throw new Response(error.message, { status: 500 });
+  const rpcRows = (data ?? []) as MissingProductRpcRow[];
 
-    for (const row of data ?? []) {
-      if (row.shopify_product_id) {
-        result.set(row.shopify_variant_id, row.shopify_product_id);
-      }
-    }
-  }
-
-  return result;
+  return {
+    rows: rpcRows.map((row) => ({
+      key: row.group_key,
+      product: row.product_title?.trim() || "Custom sale",
+      variant: row.variant_title?.trim() || "-",
+      unitsSold: numberValue(row.units_sold),
+      salesAffected: numberValue(row.sales_affected),
+      shopifyProductId: row.shopify_product_id,
+    })),
+    page: normalizedPage,
+    pageSize: PRODUCT_COST_PAGE_SIZE,
+    search: normalizedSearch,
+    totalCount: numberValue(rpcRows[0]?.total_count),
+  };
 }
 
 export async function loadProductCostSetup({
@@ -120,93 +129,57 @@ export async function loadProductCostSetup({
   supabase: SupabaseAdminClient;
   shop: string;
 }): Promise<ProductCostSetupData> {
-  const [{ data: shopRow, error: shopError }, orderLines, syncResult] =
-    await Promise.all([
-      supabase
-        .from("shops")
-        .select(
-          "cogs_estimate_enabled, cogs_estimate_percent, cogs_estimate_custom_sales, cogs_estimate_updated_at",
-        )
-        .eq("shop_domain", shop)
-        .maybeSingle(),
-      fetchAllOrderLines({ supabase, shop }),
-      supabase
-        .from("sync_runs")
-        .select("finished_at")
-        .eq("shop_domain", shop)
-        .eq("status", "success")
-        .order("finished_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
+  const [
+    { data: shopRow, error: shopError },
+    coverageResult,
+    missingProducts,
+    syncResult,
+  ] = await Promise.all([
+    supabase
+      .from("shops")
+      .select(
+        "cogs_estimate_enabled, cogs_estimate_percent, cogs_estimate_custom_sales, cogs_estimate_updated_at",
+      )
+      .eq("shop_domain", shop)
+      .maybeSingle(),
+    supabase.rpc("get_product_cost_coverage_summary", {
+      p_shop_domain: shop,
+    }),
+    loadMissingProductCostsPage({ supabase, shop }),
+    supabase
+      .from("sync_runs")
+      .select("finished_at")
+      .eq("shop_domain", shop)
+      .eq("status", "success")
+      .order("finished_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
   if (shopError) throw new Response(shopError.message, { status: 500 });
+  if (coverageResult.error) {
+    throw new Response(coverageResult.error.message, { status: 500 });
+  }
   if (syncResult.error) {
     throw new Response(syncResult.error.message, { status: 500 });
   }
 
-  const summary = summarizeCogs(orderLines);
-  const missingLines = orderLines.filter(
-    (line) => calculateRemainingLineCogs(line) === null,
-  );
-  const productIdsByVariant = await fetchProductIdsByVariant({
-    supabase,
-    shop,
-    variantIds: missingLines
-      .map((line) => line.shopify_variant_id)
-      .filter((value): value is string => Boolean(value)),
-  });
-  const missingGroups = new Map<
-    string,
-    ProductCostSetupData["missingProducts"][number]
-  >();
-  let missingSalesAmount = 0;
-  let totalNetSales = 0;
-  let productMissingLineCount = 0;
-  let productEstimateBasis = 0;
-  let customMissingLineCount = 0;
-  let customEstimateBasis = 0;
-
-  for (const line of orderLines) {
-    totalNetSales += Number(line.net_sales ?? line.revenue ?? 0);
-    const isCustom = !line.shopify_variant_id;
-    const remainingQuantity = getRemainingProductQuantity(line);
-
-    if (remainingQuantity > 0 && getActualUnitCost(line) === null) {
-      const estimateBasis =
-        getPreDiscountUnitPrice(line) * remainingQuantity;
-
-      if (isCustom) {
-        customMissingLineCount += 1;
-        customEstimateBasis += estimateBasis;
-      } else {
-        productMissingLineCount += 1;
-        productEstimateBasis += estimateBasis;
-      }
-    }
-
-    if (calculateRemainingLineCogs(line) !== null) continue;
-
-    const salesAffected = Number(line.net_sales ?? line.revenue ?? 0);
-    const key = line.shopify_variant_id
-      ? `variant:${line.shopify_variant_id}`
-      : `custom:${line.product_title ?? "Custom sale"}:${line.variant_title ?? ""}`;
-    const existing = missingGroups.get(key) ?? {
-      key,
-      product: line.product_title?.trim() || "Custom sale",
-      variant: line.variant_title?.trim() || (isCustom ? "Custom sale" : "-"),
-      unitsSold: 0,
-      salesAffected: 0,
-      shopifyProductId: line.shopify_variant_id
-        ? (productIdsByVariant.get(line.shopify_variant_id) ?? null)
-        : null,
-    };
-
-    existing.unitsSold += remainingQuantity;
-    existing.salesAffected += salesAffected;
-    missingGroups.set(key, existing);
-    missingSalesAmount += salesAffected;
-  }
+  const summary = (
+    (coverageResult.data ?? []) as CoverageSummaryRpcRow[]
+  )[0] ?? {
+    actual_line_count: 0,
+    estimated_line_count: 0,
+    missing_line_count: 0,
+    missing_sales_amount: 0,
+    affected_product_count: 0,
+    actual_cogs: 0,
+    estimated_cogs: 0,
+    total_net_sales: 0,
+    product_missing_line_count: 0,
+    product_estimate_basis: 0,
+    custom_missing_line_count: 0,
+    custom_estimate_basis: 0,
+  };
 
   return {
     settings: {
@@ -220,29 +193,29 @@ export async function loadProductCostSetup({
       updatedAt: shopRow?.cogs_estimate_updated_at ?? null,
     },
     coverage: {
-      actualLineCount: summary.actualCogsLineCount,
-      estimatedLineCount: summary.estimatedCogsLineCount,
-      missingLineCount: summary.missingCogsLineCount,
-      missingSalesAmount,
-      affectedProductCount: missingGroups.size,
-      actualCogs: summary.actualCogs,
-      estimatedCogs: summary.estimatedCogs,
+      actualLineCount: numberValue(summary.actual_line_count),
+      estimatedLineCount: numberValue(summary.estimated_line_count),
+      missingLineCount: numberValue(summary.missing_line_count),
+      missingSalesAmount: numberValue(summary.missing_sales_amount),
+      affectedProductCount: numberValue(summary.affected_product_count),
+      actualCogs: numberValue(summary.actual_cogs),
+      estimatedCogs: numberValue(summary.estimated_cogs),
       lastCalculatedAt:
         shopRow?.cogs_estimate_updated_at ??
         syncResult.data?.finished_at ??
         null,
     },
     previewBasis: {
-      totalNetSales,
-      actualCogs: summary.actualCogs,
-      productMissingLineCount,
-      productEstimateBasis,
-      customMissingLineCount,
-      customEstimateBasis,
+      totalNetSales: numberValue(summary.total_net_sales),
+      actualCogs: numberValue(summary.actual_cogs),
+      productMissingLineCount: numberValue(
+        summary.product_missing_line_count,
+      ),
+      productEstimateBasis: numberValue(summary.product_estimate_basis),
+      customMissingLineCount: numberValue(summary.custom_missing_line_count),
+      customEstimateBasis: numberValue(summary.custom_estimate_basis),
     },
-    missingProducts: Array.from(missingGroups.values())
-      .sort((a, b) => b.salesAffected - a.salesAffected)
-      .slice(0, 10),
+    missingProducts,
   };
 }
 

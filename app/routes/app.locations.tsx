@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
+import type { ReactNode } from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Form, Link, useLoaderData, useLocation } from "react-router";
 
@@ -1386,7 +1387,59 @@ function KpiGrid({
   const setupSearch = new URLSearchParams(location.search);
   setupSearch.set("tab", "product-costs");
   const productCostsPath = `/app/admin/setup?${setupSearch.toString()}`;
-  const items = isFinancialMetricsV2
+  const grossProfitNotice = kpis.cogsIncomplete ? (
+    <div
+      role="status"
+      style={{
+        background: "#fff8e5",
+        border: "1px solid #e5c07b",
+        borderRadius: 8,
+        color: "#5c4813",
+        fontSize: 12,
+        marginTop: 8,
+        padding: "7px 8px",
+      }}
+    >
+      <div>
+        {formatNumber(kpis.missingCogsLineCount)} sales{" "}
+        {kpis.missingCogsLineCount === 1 ? "line is" : "lines are"} missing
+        product costs.
+      </div>
+      <Link
+        style={{ color: "#1d4ed8", display: "inline-block", marginTop: 4 }}
+        to={productCostsPath}
+      >
+        Review product costs
+      </Link>
+    </div>
+  ) : kpis.includesEstimatedCogs ? (
+    <div
+      role="status"
+      style={{
+        background: "#eff6ff",
+        border: "1px solid #bfdbfe",
+        borderRadius: 8,
+        color: "#1e3a5f",
+        fontSize: 12,
+        marginTop: 8,
+        padding: "7px 8px",
+      }}
+    >
+      <div>Includes estimated product costs</div>
+      <Link
+        style={{ color: "#1d4ed8", display: "inline-block", marginTop: 4 }}
+        to={productCostsPath}
+      >
+        Review product costs
+      </Link>
+    </div>
+  ) : null;
+  const items: Array<{
+    label: string;
+    value: string;
+    title?: string;
+    notice?: ReactNode;
+  }> = isFinancialMetricsV2
     ? [
         {
           label: "Net Sales",
@@ -1399,6 +1452,7 @@ function KpiGrid({
             kpis.grossProfit === null
               ? "—"
               : formatCurrency(kpis.grossProfit),
+          notice: grossProfitNotice,
           title: "Gross Profit: Net Sales minus COGS.",
         },
         {
@@ -1443,6 +1497,7 @@ function KpiGrid({
             kpis.grossProfit === null
               ? "—"
               : formatCurrency(kpis.grossProfit),
+          notice: grossProfitNotice,
           title: "Gross Profit: Net Sales minus COGS.",
         },
         {
@@ -1490,58 +1545,10 @@ function KpiGrid({
             <div style={{ color: "#202223", fontSize: 22, fontWeight: 800 }}>
               {item.value}
             </div>
+            {item.notice}
           </div>
         ))}
       </section>
-      {kpis.cogsIncomplete ? (
-        <section
-          role="status"
-          style={{
-            background: "#fff8e5",
-            border: "1px solid #e5c07b",
-            borderRadius: 10,
-            color: "#5c4813",
-            fontSize: 13,
-            margin: "-8px 0 20px",
-            padding: "10px 12px",
-          }}
-        >
-          <strong>Profit unavailable</strong>
-          <div style={{ marginTop: 3 }}>
-            Add product costs to calculate profit.
-          </div>
-          <Link
-            style={{
-              color: "#1d4ed8",
-              display: "inline-block",
-              fontWeight: 800,
-              marginTop: 8,
-            }}
-            to={productCostsPath}
-          >
-            Review product costs
-          </Link>
-        </section>
-      ) : kpis.includesEstimatedCogs ? (
-        <section
-          role="status"
-          style={{
-            background: "#eff6ff",
-            border: "1px solid #bfdbfe",
-            borderRadius: 10,
-            color: "#1e3a5f",
-            fontSize: 13,
-            margin: "-8px 0 20px",
-            padding: "10px 12px",
-          }}
-        >
-          <strong>Includes estimated product costs</strong>
-          <div style={{ marginTop: 3 }}>
-            Actual COGS: {formatCurrency(kpis.actualCogs)} · Estimated COGS:{" "}
-            {formatCurrency(kpis.estimatedCogs)}
-          </div>
-        </section>
-      ) : null}
       {isFinancialMetricsV2 ? (
         <details
           style={{
