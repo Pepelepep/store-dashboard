@@ -64,13 +64,13 @@ export function SalesByHourCard({
       <MirrorSalesChart
         ariaLabel={`${revenueLabel} above and distinct Orders below for every store-day hour from 00:00 through 23:00.`}
         emptyMessage="No hourly product sales or orders match the current filters."
+        labelMode="always"
         maximumTickLabels={8}
         minimumBucketWidth={36}
         minimumWidth={864}
         onSelectPoint={(_, index) => onSelectHour?.(rows[index].hour)}
         points={chartPoints}
         salesLabel={revenueLabel}
-        showPermanentLabels
         selectedKey={
           selectedHour === null || selectedHour === undefined
             ? null

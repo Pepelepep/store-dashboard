@@ -97,8 +97,7 @@ export function MirrorSalesChart({
   emptyMessage,
   selectedKey,
   onSelectPoint,
-  showDensityAwareLabels = false,
-  showPermanentLabels = false,
+  labelMode = "none",
   maximumTickLabels = 8,
   minimumWidth = 640,
   minimumBucketWidth = 24,
@@ -110,8 +109,7 @@ export function MirrorSalesChart({
   emptyMessage: string;
   selectedKey?: string | null;
   onSelectPoint?: (point: MirrorSalesChartPoint, index: number) => void;
-  showDensityAwareLabels?: boolean;
-  showPermanentLabels?: boolean;
+  labelMode?: "always" | "density-aware" | "none";
   maximumTickLabels?: number;
   minimumWidth?: number;
   minimumBucketWidth?: number;
@@ -137,17 +135,16 @@ export function MirrorSalesChart({
     transientIndex ?? (selectedIndex >= 0 ? selectedIndex : 0);
   const accessiblePoint = points[accessibleIndex];
   const showAllNonZeroLabels =
-    showPermanentLabels ||
-    (showDensityAwareLabels && points.length <= 12);
+    labelMode === "always" ||
+    (labelMode === "density-aware" && points.length <= 12);
   const showLabelForIndex = (index: number) =>
     showAllNonZeroLabels ||
-    (showDensityAwareLabels &&
+    (labelMode === "density-aware" &&
       points.length > 12 &&
       (index === hoveredIndex ||
         index === focusedIndex ||
         index === selectedIndex));
-  const renderValueLabels =
-    showPermanentLabels || showDensityAwareLabels;
+  const renderValueLabels = labelMode !== "none";
   const chartData = points.map((point, index) => ({
     ...point,
     salesLabel:
@@ -247,8 +244,8 @@ export function MirrorSalesChart({
       aria-valuenow={accessibleIndex}
       aria-valuetext={getPointDetail(accessiblePoint, salesLabel)}
       className="shopops-mirror-sales-chart shopops-recharts shopops-chart-scroll"
+      data-label-mode={labelMode}
       data-selected-key={selectedKey ?? undefined}
-      data-show-permanent-labels={showPermanentLabels}
       onBlur={handleBlur}
       onFocus={handleFocus}
       onKeyDown={handleKeyDown}
