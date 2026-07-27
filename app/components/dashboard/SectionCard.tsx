@@ -77,20 +77,47 @@ export function SectionCard({
 }) {
   return (
     <section
+      className="shopops-section-card"
       style={{
         background: "white",
         border: "1px solid #e5e7eb",
         borderRadius: 18,
         padding: 20,
         boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-        minHeight: 420,
       }}
     >
       <style>{`
         .shopops-chart-interactive:focus-visible,
-        .shopops-chart-export:focus-visible {
+        .shopops-chart-export:focus-visible,
+        .shopops-chart-point:focus-visible {
           outline: 3px solid #93c5fd !important;
           outline-offset: 2px;
+        }
+        .shopops-chart-scroll {
+          scrollbar-color: #cbd5e1 transparent;
+          scrollbar-width: thin;
+        }
+        .shopops-chart-keyboard-controls {
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          height: 1px;
+          overflow: hidden;
+          position: absolute;
+          white-space: nowrap;
+          width: 1px;
+        }
+        .shopops-recharts .recharts-wrapper:focus-visible {
+          outline: 3px solid #93c5fd;
+          outline-offset: 2px;
+        }
+        @media (max-width: 640px) {
+          .shopops-section-card {
+            padding: 16px !important;
+          }
+          .shopops-chart-tooltip {
+            left: 70px !important;
+            right: auto !important;
+          }
         }
       `}</style>
       <div

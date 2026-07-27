@@ -10,6 +10,7 @@ import {
 } from "react-router";
 
 import { AppButton } from "../components/ui/AppButton";
+import { NetSalesTrendPlot } from "../components/dashboard/NetSalesTrendPlot";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
@@ -191,17 +192,6 @@ type OrderTransactionDbRow = {
   amount: number | null;
   processed_at: string | null;
 };
-
-function getTrendLabelStep(rowCount: number) {
-  if (rowCount > 120) return 30;
-  if (rowCount > 90) return 20;
-  if (rowCount > 60) return 12;
-  if (rowCount > 48) return 8;
-  if (rowCount > 32) return 6;
-  if (rowCount > 20) return 4;
-  if (rowCount > 12) return 2;
-  return 1;
-}
 
 async function fetchLocationOrderLines({
   supabase,
@@ -1669,37 +1659,11 @@ function KpiGrid({
   );
 }
 
-function LegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <span
-      style={{
-        alignItems: "center",
-        color: "#616161",
-        display: "inline-flex",
-        fontSize: 12,
-        fontWeight: 700,
-        gap: 6,
-      }}
-    >
-      <span
-        style={{
-          background: color,
-          borderRadius: 999,
-          height: 10,
-          width: 10,
-        }}
-      />
-      {label}
-    </span>
-  );
-}
-
 const LOCATION_CHART_CARD_STYLE: CSSProperties = {
   background: "white",
   border: "1px solid #e5e7eb",
   borderRadius: 18,
   boxShadow: "0 1px 3px rgba(0, 0, 0, 0.06)",
-  minHeight: 420,
   padding: 20,
 };
 
@@ -1710,7 +1674,7 @@ const LOCATION_CHART_EMPTY_STYLE: CSSProperties = {
   borderRadius: 12,
   color: "#707070",
   display: "flex",
-  minHeight: 260,
+  minHeight: 180,
   padding: 16,
 };
 
@@ -1731,15 +1695,11 @@ function TrendChart({
 }) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
-  const [hoveredPeriod, setHoveredPeriod] = useState<string | null>(null);
-  const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
-  const hasSales = rows.some((row) => row.revenue > 0 || row.ordersCount > 0);
-  const revenueMaxHeight = 218;
-  const barGap =
-    rows.length > 90 ? 0 : rows.length > 60 ? 1 : rows.length > 32 ? 2 : 4;
+  const hasPoints = rows.length > 0;
 
   return (
     <section
+      className="shopops-location-chart-card"
       style={{
         ...LOCATION_CHART_CARD_STYLE,
         marginBottom: 20,
@@ -1756,7 +1716,7 @@ function TrendChart({
       >
         <div>
           <h2 style={{ fontSize: 20, margin: 0 }}>
-            {isFinancialMetricsV2 ? "Net Sales trend" : "Sales trend by period"}
+            {isFinancialMetricsV2 ? "Net sales trend" : "Sales trend by period"}
           </h2>
           <p
             style={{
@@ -1767,7 +1727,7 @@ function TrendChart({
             }}
           >
             {isFinancialMetricsV2
-              ? `Includes order-level cash refunds. Orders are available in each ${period}'s details.`
+              ? "Includes order-level cash refunds. Select a period for order and unit details."
               : `${revenueLabel} grouped by ${period}. Orders are available in each period's details.`}
           </p>
         </div>
@@ -1802,130 +1762,13 @@ function TrendChart({
         </label>
       </div>
 
-      {hasSales ? (
-        <div style={{ display: "grid", gap: 14 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-            <LegendItem color="#2563eb" label={revenueLabel} />
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gap: barGap,
-              gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))`,
-              minHeight: 260,
-              position: "relative",
-              width: "100%",
-            }}
-          >
-            {[25, 50, 75].map((percent) => (
-              <span
-                aria-hidden="true"
-                key={percent}
-                style={{
-                  background: "#eef2f7",
-                  height: 1,
-                  left: 0,
-                  position: "absolute",
-                  right: 0,
-                  top: `${(revenueMaxHeight * percent) / 100}px`,
-                }}
-              />
-            ))}
-            {rows.map((row, index) => {
-              const isSelected = selectedPeriod === row.period;
-              const isHovered = hoveredPeriod === row.period;
-              const labelStep = getTrendLabelStep(rows.length);
-              const showLabel =
-                index === 0 ||
-                index === rows.length - 1 ||
-                index % labelStep === 0;
-              const revenueHeight =
-                maxRevenue > 0
-                  ? Math.max((row.revenue / maxRevenue) * revenueMaxHeight, 3)
-                  : 0;
-
-              return (
-                <div
-                  className="shopops-chart-interactive"
-                  key={row.period}
-                  title={[
-                    `Period: ${row.period}`,
-                    `${revenueLabel}: ${formatCurrency(row.revenue)}`,
-                    `Orders: ${formatNumber(row.ordersCount)}`,
-                    `Units: ${formatNumber(row.unitsSold)}`,
-                  ].join("\n")}
-                  role={onSelectPeriod ? "button" : undefined}
-                  tabIndex={onSelectPeriod ? 0 : undefined}
-                  onClick={() => onSelectPeriod?.(row)}
-                  onKeyDown={(event) => {
-                    if (!onSelectPeriod) return;
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSelectPeriod(row);
-                    }
-                  }}
-                  onMouseEnter={() => setHoveredPeriod(row.period)}
-                  onMouseLeave={() => setHoveredPeriod(null)}
-                  style={{
-                    background: isSelected
-                      ? "#eff6ff"
-                      : isHovered && onSelectPeriod
-                        ? "#f8fafc"
-                        : undefined,
-                    border: isSelected
-                      ? "1px solid #93c5fd"
-                      : "1px solid transparent",
-                    borderRadius: 8,
-                    cursor: onSelectPeriod ? "pointer" : undefined,
-                    display: "grid",
-                    gridTemplateRows: "218px 28px",
-                    justifyItems: "center",
-                    minWidth: 0,
-                    position: "relative",
-                    zIndex: 1,
-                  }}
-                >
-                  <div
-                    style={{
-                      alignItems: "flex-end",
-                      display: "flex",
-                      height: revenueMaxHeight,
-                      justifyContent: "center",
-                      width: "100%",
-                    }}
-                  >
-                    <div
-                      style={{
-                        background: row.revenue > 0 ? "#2563eb" : "#e5e7eb",
-                        borderRadius: "6px 6px 2px 2px",
-                        height: revenueHeight,
-                        maxWidth: 26,
-                        minWidth: rows.length > 60 ? 2 : 4,
-                        width: "68%",
-                      }}
-                    />
-                  </div>
-                  <div
-                    style={{
-                      color: "#616161",
-                      fontSize: 10,
-                      fontWeight: 800,
-                      lineHeight: "28px",
-                      position: "relative",
-                      overflow: "hidden",
-                      textAlign: "center",
-                      textOverflow: "clip",
-                      whiteSpace: "nowrap",
-                      width: "100%",
-                    }}
-                  >
-                    {showLabel ? row.label : ""}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+      {hasPoints ? (
+        <NetSalesTrendPlot
+          rows={rows}
+          revenueLabel={revenueLabel}
+          selectedPeriod={selectedPeriod}
+          onSelectPeriod={onSelectPeriod}
+        />
       ) : (
         <div style={LOCATION_CHART_EMPTY_STYLE}>
           No sales available for this period.
@@ -2441,16 +2284,21 @@ function RankedBreakdownBars({
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
 
   return (
-    <div style={{ display: "grid", gap: 8 }}>
+    <div
+      className="shopops-vendor-bars"
+      style={{ display: "grid", gap: 8, overflowX: "auto" }}
+    >
       {rows.map((row) => {
         const canSelect = Boolean(onSelect) && row.value !== "Others";
         const isSelected = selectedValue === row.value;
         const width =
-          maxRevenue > 0 ? Math.max((row.revenue / maxRevenue) * 100, 2) : 0;
+          maxRevenue > 0 && row.revenue > 0
+            ? Math.max((row.revenue / maxRevenue) * 100, 2)
+            : 0;
 
         return (
           <div
-            className="shopops-chart-interactive"
+            className="shopops-chart-interactive shopops-vendor-row"
             key={row.value}
             title={[
               `${itemLabel}: ${row.label}`,
@@ -2489,6 +2337,7 @@ function RankedBreakdownBars({
               gap: 8,
               gridTemplateColumns: "minmax(90px, 140px) minmax(0, 1fr) auto",
               minHeight: 38,
+              minWidth: 430,
               padding: "6px 8px",
             }}
           >
@@ -2503,6 +2352,17 @@ function RankedBreakdownBars({
               }}
             >
               {row.label}
+              {isSelected ? (
+                <small
+                  style={{
+                    color: "#1d4ed8",
+                    display: "block",
+                    fontSize: 10,
+                  }}
+                >
+                  Selected
+                </small>
+              ) : null}
             </span>
             <div
               aria-hidden="true"
@@ -2540,6 +2400,188 @@ function RankedBreakdownBars({
   );
 }
 
+function StaffLeaderboard({
+  rows,
+  revenueLabel,
+  selectedValue,
+  onSelect,
+}: {
+  rows: RevenueBreakdownRow[];
+  revenueLabel: string;
+  selectedValue?: string | null;
+  onSelect?: (row: RevenueBreakdownRow) => void;
+}) {
+  const [hoveredValue, setHoveredValue] = useState<string | null>(null);
+  const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
+
+  return (
+    <div className="shopops-staff-leaderboard" style={{ overflowX: "auto" }}>
+      <div
+        aria-hidden="true"
+        style={{
+          color: "#6b7280",
+          display: "grid",
+          fontSize: 11,
+          fontWeight: 800,
+          gap: 10,
+          gridTemplateColumns: "32px minmax(140px, 1fr) auto auto",
+          minWidth: 430,
+          padding: "0 10px 6px",
+          textTransform: "uppercase",
+        }}
+      >
+        <span>Rank</span>
+        <span>Staff</span>
+        <span>{revenueLabel}</span>
+        <span>Orders</span>
+      </div>
+      <ol
+        aria-label={`Ranked staff by ${revenueLabel.toLocaleLowerCase()}`}
+        style={{
+          display: "grid",
+          gap: 8,
+          listStyle: "none",
+          margin: 0,
+          minWidth: 430,
+          padding: 0,
+        }}
+      >
+        {rows.map((row, index) => {
+          const canSelect = Boolean(onSelect) && row.value !== "Others";
+          const isSelected = selectedValue === row.value;
+          const width =
+            maxRevenue > 0 && row.revenue > 0
+              ? Math.max((row.revenue / maxRevenue) * 100, 2)
+              : 0;
+
+          return (
+            <li key={row.value}>
+              <button
+                aria-label={[
+                  `Rank ${index + 1}`,
+                  `Staff: ${row.label}`,
+                  `${revenueLabel}: ${formatCurrency(row.revenue)}`,
+                  `Orders: ${formatNumber(row.ordersCount)}`,
+                  `Units: ${formatNumber(row.unitsSold)}`,
+                ].join(". ")}
+                aria-pressed={canSelect ? isSelected : undefined}
+                className="shopops-chart-interactive shopops-staff-leaderboard-row"
+                disabled={!canSelect}
+                onBlur={() => setHoveredValue(null)}
+                onClick={() => onSelect?.(row)}
+                onFocus={() => setHoveredValue(row.value)}
+                onMouseEnter={() => setHoveredValue(row.value)}
+                onMouseLeave={() => setHoveredValue(null)}
+                title={[
+                  `Staff: ${row.label}`,
+                  `${revenueLabel}: ${formatCurrency(row.revenue)}`,
+                  `Orders: ${formatNumber(row.ordersCount)}`,
+                  `Units: ${formatNumber(row.unitsSold)}`,
+                ].join("\n")}
+                type="button"
+                style={{
+                  background: isSelected
+                    ? "#eff6ff"
+                    : hoveredValue === row.value && canSelect
+                      ? "#f8fafc"
+                      : "white",
+                  border: isSelected
+                    ? "1px solid #93c5fd"
+                    : "1px solid #e5e7eb",
+                  borderRadius: 10,
+                  color: "inherit",
+                  cursor: canSelect ? "pointer" : "default",
+                  display: "grid",
+                  font: "inherit",
+                  gap: "5px 10px",
+                  gridTemplateColumns: "32px minmax(140px, 1fr) auto auto",
+                  minHeight: 54,
+                  padding: "8px 10px",
+                  textAlign: "left",
+                  width: "100%",
+                }}
+              >
+                <span
+                  style={{
+                    color: "#6b7280",
+                    fontSize: 13,
+                    fontWeight: 800,
+                  }}
+                >
+                  {row.value === "Others" ? "—" : index + 1}
+                </span>
+                <span
+                  style={{
+                    color: "#202223",
+                    fontSize: 13,
+                    fontWeight: 800,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {row.label}
+                  {isSelected ? (
+                    <small
+                      style={{
+                        color: "#1d4ed8",
+                        fontSize: 10,
+                        marginLeft: 6,
+                      }}
+                    >
+                      Selected
+                    </small>
+                  ) : null}
+                </span>
+                <span
+                  style={{
+                    color: "#202223",
+                    fontSize: 13,
+                    fontWeight: 800,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {formatCurrency(row.revenue)}
+                </span>
+                <span
+                  style={{
+                    color: "#4b5563",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    textAlign: "right",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {formatNumber(row.ordersCount)}
+                </span>
+                <div
+                  aria-hidden="true"
+                  style={{
+                    background: "#eef2f7",
+                    borderRadius: 999,
+                    gridColumn: "2 / -1",
+                    height: 4,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      background: "#60a5fa",
+                      borderRadius: 999,
+                      height: "100%",
+                      width: `${width}%`,
+                    }}
+                  />
+                </div>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 function RevenueByVendorCard({
   rows,
   financialMetricsVersion,
@@ -2556,9 +2598,12 @@ function RevenueByVendorCard({
   const hasRevenue = rows.some((row) => row.revenue > 0);
 
   return (
-    <section style={LOCATION_CHART_CARD_STYLE}>
+    <section
+      className="shopops-location-chart-card"
+      style={LOCATION_CHART_CARD_STYLE}
+    >
       <h2 style={{ fontSize: 20, margin: "0 0 4px" }}>
-        {isFinancialMetricsV2 ? "Product sales by Vendor" : "Revenue by Vendor"}
+        {isFinancialMetricsV2 ? "Product sales by vendor" : "Revenue by vendor"}
       </h2>
       <p
         style={{
@@ -2605,9 +2650,12 @@ function RevenueByStaffCard({
   const hasRevenue = rows.some((row) => row.revenue > 0);
 
   return (
-    <section style={LOCATION_CHART_CARD_STYLE}>
+    <section
+      className="shopops-location-chart-card"
+      style={LOCATION_CHART_CARD_STYLE}
+    >
       <h2 style={{ fontSize: 20, margin: "0 0 4px" }}>
-        {isFinancialMetricsV2 ? "Product sales by Staff" : "Revenue by Staff"}
+        {isFinancialMetricsV2 ? "Product sales by staff" : "Revenue by staff"}
       </h2>
       <p
         style={{
@@ -2621,10 +2669,9 @@ function RevenueByStaffCard({
       </p>
 
       {hasRevenue ? (
-        <RankedBreakdownBars
+        <StaffLeaderboard
           rows={rows}
           revenueLabel={revenueLabel}
-          itemLabel="Staff"
           selectedValue={selectedStaff}
           onSelect={onSelectStaff}
         />
@@ -2669,6 +2716,7 @@ function RevenueBreakdownSection({
         </p>
       ) : null}
       <div
+        className="shopops-breakdown-grid"
         style={{
           display: "grid",
           gap: 20,
@@ -2988,6 +3036,7 @@ export default function LocationsPage() {
 
   return (
     <main
+      className="shopops-locations-page"
       style={{
         background: "#f6f6f7",
         fontFamily:
@@ -3000,6 +3049,19 @@ export default function LocationsPage() {
         .shopops-chart-interactive:focus-visible {
           outline: 3px solid #93c5fd !important;
           outline-offset: 2px;
+        }
+        @media (max-width: 1100px) {
+          .shopops-breakdown-grid {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+        }
+        @media (max-width: 640px) {
+          .shopops-locations-page {
+            padding: 16px !important;
+          }
+          .shopops-location-chart-card {
+            padding: 16px !important;
+          }
         }
       `}</style>
       <div style={{ margin: "0 auto", maxWidth: 1360 }}>

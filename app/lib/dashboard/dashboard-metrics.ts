@@ -7,7 +7,6 @@ import type {
   InventoryLevelDbRow,
   OrderLineDbRow,
   ProductDbRow,
-  SalesByHourRow,
   StaffSalesRow,
   StockAlertRow,
   VariantDbRow,
@@ -15,6 +14,7 @@ import type {
 } from "./dashboard-types";
 import { calculateRemainingLineCogs } from "../financial/cogs";
 import { allocateExpensesByLocation } from "../financial/expense-allocation";
+import { computeHourlySalesRows, getHourInTimeZone } from "./hourly-sales";
 
 export const STORE_TIME_ZONE = "America/Toronto";
 export const UNKNOWN_STAFF_FILTER_VALUE = "__unknown_staff__";
@@ -266,21 +266,7 @@ export function getBestSellerDrilldownValue(row: {
 }
 
 export function getStoreHourFromTimestamp(value: string) {
-  const orderDate = new Date(value);
-
-  if (Number.isNaN(orderDate.getTime())) {
-    return null;
-  }
-
-  const hour = Number(
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone: STORE_TIME_ZONE,
-      hour: "2-digit",
-      hourCycle: "h23",
-    }).format(orderDate),
-  );
-
-  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null;
+  return getHourInTimeZone(value, STORE_TIME_ZONE);
 }
 
 export function hasActiveDashboardDrilldowns(
@@ -430,47 +416,7 @@ export function computeSalesByStaff(orderLines: SalesMetricOrderLine[]) {
 }
 
 export function computeSalesByHour(orderLines: DashboardSalesOrderLineRow[]) {
-  const orderIdsByHour = new Map<number, Set<string>>();
-  const rows: SalesByHourRow[] = Array.from({ length: 24 }, (_, hour) => {
-    orderIdsByHour.set(hour, new Set<string>());
-
-    return {
-      hour,
-      revenue: 0,
-      unitsSold: 0,
-      ordersCount: 0,
-      averageOrderValue: 0,
-    };
-  });
-
-  for (const row of orderLines) {
-    if (!row.created_at_shopify) {
-      continue;
-    }
-
-    const hour = getStoreHourFromTimestamp(row.created_at_shopify);
-
-    if (hour === null) {
-      continue;
-    }
-
-    const hourRow = rows[hour];
-
-    hourRow.revenue += Number(row.revenue ?? 0);
-    hourRow.unitsSold += Number(row.quantity ?? 0);
-
-    if (row.shopify_order_id) {
-      orderIdsByHour.get(hour)?.add(row.shopify_order_id);
-    }
-  }
-
-  for (const row of rows) {
-    row.ordersCount = orderIdsByHour.get(row.hour)?.size ?? 0;
-    row.averageOrderValue =
-      row.ordersCount > 0 ? row.revenue / row.ordersCount : 0;
-  }
-
-  return rows;
+  return computeHourlySalesRows(orderLines, STORE_TIME_ZONE);
 }
 
 export function computeStockAlerts({

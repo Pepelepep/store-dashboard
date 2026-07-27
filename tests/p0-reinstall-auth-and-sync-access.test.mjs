@@ -41,6 +41,11 @@ import {
 import { buildDrilldownResetKey } from "../app/lib/dashboard/drilldown-reset-key.ts";
 import { reconcileTrendRowsWithCashRefunds } from "../app/lib/dashboard/location-trend-reconciliation.ts";
 import { limitRankedBreakdownRows } from "../app/lib/dashboard/ranked-breakdown.ts";
+import {
+  formatCurrencyAxis,
+  formatIntegerAxis,
+} from "../app/lib/dashboard/chart-formatters.ts";
+import { computeHourlySalesRows } from "../app/lib/dashboard/hourly-sales.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -1889,8 +1894,8 @@ test("Vendor and Staff breakdowns honestly retain product sales without refund a
 
   assert.equal(productSales, 1000);
   assert.equal(headlineNetSales, 920);
-  assert.match(locationRoute, /Product sales by Vendor/);
-  assert.match(locationRoute, /Product sales by Staff/);
+  assert.match(locationRoute, /Product sales by vendor/);
+  assert.match(locationRoute, /Product sales by staff/);
   assert.match(
     locationRoute,
     /exclude[\s\n]+order-level cash refunds, which cannot be assigned reliably/,
@@ -2018,7 +2023,76 @@ test("minimal completed and failed compliance events remain recordable after sho
   );
 });
 
-test("Profit and Location charts use the restrained reconciled chart treatment", () => {
+test("hourly aggregation always returns 24 store-day buckets and counts distinct Shopify orders", () => {
+  const rows = computeHourlySalesRows(
+    [
+      {
+        created_at_shopify: "2026-07-10T14:05:00.000Z",
+        shopify_order_id: "order-a",
+        revenue: 20,
+        quantity: 1,
+      },
+      {
+        created_at_shopify: "2026-07-10T14:25:00.000Z",
+        shopify_order_id: "order-a",
+        revenue: 30,
+        quantity: 2,
+      },
+      {
+        created_at_shopify: "2026-07-10T14:45:00.000Z",
+        shopify_order_id: "order-b",
+        revenue: 40,
+        quantity: 1,
+      },
+    ],
+    "America/Toronto",
+  );
+  const populatedRow = rows.find((row) => row.revenue === 90);
+
+  assert.equal(rows.length, 24);
+  assert.deepEqual(
+    rows.map((row) => row.hour),
+    Array.from({ length: 24 }, (_, hour) => hour),
+  );
+  assert.ok(populatedRow);
+  assert.equal(populatedRow.ordersCount, 2);
+  assert.equal(populatedRow.unitsSold, 4);
+  assert.equal(
+    rows
+      .filter((row) => row.hour !== populatedRow.hour)
+      .every(
+        (row) =>
+          row.revenue === 0 && row.ordersCount === 0 && row.unitsSold === 0,
+      ),
+    true,
+  );
+
+  const dashboardMetrics = readFileSync(
+    new URL("../app/lib/dashboard/dashboard-metrics.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    dashboardMetrics,
+    /return computeHourlySalesRows\(orderLines, STORE_TIME_ZONE\)/,
+  );
+});
+
+test("an empty store day preserves every zero-value hour from 00:00 through 23:00", () => {
+  const rows = computeHourlySalesRows([], "America/Toronto");
+
+  assert.equal(rows.length, 24);
+  assert.equal(rows[0].hour, 0);
+  assert.equal(rows[23].hour, 23);
+  assert.equal(
+    rows.every(
+      (row) =>
+        row.revenue === 0 && row.ordersCount === 0 && row.unitsSold === 0,
+    ),
+    true,
+  );
+});
+
+test("premium chart presentation keeps both series, readable axes, and distinct visuals", () => {
   const locationRoute = readFileSync(
     new URL("../app/routes/app.locations.tsx", import.meta.url),
     "utf8",
@@ -2027,22 +2101,102 @@ test("Profit and Location charts use the restrained reconciled chart treatment",
     new URL("../app/components/dashboard/SalesByHourCard.tsx", import.meta.url),
     "utf8",
   );
+  const trendChart = readFileSync(
+    new URL(
+      "../app/components/dashboard/NetSalesTrendPlot.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
   const sectionCard = readFileSync(
     new URL("../app/components/dashboard/SectionCard.tsx", import.meta.url),
+    "utf8",
+  );
+  const sharedChart = readFileSync(
+    new URL("../app/components/dashboard/ShopOpsChart.tsx", import.meta.url),
+    "utf8",
+  );
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  const packageLock = readFileSync(
+    new URL("../package-lock.json", import.meta.url),
     "utf8",
   );
 
   assert.equal(locationRoute.includes("conic-gradient"), false);
   assert.equal(locationRoute.includes("breakdownColors"), false);
-  assert.match(locationRoute, /Net Sales trend/);
-  assert.match(locationRoute, /Orders: \$\{formatNumber\(row\.ordersCount\)\}/);
+  assert.match(locationRoute, /Net sales trend/);
   assert.match(locationRoute, /LOCATION_CHART_CARD_STYLE/);
   assert.match(locationRoute, /LOCATION_CHART_EMPTY_STYLE/);
-  assert.match(locationRoute, /shopops-chart-interactive/);
+  assert.match(locationRoute, /shopops-vendor-bars/);
+  assert.match(locationRoute, /shopops-staff-leaderboard/);
+  assert.match(locationRoute, /<ol/);
+  assert.match(locationRoute, /Rank/);
+  assert.match(locationRoute, /Orders/);
+  assert.notEqual(
+    locationRoute.indexOf("function RankedBreakdownBars"),
+    locationRoute.indexOf("function StaffLeaderboard"),
+  );
+  assert.equal(locationRoute.includes('from "recharts"'), false);
+
+  assert.match(hourlyChart, /Hourly product sales/);
   assert.match(hourlyChart, /Product sales/);
-  assert.match(hourlyChart, /Orders: \$\{formatNumber\(row\.ordersCount\)\}/);
-  assert.match(hourlyChart, /CHART_HEIGHT = 260/);
-  assert.match(hourlyChart, /shopops-chart-interactive/);
+  assert.match(hourlyChart, /ResponsiveContainer/);
+  assert.match(hourlyChart, /ComposedChart/);
+  assert.match(hourlyChart, /<Bar/);
+  assert.match(hourlyChart, /<Line/);
+  assert.match(hourlyChart, /CartesianGrid/);
+  assert.match(hourlyChart, /yAxisId="sales"/);
+  assert.match(hourlyChart, /yAxisId="orders"/);
+  assert.match(hourlyChart, /stroke="#0f766e"/);
+  assert.match(hourlyChart, /Units sold/);
+  assert.match(hourlyChart, /Array\.from\(\{ length: 24 \}/);
+  assert.match(hourlyChart, /interval=\{2\}/);
+  assert.doesNotMatch(hourlyChart, /minPointSize/);
+  assert.doesNotMatch(hourlyChart, /<svg/);
+  assert.match(hourlyChart, /formatCurrencyAxis/);
+  assert.match(hourlyChart, /formatIntegerAxis/);
+  assert.match(hourlyChart, /ShopOpsChartTooltip/);
+  assert.match(hourlyChart, /accessibilityLayer/);
+  assert.match(hourlyChart, /shopops-chart-keyboard-controls/);
+  assert.match(hourlyChart, /aria-pressed/);
+  assert.match(hourlyChart, /shopops-chart-scroll/);
+  assert.ok(
+    (hourlyChart.match(/isAnimationActive=\{false\}/g) ?? []).length >= 3,
+  );
+
+  assert.match(trendChart, /revenueLabel/);
+  assert.match(trendChart, /Orders/);
+  assert.match(trendChart, /Units sold/);
+  assert.match(trendChart, /ResponsiveContainer/);
+  assert.match(trendChart, /ComposedChart/);
+  assert.match(trendChart, /<Area/);
+  assert.ok((trendChart.match(/<Line/g) ?? []).length >= 2);
+  assert.match(trendChart, /CartesianGrid/);
+  assert.match(trendChart, /formatCurrencyAxis/);
+  assert.match(trendChart, /formatIntegerAxis/);
+  assert.match(trendChart, /ShopOpsChartTooltip/);
+  assert.match(trendChart, /fillOpacity=\{0\.55\}/);
+  assert.doesNotMatch(trendChart, /<svg/);
+  assert.match(trendChart, /onClick/);
+  assert.match(trendChart, /accessibilityLayer/);
+  assert.match(trendChart, /shopops-chart-keyboard-controls/);
+  assert.match(trendChart, /aria-pressed/);
+  assert.match(trendChart, /shopops-chart-scroll/);
+  assert.ok(
+    (trendChart.match(/isAnimationActive=\{false\}/g) ?? []).length >= 4,
+  );
+
   assert.match(sectionCard, /borderRadius: 18/);
-  assert.match(sectionCard, /minHeight: 420/);
+  assert.equal(sectionCard.includes("minHeight: 420"), false);
+  assert.match(sectionCard, /shopops-recharts/);
+  assert.match(sharedChart, /ShopOpsChartTooltip/);
+  assert.match(sharedChart, /ShopOpsChartEmptyState/);
+  assert.match(sharedChart, /SHOP_OPS_CHART_MARGIN/);
+  assert.match(sharedChart, /SHOP_OPS_GRID_PROPS/);
+  assert.match(formatCurrencyAxis(12500), /\$13K|\$12\.5K/);
+  assert.equal(formatIntegerAxis(12.4), "12");
+  assert.equal(packageJson.dependencies.recharts, "^3.10.1");
+  assert.match(packageLock, /"node_modules\/recharts"/);
 });
