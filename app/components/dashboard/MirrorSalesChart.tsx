@@ -97,6 +97,7 @@ export function MirrorSalesChart({
   emptyMessage,
   selectedKey,
   onSelectPoint,
+  showDensityAwareLabels = false,
   showPermanentLabels = false,
   maximumTickLabels = 8,
   minimumWidth = 640,
@@ -109,6 +110,7 @@ export function MirrorSalesChart({
   emptyMessage: string;
   selectedKey?: string | null;
   onSelectPoint?: (point: MirrorSalesChartPoint, index: number) => void;
+  showDensityAwareLabels?: boolean;
   showPermanentLabels?: boolean;
   maximumTickLabels?: number;
   minimumWidth?: number;
@@ -134,14 +136,26 @@ export function MirrorSalesChart({
   const accessibleIndex =
     transientIndex ?? (selectedIndex >= 0 ? selectedIndex : 0);
   const accessiblePoint = points[accessibleIndex];
-  const chartData = points.map((point) => ({
+  const showAllNonZeroLabels =
+    showPermanentLabels ||
+    (showDensityAwareLabels && points.length <= 12);
+  const showLabelForIndex = (index: number) =>
+    showAllNonZeroLabels ||
+    (showDensityAwareLabels &&
+      points.length > 12 &&
+      (index === hoveredIndex ||
+        index === focusedIndex ||
+        index === selectedIndex));
+  const renderValueLabels =
+    showPermanentLabels || showDensityAwareLabels;
+  const chartData = points.map((point, index) => ({
     ...point,
     salesLabel:
-      showPermanentLabels && point.sales !== 0
+      showLabelForIndex(index) && point.sales !== 0
         ? formatNonZeroCurrencyLabel(point.sales)
         : "",
     ordersLabel:
-      showPermanentLabels && point.orders !== 0
+      showLabelForIndex(index) && point.orders !== 0
         ? formatNonZeroIntegerLabel(point.orders)
         : "",
   }));
@@ -359,7 +373,7 @@ export function MirrorSalesChart({
                     key={`sales-${point.key}`}
                   />
                 ))}
-                {showPermanentLabels ? (
+                {renderValueLabels ? (
                   <LabelList
                     dataKey="salesLabel"
                     fill="#1e3a8a"
@@ -478,7 +492,7 @@ export function MirrorSalesChart({
                     key={`orders-${point.key}`}
                   />
                 ))}
-                {showPermanentLabels ? (
+                {renderValueLabels ? (
                   <LabelList
                     dataKey="ordersLabel"
                     fill="#115e59"
