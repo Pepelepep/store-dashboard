@@ -144,7 +144,7 @@ export function SalesByVendorCard({
     <SectionCard
       title={
         financialMetricsVersion === "v2"
-          ? "Product sales by Vendor"
+          ? "Product sales by vendor"
           : "Sales by vendor"
       }
       exportConfig={{

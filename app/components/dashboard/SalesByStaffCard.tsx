@@ -135,8 +135,8 @@ export function SalesByStaffCard({
     <SectionCard
       title={
         financialMetricsVersion === "v2"
-          ? "Product sales by Staff"
-          : "Sales by Staff"
+          ? "Product sales by staff"
+          : "Sales by staff"
       }
       exportConfig={
         salesByStaff.length > 0
