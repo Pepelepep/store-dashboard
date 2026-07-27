@@ -63,6 +63,7 @@ import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
 import { buildDrilldownResetKey } from "../lib/dashboard/drilldown-reset-key";
 import { reconcileTrendRowsWithCashRefunds } from "../lib/dashboard/location-trend-reconciliation";
 import { limitRankedBreakdownRows } from "../lib/dashboard/ranked-breakdown";
+import { formatTrendPeriodLabel } from "../lib/dashboard/chart-formatters";
 
 type LocationMetricRow = {
   locationId: string;
@@ -141,6 +142,13 @@ type ActiveLocationDrilldowns = {
 };
 
 type Period = "day" | "week" | "month" | "year";
+
+const PERIOD_OPTIONS: Array<{ value: Period; label: string }> = [
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
+  { value: "year", label: "Year" },
+];
 
 type SortKey =
   | "location"
@@ -823,13 +831,6 @@ function getPeriodBucketKey(date: Date, period: Period) {
   return getYearKey(date);
 }
 
-function getPeriodLabel(periodKey: string, period: Period) {
-  if (period === "day") return periodKey.slice(5);
-  if (period === "week") return periodKey.replace(/^(\d{4})-W/, "W");
-  if (period === "month") return periodKey.slice(5);
-  return periodKey;
-}
-
 function getOrderLinePeriodKey(value: string, period: Period) {
   const date = new Date(value);
 
@@ -909,7 +910,7 @@ function computeTrendRows({
       key,
       {
         period: key,
-        label: getPeriodLabel(key, period),
+        label: formatTrendPeriodLabel(key, period),
         revenue: 0,
         ordersCount: 0,
         unitsSold: 0,
@@ -1707,6 +1708,7 @@ function TrendChart({
         style={{
           alignItems: "start",
           display: "flex",
+          flexWrap: "wrap",
           gap: 12,
           justifyContent: "space-between",
           marginBottom: 14,
@@ -1729,35 +1731,48 @@ function TrendChart({
               : `${revenueLabel} grouped by ${period}. Orders are available in each period's details.`}
           </p>
         </div>
-        <label
+        <div
           style={{
             alignItems: "center",
             color: "#616161",
-            display: "inline-flex",
+            display: "flex",
             fontSize: 13,
             fontWeight: 800,
             gap: 8,
+            maxWidth: "100%",
             whiteSpace: "nowrap",
           }}
         >
-          Group by
-          <select
-            form="locations-filter-form"
-            name="period"
-            defaultValue={period}
-            onChange={onFilterChange}
-            style={{
-              border: "1px solid #c9cccf",
-              borderRadius: 10,
-              padding: "7px 10px",
-            }}
+          <span>Group by</span>
+          <div
+            style={{ maxWidth: "100%", overflowX: "auto" }}
+            className="shopops-period-segmented-scroll"
           >
-            <option value="day">Day</option>
-            <option value="week">Week</option>
-            <option value="month">Month</option>
-            <option value="year">Year</option>
-          </select>
-        </label>
+            <div
+              aria-label="Group by"
+              className="shopops-period-segmented"
+              key={period}
+              role="radiogroup"
+            >
+              {PERIOD_OPTIONS.map((option) => (
+                <label
+                  className="shopops-period-segmented__option"
+                  key={option.value}
+                >
+                  <input
+                    defaultChecked={period === option.value}
+                    form="locations-filter-form"
+                    name="period"
+                    onChange={onFilterChange}
+                    type="radio"
+                    value={option.value}
+                  />
+                  <span>{option.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
 
       <NetSalesTrendPlot
@@ -2327,9 +2342,10 @@ function RankedBreakdownBars({
               cursor: canSelect ? "pointer" : undefined,
               display: "grid",
               gap: 8,
-              gridTemplateColumns: "minmax(90px, 140px) minmax(0, 1fr) auto",
+              gridTemplateColumns:
+                "minmax(160px, 1fr) minmax(100px, 2fr) 150px",
               minHeight: 38,
-              minWidth: 430,
+              minWidth: 500,
               padding: "6px 8px",
             }}
           >
@@ -2379,7 +2395,9 @@ function RankedBreakdownBars({
               style={{
                 color: "#616161",
                 fontSize: 12,
+                fontVariantNumeric: "tabular-nums",
                 fontWeight: 700,
+                textAlign: "right",
                 whiteSpace: "nowrap",
               }}
             >
@@ -2403,173 +2421,151 @@ function StaffLeaderboard({
   selectedValue?: string | null;
   onSelect?: (row: RevenueBreakdownRow) => void;
 }) {
-  const [hoveredValue, setHoveredValue] = useState<string | null>(null);
-  const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
-
   return (
     <div className="shopops-staff-leaderboard" style={{ overflowX: "auto" }}>
-      <div
-        aria-hidden="true"
-        style={{
-          color: "#6b7280",
-          display: "grid",
-          fontSize: 11,
-          fontWeight: 800,
-          gap: 10,
-          gridTemplateColumns: "32px minmax(140px, 1fr) auto auto",
-          minWidth: 430,
-          padding: "0 10px 6px",
-          textTransform: "uppercase",
-        }}
-      >
-        <span>Rank</span>
-        <span>Staff</span>
-        <span>{revenueLabel}</span>
-        <span>Orders</span>
-      </div>
-      <ol
+      <table
         aria-label={`Ranked staff by ${revenueLabel.toLocaleLowerCase()}`}
         style={{
-          display: "grid",
-          gap: 8,
-          listStyle: "none",
-          margin: 0,
-          minWidth: 430,
-          padding: 0,
+          borderCollapse: "collapse",
+          minWidth: 480,
+          tableLayout: "fixed",
+          width: "100%",
         }}
       >
-        {rows.map((row, index) => {
-          const canSelect = Boolean(onSelect) && row.value !== "Others";
-          const isSelected = selectedValue === row.value;
-          const width =
-            maxRevenue > 0 && row.revenue > 0
-              ? Math.max((row.revenue / maxRevenue) * 100, 2)
-              : 0;
-
-          return (
-            <li key={row.value}>
-              <button
-                aria-label={[
-                  `Rank ${index + 1}`,
-                  `Staff: ${row.label}`,
-                  `${revenueLabel}: ${formatCurrency(row.revenue)}`,
-                  `Orders: ${formatNumber(row.ordersCount)}`,
-                  `Units: ${formatNumber(row.unitsSold)}`,
-                ].join(". ")}
-                aria-pressed={canSelect ? isSelected : undefined}
-                className="shopops-chart-interactive shopops-staff-leaderboard-row"
-                disabled={!canSelect}
-                onBlur={() => setHoveredValue(null)}
-                onClick={() => onSelect?.(row)}
-                onFocus={() => setHoveredValue(row.value)}
-                onMouseEnter={() => setHoveredValue(row.value)}
-                onMouseLeave={() => setHoveredValue(null)}
-                title={[
-                  `Staff: ${row.label}`,
-                  `${revenueLabel}: ${formatCurrency(row.revenue)}`,
-                  `Orders: ${formatNumber(row.ordersCount)}`,
-                  `Units: ${formatNumber(row.unitsSold)}`,
-                ].join("\n")}
-                type="button"
+        <colgroup>
+          <col style={{ width: 44 }} />
+          <col />
+          <col style={{ width: 120 }} />
+          <col style={{ width: 64 }} />
+        </colgroup>
+        <thead>
+          <tr>
+            {["Rank", "Staff", revenueLabel, "Orders"].map((label, index) => (
+              <th
+                key={label}
+                scope="col"
                 style={{
-                  background: isSelected
-                    ? "#eff6ff"
-                    : hoveredValue === row.value && canSelect
-                      ? "#f8fafc"
-                      : "white",
-                  border: isSelected
-                    ? "1px solid #93c5fd"
-                    : "1px solid #e5e7eb",
-                  borderRadius: 10,
-                  color: "inherit",
-                  cursor: canSelect ? "pointer" : "default",
-                  display: "grid",
-                  font: "inherit",
-                  gap: "5px 10px",
-                  gridTemplateColumns: "32px minmax(140px, 1fr) auto auto",
-                  minHeight: 54,
-                  padding: "8px 10px",
-                  textAlign: "left",
-                  width: "100%",
+                  borderBottom: "1px solid #dfe3e8",
+                  borderLeft:
+                    index === 0
+                      ? "3px solid transparent"
+                      : undefined,
+                  color: "#6b7280",
+                  fontSize: 11,
+                  fontWeight: 800,
+                  padding: "0 10px 8px",
+                  textAlign: index >= 2 ? "right" : "left",
+                  textTransform: "uppercase",
                 }}
               >
-                <span
+                {label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => {
+            const canSelect = Boolean(onSelect) && row.value !== "Others";
+            const isSelected = selectedValue === row.value;
+            const detailLabel = [
+              `Rank ${index + 1}`,
+              `Staff: ${row.label}`,
+              `${revenueLabel}: ${formatCurrency(row.revenue)}`,
+              `Orders: ${formatNumber(row.ordersCount)}`,
+              `Units: ${formatNumber(row.unitsSold)}`,
+            ].join(". ");
+
+            return (
+              <tr
+                className="shopops-staff-leaderboard-row"
+                data-selectable={canSelect}
+                data-selected={isSelected}
+                key={row.value}
+                style={{ background: isSelected ? "#eff6ff" : "white" }}
+              >
+                <td
                   style={{
+                    borderBottom: "1px solid #edf0f2",
+                    borderLeft: `3px solid ${
+                      isSelected ? "#2563eb" : "transparent"
+                    }`,
                     color: "#6b7280",
                     fontSize: 13,
-                    fontWeight: 800,
+                    fontWeight: 700,
+                    height: 50,
+                    padding: "8px 10px",
                   }}
                 >
                   {row.value === "Others" ? "—" : index + 1}
-                </span>
-                <span
+                </td>
+                <td
                   style={{
-                    color: "#202223",
-                    fontSize: 13,
-                    fontWeight: 800,
+                    borderBottom: "1px solid #edf0f2",
                     overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    padding: "8px 10px",
                   }}
                 >
-                  {row.label}
-                  {isSelected ? (
-                    <small
-                      style={{
-                        color: "#1d4ed8",
-                        fontSize: 10,
-                        marginLeft: 6,
-                      }}
+                  {canSelect ? (
+                    <button
+                      aria-label={detailLabel}
+                      aria-pressed={isSelected}
+                      className="shopops-staff-leaderboard__staff-button"
+                      onClick={() => onSelect?.(row)}
+                      title={row.label}
+                      type="button"
                     >
-                      Selected
-                    </small>
-                  ) : null}
-                </span>
-                <span
+                      {row.label === "Unassigned" ? (
+                        <span className="shopops-staff-leaderboard__badge">
+                          Unassigned
+                        </span>
+                      ) : (
+                        <span className="shopops-staff-leaderboard__staff-name">
+                          {row.label}
+                        </span>
+                      )}
+                    </button>
+                  ) : (
+                    <span
+                      className="shopops-staff-leaderboard__staff-name"
+                      title={row.label}
+                    >
+                      {row.label}
+                    </span>
+                  )}
+                </td>
+                <td
                   style={{
+                    borderBottom: "1px solid #edf0f2",
                     color: "#202223",
                     fontSize: 13,
+                    fontVariantNumeric: "tabular-nums",
                     fontWeight: 800,
+                    padding: "8px 10px",
+                    textAlign: "right",
                     whiteSpace: "nowrap",
                   }}
                 >
                   {formatCurrency(row.revenue)}
-                </span>
-                <span
+                </td>
+                <td
                   style={{
+                    borderBottom: "1px solid #edf0f2",
                     color: "#4b5563",
                     fontSize: 13,
+                    fontVariantNumeric: "tabular-nums",
                     fontWeight: 700,
+                    padding: "8px 10px",
                     textAlign: "right",
                     whiteSpace: "nowrap",
                   }}
                 >
                   {formatNumber(row.ordersCount)}
-                </span>
-                <div
-                  aria-hidden="true"
-                  style={{
-                    background: "#eef2f7",
-                    borderRadius: 999,
-                    gridColumn: "2 / -1",
-                    height: 4,
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      background: "#60a5fa",
-                      borderRadius: 999,
-                      height: "100%",
-                      width: `${width}%`,
-                    }}
-                  />
-                </div>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -3041,6 +3037,92 @@ export default function LocationsPage() {
         .shopops-chart-interactive:focus-visible {
           outline: 3px solid #93c5fd !important;
           outline-offset: 2px;
+        }
+        .shopops-period-segmented-scroll {
+          scrollbar-color: #cbd5e1 transparent;
+          scrollbar-width: thin;
+        }
+        .shopops-period-segmented {
+          background: #f3f4f6;
+          border: 1px solid #d1d5db;
+          border-radius: 9px;
+          display: inline-flex;
+          overflow: hidden;
+          padding: 2px;
+          white-space: nowrap;
+        }
+        .shopops-period-segmented__option {
+          cursor: pointer;
+          position: relative;
+        }
+        .shopops-period-segmented__option input {
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          height: 1px;
+          overflow: hidden;
+          position: absolute;
+          white-space: nowrap;
+          width: 1px;
+        }
+        .shopops-period-segmented__option span {
+          border-radius: 6px;
+          color: #616161;
+          display: block;
+          font-size: 12px;
+          line-height: 1;
+          padding: 7px 10px;
+        }
+        .shopops-period-segmented__option input:checked + span {
+          background: white;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+          color: #1d4ed8;
+          font-weight: 800;
+        }
+        .shopops-period-segmented__option input:focus-visible + span {
+          outline: 3px solid #93c5fd;
+          outline-offset: -1px;
+        }
+        .shopops-staff-leaderboard-row[data-selectable="true"][data-selected="false"]:hover {
+          background: #f8fafc !important;
+        }
+        .shopops-staff-leaderboard__staff-button {
+          align-items: center;
+          background: transparent;
+          border: 0;
+          color: #202223;
+          cursor: pointer;
+          display: flex;
+          font: inherit;
+          font-size: 13px;
+          font-weight: 800;
+          gap: 7px;
+          max-width: 100%;
+          padding: 5px 0;
+          text-align: left;
+        }
+        .shopops-staff-leaderboard__staff-button:focus-visible {
+          outline: 3px solid #93c5fd;
+          outline-offset: 2px;
+        }
+        .shopops-staff-leaderboard__staff-name {
+          color: #202223;
+          display: block;
+          font-size: 13px;
+          font-weight: 800;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .shopops-staff-leaderboard__badge {
+          background: #f3f4f6;
+          border: 1px solid #d1d5db;
+          border-radius: 999px;
+          color: #6b7280;
+          flex: 0 0 auto;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 2px 6px;
         }
         @media (max-width: 1100px) {
           .shopops-breakdown-grid {

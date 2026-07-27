@@ -2,11 +2,11 @@ import { useId, useMemo, useState } from "react";
 import type { FocusEvent, KeyboardEvent } from "react";
 import {
   Bar,
+  BarChart,
   CartesianGrid,
   Cell,
-  ComposedChart,
   LabelList,
-  ReferenceLine,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -17,11 +17,11 @@ import {
   formatCurrency,
   formatNumber,
 } from "../../lib/dashboard/dashboard-metrics";
-import { buildMirrorChartScale } from "../../lib/dashboard/mirror-sales-chart";
 import {
   formatCurrencyAxis,
-  formatIntegerAxis,
-  SHOP_OPS_CHART_MARGIN,
+  formatNonZeroCurrencyLabel,
+  formatNonZeroIntegerLabel,
+  hasMirrorChartActivity,
   SHOP_OPS_GRID_PROPS,
   ShopOpsChartEmptyState,
   ShopOpsChartTooltip,
@@ -36,8 +36,27 @@ export type MirrorSalesChartPoint = {
   unitsSold: number;
 };
 
-const MIRROR_CHART_HEIGHT = 292;
+const SALES_CHART_HEIGHT = 228;
+const ORDERS_CHART_HEIGHT = 100;
+const X_AXIS_HEIGHT = 24;
+const Y_AXIS_WIDTH = 68;
+const CHART_MARGIN_LEFT = 4;
+const CHART_MARGIN_RIGHT = 16;
 const MAX_CHART_WIDTH = 2400;
+
+const SALES_CHART_MARGIN = {
+  top: 18,
+  right: CHART_MARGIN_RIGHT,
+  bottom: 0,
+  left: CHART_MARGIN_LEFT,
+} as const;
+
+const ORDERS_CHART_MARGIN = {
+  top: 0,
+  right: CHART_MARGIN_RIGHT,
+  bottom: 0,
+  left: CHART_MARGIN_LEFT,
+} as const;
 
 const VISUALLY_HIDDEN_STYLE = {
   clip: "rect(0 0 0 0)",
@@ -62,68 +81,80 @@ function getPointDetail(point: MirrorSalesChartPoint, salesLabel: string) {
   ].join(". ");
 }
 
-function getMirrorTicks(maximumSales: number, maximumOrders: number) {
-  const orderTicks =
-    maximumOrders > 1 ? [-1, -0.5] : maximumOrders > 0 ? [-1] : [];
-  const salesTicks = maximumSales > 0 ? [0.5, 1] : [];
+function getActiveIndex(value: unknown, pointCount: number) {
+  const index = Number(value);
 
-  return [...orderTicks, 0, ...salesTicks];
+  return Number.isInteger(index) && index >= 0 && index < pointCount
+    ? index
+    : null;
 }
 
 export function MirrorSalesChart({
   points,
   salesLabel,
+  tooltipBucketLabel,
   ariaLabel,
   emptyMessage,
   selectedKey,
   onSelectPoint,
+  showPermanentLabels = false,
   maximumTickLabels = 8,
   minimumWidth = 640,
   minimumBucketWidth = 24,
 }: {
   points: MirrorSalesChartPoint[];
   salesLabel: string;
+  tooltipBucketLabel: "Hour" | "Period";
   ariaLabel: string;
   emptyMessage: string;
   selectedKey?: string | null;
   onSelectPoint?: (point: MirrorSalesChartPoint, index: number) => void;
+  showPermanentLabels?: boolean;
   maximumTickLabels?: number;
   minimumWidth?: number;
   minimumBucketWidth?: number;
 }) {
-  const statusId = useId();
+  const componentId = useId();
+  const statusId = `${componentId}-status`;
+  const syncId = `${componentId}-mirror-sync`;
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const labelsByKey = useMemo(
     () => new Map(points.map((point) => [point.key, point.axisLabel])),
     [points],
   );
-  const mirrorScale = useMemo(() => buildMirrorChartScale(points), [points]);
-  const { hasActivity, maximumOrders, maximumSales } = mirrorScale;
-  const activityCount = points.filter(
-    (point) => point.sales !== 0 || point.orders !== 0,
-  ).length;
-  const showValueLabels = points.length <= 10 || activityCount <= 6;
+  const hasActivity = hasMirrorChartActivity(points);
   const selectedIndex = selectedKey
     ? points.findIndex((point) => point.key === selectedKey)
     : -1;
-  const highlightedIndex =
-    focusedIndex ?? (selectedIndex >= 0 ? selectedIndex : null);
-  const highlightedPoint =
-    highlightedIndex === null ? null : points[highlightedIndex];
-  const accessibleIndex = highlightedIndex ?? 0;
-  const chartData = mirrorScale.points.map((point) => ({
+  const transientIndex = focusedIndex ?? hoveredIndex;
+  const selectedPoint = selectedIndex >= 0 ? points[selectedIndex] : null;
+  const transientPoint =
+    transientIndex === null ? null : points[transientIndex];
+  const accessibleIndex =
+    transientIndex ?? (selectedIndex >= 0 ? selectedIndex : 0);
+  const accessiblePoint = points[accessibleIndex];
+  const chartData = points.map((point) => ({
     ...point,
-    upperValue: point.sales,
-    upperLabel:
-      showValueLabels && point.sales !== 0
-        ? formatCurrencyAxis(point.sales)
+    salesLabel:
+      showPermanentLabels && point.sales !== 0
+        ? formatNonZeroCurrencyLabel(point.sales)
         : "",
-    lowerLabel:
-      showValueLabels && point.orders !== 0 ? formatNumber(point.orders) : "",
+    ordersLabel:
+      showPermanentLabels && point.orders !== 0
+        ? formatNonZeroIntegerLabel(point.orders)
+        : "",
   }));
   const minimumChartWidth = Math.max(
     minimumWidth,
     Math.min(Math.max(points.length, 1) * minimumBucketWidth, MAX_CHART_WIDTH),
+  );
+  const salesAxisMaximum = Math.max(
+    1,
+    points.reduce(
+      (maximum, point) => Math.max(maximum, point.sales),
+      0,
+    ) * 1.15,
   );
 
   if (!hasActivity) {
@@ -187,6 +218,11 @@ export function MirrorSalesChart({
     }
   }
 
+  function selectActivePoint(activeTooltipIndex: unknown) {
+    const index = getActiveIndex(activeTooltipIndex, points.length);
+    if (index !== null) onSelectPoint?.(points[index], index);
+  }
+
   return (
     <div
       aria-describedby={statusId}
@@ -195,9 +231,10 @@ export function MirrorSalesChart({
       aria-valuemax={points.length - 1}
       aria-valuemin={0}
       aria-valuenow={accessibleIndex}
-      aria-valuetext={getPointDetail(points[accessibleIndex], salesLabel)}
+      aria-valuetext={getPointDetail(accessiblePoint, salesLabel)}
       className="shopops-mirror-sales-chart shopops-recharts shopops-chart-scroll"
       data-selected-key={selectedKey ?? undefined}
+      data-show-permanent-labels={showPermanentLabels}
       onBlur={handleBlur}
       onFocus={handleFocus}
       onKeyDown={handleKeyDown}
@@ -227,141 +264,237 @@ export function MirrorSalesChart({
         </span>
       </div>
       <div
+        className="shopops-mirror-sales-chart__canvas"
         style={{
-          height: MIRROR_CHART_HEIGHT,
           minWidth: minimumChartWidth,
+          position: "relative",
           width: "100%",
         }}
       >
-        <ResponsiveContainer height="100%" width="100%">
-          <ComposedChart
-            accessibilityLayer
-            barCategoryGap="32%"
-            data={chartData}
-            margin={SHOP_OPS_CHART_MARGIN}
-            onClick={(state) => {
-              const index = Number(state.activeTooltipIndex);
-              const point = Number.isInteger(index) ? points[index] : null;
-              if (point) onSelectPoint?.(point, index);
-            }}
-            style={{ cursor: onSelectPoint ? "pointer" : undefined }}
-          >
-            <CartesianGrid {...SHOP_OPS_GRID_PROPS} />
-            <XAxis
-              axisLine={{ stroke: "#9ca3af" }}
-              dataKey="key"
-              interval={getAxisInterval(points.length, maximumTickLabels)}
-              minTickGap={14}
-              tick={{ fill: "#6b7280", fontSize: 11 }}
-              tickFormatter={(key) =>
-                labelsByKey.get(String(key)) ?? String(key)
+        <div
+          className="shopops-mirror-sales-chart__sales"
+          style={{
+            height: SALES_CHART_HEIGHT,
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
+          <ResponsiveContainer height="100%" width="100%">
+            <BarChart
+              accessibilityLayer={false}
+              barCategoryGap="34%"
+              data={chartData}
+              margin={SALES_CHART_MARGIN}
+              onClick={(state) => selectActivePoint(state.activeTooltipIndex)}
+              onMouseLeave={() => setHoveredIndex(null)}
+              onMouseMove={(state) =>
+                setHoveredIndex(
+                  getActiveIndex(state.activeTooltipIndex, points.length),
+                )
               }
-              tickLine={false}
-            />
-            <YAxis
-              axisLine={false}
-              domain={[-1, 1]}
-              tick={{ fill: "#6b7280", fontSize: 11 }}
-              tickFormatter={(value: number) => {
-                if (value > 0) {
-                  return formatCurrencyAxis(value * maximumSales);
-                }
-                if (value < 0) {
-                  return formatIntegerAxis(Math.abs(value) * maximumOrders);
-                }
-                return "0";
-              }}
-              tickLine={false}
-              ticks={getMirrorTicks(maximumSales, maximumOrders)}
-              width={68}
-            />
-            <Tooltip
-              content={(props) => (
-                <ShopOpsChartTooltip
-                  {...props}
-                  valueKey="upperValue"
-                  valueLabel={salesLabel}
-                />
-              )}
-              cursor={{ fill: "#eff6ff" }}
-              isAnimationActive={false}
-            />
-            <ReferenceLine stroke="#9ca3af" strokeWidth={1.5} y={0} />
-            {highlightedPoint ? (
-              <ReferenceLine
-                stroke="#2563eb"
-                strokeDasharray="3 3"
-                strokeWidth={2}
-                x={highlightedPoint.key}
+              style={{ cursor: onSelectPoint ? "pointer" : undefined }}
+              syncId={syncId}
+              syncMethod="index"
+            >
+              <CartesianGrid
+                {...SHOP_OPS_GRID_PROPS}
+                horizontalValues={[salesAxisMaximum / 2, salesAxisMaximum]}
               />
-            ) : null}
-            <Bar
-              dataKey="upperMirror"
-              fill="#2563eb"
-              isAnimationActive={false}
-              name={salesLabel}
-              radius={[4, 4, 0, 0]}
-              stackId="mirror"
-            >
-              {points.map((point, index) => (
-                <Cell
-                  fill={
-                    selectedKey === point.key
-                      ? "#1d4ed8"
-                      : focusedIndex === index
-                        ? "#3b82f6"
-                        : "#2563eb"
-                  }
-                  key={`sales-${point.key}`}
-                />
-              ))}
-              {showValueLabels ? (
-                <LabelList
-                  dataKey="upperLabel"
-                  fill="#1e3a8a"
-                  fontSize={10}
-                  fontWeight={700}
-                  position="top"
-                />
-              ) : null}
-            </Bar>
-            <Bar
-              dataKey="lowerMirror"
-              fill="#0f766e"
-              isAnimationActive={false}
-              name="Orders"
-              radius={[0, 0, 4, 4]}
-              stackId="mirror"
-            >
-              {points.map((point, index) => (
-                <Cell
-                  fill={
-                    selectedKey === point.key
-                      ? "#0f5f59"
-                      : focusedIndex === index
-                        ? "#149488"
-                        : "#0f766e"
-                  }
-                  key={`orders-${point.key}`}
-                />
-              ))}
-              {showValueLabels ? (
-                <LabelList
-                  dataKey="lowerLabel"
-                  fill="#115e59"
-                  fontSize={10}
-                  fontWeight={700}
-                  position="bottom"
+              <XAxis dataKey="key" height={0} hide />
+              <YAxis
+                axisLine={false}
+                domain={[0, salesAxisMaximum]}
+                tick={{ fill: "#6b7280", fontSize: 11 }}
+                tickFormatter={formatCurrencyAxis}
+                tickLine={false}
+                ticks={[0, salesAxisMaximum / 2, salesAxisMaximum]}
+                width={Y_AXIS_WIDTH}
+              />
+              <Tooltip
+                content={(props) => (
+                  <ShopOpsChartTooltip
+                    {...props}
+                    labelLabel={tooltipBucketLabel}
+                    valueKey="sales"
+                    valueLabel={salesLabel}
+                  />
+                )}
+                cursor={false}
+                isAnimationActive={false}
+              />
+              {transientPoint &&
+              transientPoint.key !== selectedPoint?.key ? (
+                <ReferenceArea
+                  fill="rgba(15, 118, 110, 0.06)"
+                  stroke="none"
+                  x1={transientPoint.key}
+                  x2={transientPoint.key}
                 />
               ) : null}
-            </Bar>
-          </ComposedChart>
-        </ResponsiveContainer>
+              {selectedPoint ? (
+                <ReferenceArea
+                  fill="rgba(37, 99, 235, 0.08)"
+                  stroke="rgba(37, 99, 235, 0.35)"
+                  strokeWidth={1}
+                  x1={selectedPoint.key}
+                  x2={selectedPoint.key}
+                />
+              ) : null}
+              <Bar
+                dataKey="sales"
+                fill="#2563eb"
+                isAnimationActive={false}
+                name={salesLabel}
+                radius={[4, 4, 0, 0]}
+              >
+                {points.map((point, index) => (
+                  <Cell
+                    fill={
+                      selectedIndex === index
+                        ? "#1d4ed8"
+                        : transientIndex === index
+                          ? "#3b82f6"
+                          : "#2563eb"
+                    }
+                    key={`sales-${point.key}`}
+                  />
+                ))}
+                {showPermanentLabels ? (
+                  <LabelList
+                    dataKey="salesLabel"
+                    fill="#1e3a8a"
+                    fontSize={10}
+                    fontWeight={700}
+                    offset={6}
+                    position="top"
+                  />
+                ) : null}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div
+          aria-hidden="true"
+          className="shopops-mirror-sales-chart__baseline"
+          style={{
+            background: "#d1d5db",
+            height: 1,
+            left: Y_AXIS_WIDTH + CHART_MARGIN_LEFT,
+            pointerEvents: "none",
+            position: "absolute",
+            right: CHART_MARGIN_RIGHT,
+            top: SALES_CHART_HEIGHT,
+            zIndex: 2,
+          }}
+        />
+        <div
+          className="shopops-mirror-sales-chart__orders"
+          style={{
+            height: ORDERS_CHART_HEIGHT,
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
+          <ResponsiveContainer height="100%" width="100%">
+            <BarChart
+              accessibilityLayer={false}
+              barCategoryGap="34%"
+              data={chartData}
+              margin={ORDERS_CHART_MARGIN}
+              onClick={(state) => selectActivePoint(state.activeTooltipIndex)}
+              onMouseLeave={() => setHoveredIndex(null)}
+              onMouseMove={(state) =>
+                setHoveredIndex(
+                  getActiveIndex(state.activeTooltipIndex, points.length),
+                )
+              }
+              style={{ cursor: onSelectPoint ? "pointer" : undefined }}
+              syncId={syncId}
+              syncMethod="index"
+            >
+              <XAxis
+                axisLine={false}
+                dataKey="key"
+                height={X_AXIS_HEIGHT}
+                interval={getAxisInterval(points.length, maximumTickLabels)}
+                minTickGap={14}
+                tick={{ fill: "#6b7280", fontSize: 11 }}
+                tickFormatter={(key) =>
+                  labelsByKey.get(String(key)) ?? String(key)
+                }
+                tickLine={false}
+              />
+              <YAxis
+                axisLine={false}
+                domain={[
+                  0,
+                  (dataMaximum: number) =>
+                    Math.max(1, Math.ceil(dataMaximum * 1.2)),
+                ]}
+                reversed
+                tick={false}
+                tickLine={false}
+                width={Y_AXIS_WIDTH}
+              />
+              <Tooltip
+                content={() => null}
+                cursor={false}
+                isAnimationActive={false}
+              />
+              {transientPoint &&
+              transientPoint.key !== selectedPoint?.key ? (
+                <ReferenceArea
+                  fill="rgba(15, 118, 110, 0.06)"
+                  stroke="none"
+                  x1={transientPoint.key}
+                  x2={transientPoint.key}
+                />
+              ) : null}
+              {selectedPoint ? (
+                <ReferenceArea
+                  fill="rgba(37, 99, 235, 0.08)"
+                  stroke="rgba(37, 99, 235, 0.35)"
+                  strokeWidth={1}
+                  x1={selectedPoint.key}
+                  x2={selectedPoint.key}
+                />
+              ) : null}
+              <Bar
+                dataKey="orders"
+                fill="#0f766e"
+                isAnimationActive={false}
+                name="Orders"
+                radius={[4, 4, 0, 0]}
+              >
+                {points.map((point, index) => (
+                  <Cell
+                    fill={
+                      selectedIndex === index
+                        ? "#0f5f59"
+                        : transientIndex === index
+                          ? "#149488"
+                          : "#0f766e"
+                    }
+                    key={`orders-${point.key}`}
+                  />
+                ))}
+                {showPermanentLabels ? (
+                  <LabelList
+                    dataKey="ordersLabel"
+                    fill="#115e59"
+                    fontSize={10}
+                    fontWeight={700}
+                    offset={6}
+                    position="top"
+                  />
+                ) : null}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       </div>
       <span aria-live="polite" id={statusId} style={VISUALLY_HIDDEN_STYLE}>
-        {highlightedPoint
-          ? getPointDetail(highlightedPoint, salesLabel)
-          : `${points.length} aligned chart buckets.`}
+        {getPointDetail(accessiblePoint, salesLabel)}
       </span>
     </div>
   );

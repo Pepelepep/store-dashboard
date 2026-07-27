@@ -36,6 +36,7 @@ export function NetSalesTrendPlot({
       points={chartPoints}
       salesLabel={revenueLabel}
       selectedKey={selectedPeriod}
+      tooltipBucketLabel="Period"
     />
   );
 }
