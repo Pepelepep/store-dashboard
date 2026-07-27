@@ -11,9 +11,9 @@ export {
 } from "../../lib/dashboard/chart-formatters";
 
 export const SHOP_OPS_CHART_MARGIN = {
-  top: 12,
+  top: 24,
   right: 16,
-  bottom: 4,
+  bottom: 12,
   left: 4,
 } as const;
 
@@ -25,6 +25,7 @@ export const SHOP_OPS_GRID_PROPS = {
 
 type ShopOpsTooltipDatum = {
   tooltipLabel?: string;
+  upperValue?: number;
   productSales?: number;
   netSales?: number;
   orders?: number;
@@ -38,7 +39,7 @@ export function ShopOpsChartTooltip({
   valueKey,
   valueLabel,
 }: TooltipContentProps & {
-  valueKey: "productSales" | "netSales";
+  valueKey: "upperValue" | "productSales" | "netSales";
   valueLabel: string;
 }) {
   if (!active || !payload?.length) {
