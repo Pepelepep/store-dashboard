@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
+
 type ShopifySessionLike = {
   shop: string;
   onlineAccessInfo?: {
@@ -28,6 +30,7 @@ export type PermissionContext = {
 };
 
 type PermissionRow = {
+  id?: string;
   user_email: string | null;
   shopify_user_id: string | null;
   shopify_location_id: string | null;
@@ -132,14 +135,25 @@ export async function getPermissionContext({
     if (countError) throw new Response(countError.message, { status: 500 });
     shopPermissionRuleCount = count ?? 0;
 
-    const { data, error } = await supabase
-      .from("user_location_access")
-      .select(
-        "user_email, shopify_user_id, shopify_location_id, role, can_view, can_manage",
-      )
-      .eq("shop_domain", session.shop);
-    if (error) throw new Response(error.message, { status: 500 });
-    rows = ((data ?? []) as PermissionRow[]).filter((row) => {
+    const permissionRows = await fetchAllSupabasePages<
+      PermissionRow & { id: string }
+    >({
+      label: "Team Access rules",
+      getRowKey: (row) => row.id,
+      fetchPage: (from, to) =>
+        supabase
+          .from("user_location_access")
+          .select(
+            "id, user_email, shopify_user_id, shopify_location_id, role, can_view, can_manage",
+          )
+          .eq("shop_domain", session.shop)
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: Array<PermissionRow & { id: string }> | null;
+          error: { message: string } | null;
+        }>,
+    });
+    rows = permissionRows.filter((row) => {
       const rowEmail = normalizeEmail(row.user_email);
       const rowShopifyUserId = normalizeShopifyUserId(row.shopify_user_id);
 

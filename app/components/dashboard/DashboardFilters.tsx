@@ -1,4 +1,4 @@
-import { Form } from "react-router";
+import { Form, useNavigation } from "react-router";
 import { useEffect, useState } from "react";
 
 import type {
@@ -29,10 +29,15 @@ export function DashboardFilters({
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;
 }) {
+  const navigation = useNavigation();
   const canSwitchLocation = locations.length > 1;
   const [hasUnsavedFilters, setHasUnsavedFilters] = useState(false);
   const [startDateValue, setStartDateValue] = useState(startDate);
   const [endDateValue, setEndDateValue] = useState(endDate);
+  const isApplying =
+    navigation.state !== "idle" && navigation.formMethod === "GET";
+  const isApplyingToday =
+    isApplying && navigation.formData?.get("preset") === "today";
 
   useEffect(() => {
     setStartDateValue(startDate);
@@ -300,18 +305,20 @@ export function DashboardFilters({
           value="today"
           variant="secondary"
           onClick={handleTodayClick}
+          disabled={isApplying}
           style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
         >
-          Today
+          {isApplyingToday ? "Applying today..." : "Today"}
         </AppButton>
 
         <AppButton
           type="submit"
           variant="primary"
           onClick={() => setHasUnsavedFilters(false)}
+          disabled={isApplying}
           style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
         >
-          Apply
+          {isApplying && !isApplyingToday ? "Applying..." : "Apply"}
         </AppButton>
 
         {hasUnsavedFilters ? (

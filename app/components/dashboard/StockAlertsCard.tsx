@@ -32,6 +32,8 @@ function Table({
   headers: string[];
   rows: Array<Array<string | number | ReactNode>>;
 }) {
+  const numericHeaders = new Set(["Available", "Sold", "Days left"]);
+
   return (
     <div
       style={{
@@ -51,7 +53,7 @@ function Table({
               <th
                 key={header}
                 style={{
-                  textAlign: "left",
+                  textAlign: numericHeaders.has(header) ? "right" : "left",
                   padding: "12px 10px",
                   borderBottom: "1px solid #dcdcdc",
                   color: "#616161",
@@ -79,6 +81,9 @@ function Table({
                       padding: "12px 10px",
                       borderBottom: "1px solid #f0f0f0",
                       verticalAlign: "top",
+                      textAlign: numericHeaders.has(headers[cellIndex])
+                        ? "right"
+                        : "left",
                     }}
                   >
                     {cell}

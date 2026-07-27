@@ -40,6 +40,7 @@ function ExportButton({
 }) {
   return (
     <button
+      className="shopops-chart-export"
       type="button"
       onClick={onClick}
       style={{
@@ -85,6 +86,13 @@ export function SectionCard({
         minHeight: 420,
       }}
     >
+      <style>{`
+        .shopops-chart-interactive:focus-visible,
+        .shopops-chart-export:focus-visible {
+          outline: 3px solid #93c5fd !important;
+          outline-offset: 2px;
+        }
+      `}</style>
       <div
         style={{
           display: "flex",

@@ -20,6 +20,8 @@ function Table({
   rows: Array<Array<string | number | ReactNode>>;
   dateColumnMinWidth?: number;
 }) {
+  const textHeaders = new Set(["Order", "Date", "Product", "SKU", "Flags"]);
+
   return (
     <div
       style={{
@@ -39,7 +41,7 @@ function Table({
               <th
                 key={header}
                 style={{
-                  textAlign: "left",
+                  textAlign: textHeaders.has(header) ? "left" : "right",
                   padding: "12px 10px",
                   borderBottom: "1px solid #dcdcdc",
                   color: "#616161",
@@ -79,6 +81,9 @@ function Table({
                           ? "nowrap"
                           : undefined,
                       verticalAlign: "top",
+                      textAlign: textHeaders.has(headers[cellIndex])
+                        ? "left"
+                        : "right",
                     }}
                   >
                     {cell}
@@ -122,7 +127,11 @@ function formatRecentOrderDate(value: string) {
 }
 
 function getChipStyles(label: string) {
-  if (label === "Returned") {
+  if (
+    label === "Returned" ||
+    label === "Partial return" ||
+    label === "Return"
+  ) {
     return {
       background: "#fff1f0",
       border: "1px solid #ffccc7",
@@ -130,7 +139,11 @@ function getChipStyles(label: string) {
     };
   }
 
-  if (label === "Refunded" || label === "Partial refund") {
+  if (
+    label === "Refunded" ||
+    label === "Partial refund" ||
+    label === "Refund"
+  ) {
     return {
       background: "#fff7e6",
       border: "1px solid #ffd591",

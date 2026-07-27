@@ -229,7 +229,7 @@ export function ProductCostsSetup({
               value: formatNumber(data.coverage.missingLineCount),
             },
             {
-              label: "Sales affected",
+              label: "Sales missing costs",
               value: formatCurrency(data.coverage.missingSalesAmount),
             },
             {
@@ -286,7 +286,7 @@ export function ProductCostsSetup({
             padding: 20,
           }}
         >
-          <h2 style={{ marginTop: 0 }}>Missing-cost method</h2>
+          <h2 style={{ marginTop: 0 }}>How to handle missing costs</h2>
           <style>{`
             @media (max-width: 520px) {
               .cost-method-options {
@@ -573,7 +573,7 @@ export function ProductCostsSetup({
                   "Product",
                   "Variant",
                   "Units sold",
-                  "Sales affected",
+                  "Sales missing costs",
                   "Action",
                 ].map((header) => (
                   <th
@@ -583,7 +583,11 @@ export function ProductCostsSetup({
                       borderBottom: "1px solid #ddd",
                       padding: 10,
                       position: "sticky",
-                      textAlign: "left",
+                      textAlign:
+                        header === "Units sold" ||
+                        header === "Sales missing costs"
+                          ? "right"
+                          : "left",
                       top: 0,
                       whiteSpace: "nowrap",
                       zIndex: 1,
@@ -603,10 +607,10 @@ export function ProductCostsSetup({
                   <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
                     {row.variant}
                   </td>
-                  <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 10, textAlign: "right" }}>
                     {formatNumber(row.unitsSold)}
                   </td>
-                  <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
+                  <td style={{ borderBottom: "1px solid #eee", padding: 10, textAlign: "right" }}>
                     {formatCurrency(row.salesAffected)}
                   </td>
                   <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>

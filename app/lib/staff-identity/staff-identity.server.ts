@@ -6,6 +6,19 @@ import {
   type StaffIdentityAliasRow,
   type StaffIdentityOrderLine,
 } from "./staff-identity";
+import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
+
+const STAFF_ALIAS_VALUE_BATCH_SIZE = 100;
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+}
 
 export async function fetchStaffIdentityAliasesForOrderLines({
   supabase,
@@ -33,24 +46,35 @@ export async function fetchStaffIdentityAliasesForOrderLines({
 
     if (aliasValues.length === 0) continue;
 
-    const { data, error } = await supabase
-      .from("staff_identity_aliases")
-      .select(
-        "id, shop_domain, person_id, alias_type, alias_value, source, review_status, suggestion_dismissed_at, first_seen_at, last_seen_at, last_location_id, last_device_id, last_device_name, created_at, updated_at, staff_people(id, shop_domain, display_name, email, is_active, created_at, updated_at)",
-      )
-      .eq("shop_domain", shop)
-      .eq("alias_type", aliasType)
-      .in("alias_value", aliasValues);
+    for (const aliasValueBatch of chunkArray(
+      aliasValues,
+      STAFF_ALIAS_VALUE_BATCH_SIZE,
+    )) {
+      const aliases = await fetchAllSupabasePages<StaffIdentityAliasRow>({
+        label: "Staff identity aliases",
+        getRowKey: (alias) => alias.id,
+        fetchPage: (from, to) =>
+          supabase
+            .from("staff_identity_aliases")
+            .select(
+              "id, shop_domain, person_id, alias_type, alias_value, source, review_status, suggestion_dismissed_at, first_seen_at, last_seen_at, last_location_id, last_device_id, last_device_name, created_at, updated_at, staff_people(id, shop_domain, display_name, email, is_active, created_at, updated_at)",
+            )
+            .eq("shop_domain", shop)
+            .eq("alias_type", aliasType)
+            .in("alias_value", aliasValueBatch)
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: StaffIdentityAliasRow[] | null;
+            error: { message: string } | null;
+          }>,
+      });
 
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    for (const alias of (data ?? []) as unknown as StaffIdentityAliasRow[]) {
-      aliasesByKey.set(
-        staffIdentityAliasKey(alias.alias_type, alias.alias_value),
-        alias,
-      );
+      for (const alias of aliases) {
+        aliasesByKey.set(
+          staffIdentityAliasKey(alias.alias_type, alias.alias_value),
+          alias,
+        );
+      }
     }
   }
 

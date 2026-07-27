@@ -3,7 +3,8 @@
 # Do not deploy this config to the current client production/staging apps.
 
 client_id = "751df93cb283cb05edc5b46b35de06be"
-name = "ShopOps Studio MP Preview"
+name = "ShopOps Studio"
+handle = "shopops-studio"
 application_url = "https://shopops-marketplace-preview.onrender.com"
 embedded = true
 

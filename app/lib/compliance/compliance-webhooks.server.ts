@@ -1,12 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import db from "../../db.server";
-
-const SHOP_SCOPED_TABLES_TO_DELETE = [
+export const SHOP_REDACTION_TABLES = [
+  "webhook_events",
   "sync_jobs",
   "sync_runs",
+  "order_transactions",
   "fixed_expenses",
   "user_location_access",
+  "staff_identity_aliases",
+  "staff_people",
   "order_lines",
   "orders",
   "inventory_levels",
@@ -15,8 +17,20 @@ const SHOP_SCOPED_TABLES_TO_DELETE = [
   "products",
   "locations",
   "staff_members",
+  "sync_automation_state",
+  "pos_attribution_setup",
   "shops",
 ] as const;
+
+type SessionStore = {
+  session: {
+    deleteMany: (args: {
+      where: {
+        shop: string;
+      };
+    }) => Promise<{ count: number }>;
+  };
+};
 
 type ComplianceStatus = "received" | "completed" | "failed";
 
@@ -162,7 +176,7 @@ async function getShopScopedRowCount({
 }) {
   const { count, error } = await supabase
     .from(table)
-    .select("id", { count: "exact", head: true })
+    .select("shop_domain", { count: "exact", head: true })
     .eq("shop_domain", shop);
 
   if (error) throw error;
@@ -173,13 +187,15 @@ async function getShopScopedRowCount({
 export async function deleteShopScopedSupabaseData({
   supabase,
   shop,
+  sessionStore,
 }: {
   supabase: SupabaseClient;
   shop: string;
+  sessionStore: SessionStore;
 }) {
   const deletedCounts: Record<string, number> = {};
 
-  for (const table of SHOP_SCOPED_TABLES_TO_DELETE) {
+  for (const table of SHOP_REDACTION_TABLES) {
     const rowCount = await getShopScopedRowCount({ supabase, table, shop });
     deletedCounts[table] = rowCount;
 
@@ -187,7 +203,7 @@ export async function deleteShopScopedSupabaseData({
     if (error) throw error;
   }
 
-  await db.session.deleteMany({ where: { shop } });
+  await sessionStore.session.deleteMany({ where: { shop } });
 
   return deletedCounts;
 }

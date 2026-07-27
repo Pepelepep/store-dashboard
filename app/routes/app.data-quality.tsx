@@ -871,20 +871,26 @@ export default function DataQualityPage() {
         </section>
 
         {errors.length > 0 ? (
-          <section
-            style={{
-              background: "#fff4f4",
-              border: "1px solid #f2b8b5",
-              borderRadius: 14,
-              marginBottom: 20,
-              padding: 18,
-            }}
+          <PageNotice
+            title="Some data quality checks could not be loaded"
+            message="Refresh the page. If the issue continues, contact support."
+            tone="critical"
           >
-            <strong>Errors</strong>
-            <pre style={{ whiteSpace: "pre-wrap" }}>
-              {JSON.stringify(errors, null, 2)}
-            </pre>
-          </section>
+            <details style={{ fontSize: 13 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                Support details
+              </summary>
+              <pre
+                style={{
+                  marginBottom: 0,
+                  overflowX: "auto",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {errors.join("\n")}
+              </pre>
+            </details>
+          </PageNotice>
         ) : null}
 
         {isFirstRun ? (

@@ -275,5 +275,4 @@ export type DashboardLoaderData = {
   stockAlerts: StockAlertRow[];
   salesOrderLines: DashboardSalesOrderLineRow[];
   staffAttributionAvailable: boolean;
-  errors: string[];
 };

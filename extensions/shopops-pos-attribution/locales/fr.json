@@ -3,5 +3,6 @@
   "tile_heading": "ShopOps",
   "tile_subheading": "Suivi du personnel actif",
   "modal_heading": "ShopOps",
-  "modal_body": "L'attribution du personnel est active pour ce panier PDV."
+  "modal_body": "ShopOps attribue automatiquement les ventes PDV admissibles au membre du personnel connecté.",
+  "modal_status": "L’attribution du personnel est active."
 }
