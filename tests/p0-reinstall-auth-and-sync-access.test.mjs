@@ -2227,8 +2227,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(hourlyChart, /Array\.from\(\{ length: 24 \}/);
   assert.match(hourlyChart, /maximumTickLabels=\{8\}/);
   assert.match(hourlyChart, /distinct Orders below/);
-  assert.match(hourlyChart, /showPermanentLabels/);
-  assert.doesNotMatch(hourlyChart, /showDensityAwareLabels/);
+  assert.match(hourlyChart, /labelMode="always"/);
   assert.match(hourlyChart, /tooltipBucketLabel="Hour"/);
   assert.match(hourlyChart, /onSelectHour\?\.\(rows\[index\]\.hour\)/);
   assert.doesNotMatch(hourlyChart, /from "recharts"/);
@@ -2240,8 +2239,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(trendChart, /orders: row\.ordersCount/);
   assert.match(trendChart, /unitsSold: row\.unitsSold/);
   assert.match(trendChart, /tooltipBucketLabel="Period"/);
-  assert.match(trendChart, /showDensityAwareLabels/);
-  assert.doesNotMatch(trendChart, /showPermanentLabels/);
+  assert.match(trendChart, /labelMode="always"/);
   assert.match(trendChart, /onSelectPeriod\?\.\(rows\[index\]\)/);
   assert.doesNotMatch(trendChart, /from "recharts"/);
   assert.doesNotMatch(trendChart, /<button/);
@@ -2294,8 +2292,15 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(mirrorChart, /ShopOpsChartTooltip/);
   assert.match(mirrorChart, /ShopOpsChartEmptyState/);
   assert.match(mirrorChart, /hasMirrorChartActivity/);
-  assert.match(mirrorChart, /showPermanentLabels/);
-  assert.match(mirrorChart, /showDensityAwareLabels/);
+  assert.match(
+    mirrorChart,
+    /labelMode\?: "always" \| "density-aware" \| "none"/,
+  );
+  assert.match(mirrorChart, /labelMode === "always"/);
+  assert.match(mirrorChart, /labelMode === "density-aware"/);
+  assert.match(mirrorChart, /labelMode !== "none"/);
+  assert.doesNotMatch(mirrorChart, /showDensityAwareLabels/);
+  assert.doesNotMatch(mirrorChart, /showPermanentLabels/);
   assert.match(mirrorChart, /points\.length <= 12/);
   assert.match(mirrorChart, /points\.length > 12/);
   assert.match(mirrorChart, /index === hoveredIndex/);

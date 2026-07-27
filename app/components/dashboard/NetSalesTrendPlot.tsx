@@ -32,11 +32,11 @@ export function NetSalesTrendPlot({
     <MirrorSalesChart
       ariaLabel={`${revenueLabel} above and Orders below in aligned periods.`}
       emptyMessage="No net sales or orders match the current filters."
+      labelMode="always"
       onSelectPoint={(_, index) => onSelectPeriod?.(rows[index])}
       points={chartPoints}
       salesLabel={revenueLabel}
       selectedKey={selectedPeriod}
-      showDensityAwareLabels
       tooltipBucketLabel="Period"
     />
   );
