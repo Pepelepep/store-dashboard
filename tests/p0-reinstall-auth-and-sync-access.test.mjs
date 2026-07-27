@@ -46,6 +46,7 @@ import {
   formatIntegerAxis,
 } from "../app/lib/dashboard/chart-formatters.ts";
 import { computeHourlySalesRows } from "../app/lib/dashboard/hourly-sales.ts";
+import { buildMirrorChartScale } from "../app/lib/dashboard/mirror-sales-chart.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -2092,7 +2093,39 @@ test("an empty store day preserves every zero-value hour from 00:00 through 23:0
   );
 });
 
-test("premium chart presentation keeps both series, readable axes, and distinct visuals", () => {
+test("mirrored chart scale sends sales upward, orders downward, and detects zero-only data", () => {
+  const activeScale = buildMirrorChartScale([
+    { sales: 100, orders: 4 },
+    { sales: 50, orders: 2 },
+    { sales: 0, orders: 0 },
+  ]);
+  const emptyScale = buildMirrorChartScale([
+    { sales: 0, orders: 0 },
+    { sales: 0, orders: 0 },
+  ]);
+
+  assert.equal(activeScale.hasActivity, true);
+  assert.deepEqual(
+    activeScale.points.map(({ upperMirror, lowerMirror }) => ({
+      lowerMirror,
+      upperMirror,
+    })),
+    [
+      { upperMirror: 1, lowerMirror: -1 },
+      { upperMirror: 0.5, lowerMirror: -0.5 },
+      { upperMirror: 0, lowerMirror: 0 },
+    ],
+  );
+  assert.equal(emptyScale.hasActivity, false);
+  assert.equal(
+    emptyScale.points.every(
+      (point) => point.upperMirror === 0 && point.lowerMirror === 0,
+    ),
+    true,
+  );
+});
+
+test("shared mirrored charts keep aligned sales and order bars with accessible selection", () => {
   const locationRoute = readFileSync(
     new URL("../app/routes/app.locations.tsx", import.meta.url),
     "utf8",
@@ -2104,6 +2137,13 @@ test("premium chart presentation keeps both series, readable axes, and distinct 
   const trendChart = readFileSync(
     new URL(
       "../app/components/dashboard/NetSalesTrendPlot.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const mirrorChart = readFileSync(
+    new URL(
+      "../app/components/dashboard/MirrorSalesChart.tsx",
       import.meta.url,
     ),
     "utf8",
@@ -2134,6 +2174,10 @@ test("premium chart presentation keeps both series, readable axes, and distinct 
   assert.match(locationRoute, /<ol/);
   assert.match(locationRoute, /Rank/);
   assert.match(locationRoute, /Orders/);
+  assert.match(locationRoute, /<option value="day">Day<\/option>/);
+  assert.match(locationRoute, /<option value="week">Week<\/option>/);
+  assert.match(locationRoute, /<option value="month">Month<\/option>/);
+  assert.match(locationRoute, /<option value="year">Year<\/option>/);
   assert.notEqual(
     locationRoute.indexOf("function RankedBreakdownBars"),
     locationRoute.indexOf("function StaffLeaderboard"),
@@ -2142,55 +2186,61 @@ test("premium chart presentation keeps both series, readable axes, and distinct 
 
   assert.match(hourlyChart, /Hourly product sales/);
   assert.match(hourlyChart, /Product sales/);
-  assert.match(hourlyChart, /ResponsiveContainer/);
-  assert.match(hourlyChart, /ComposedChart/);
-  assert.match(hourlyChart, /<Bar/);
-  assert.match(hourlyChart, /<Line/);
-  assert.match(hourlyChart, /CartesianGrid/);
-  assert.match(hourlyChart, /yAxisId="sales"/);
-  assert.match(hourlyChart, /yAxisId="orders"/);
-  assert.match(hourlyChart, /stroke="#0f766e"/);
-  assert.match(hourlyChart, /Units sold/);
+  assert.match(hourlyChart, /MirrorSalesChart/);
+  assert.match(hourlyChart, /sales: row\.revenue/);
+  assert.match(hourlyChart, /orders: row\.ordersCount/);
+  assert.match(hourlyChart, /unitsSold: row\.unitsSold/);
   assert.match(hourlyChart, /Array\.from\(\{ length: 24 \}/);
-  assert.match(hourlyChart, /interval=\{2\}/);
-  assert.doesNotMatch(hourlyChart, /minPointSize/);
-  assert.doesNotMatch(hourlyChart, /<svg/);
-  assert.match(hourlyChart, /formatCurrencyAxis/);
-  assert.match(hourlyChart, /formatIntegerAxis/);
-  assert.match(hourlyChart, /ShopOpsChartTooltip/);
-  assert.match(hourlyChart, /accessibilityLayer/);
-  assert.match(hourlyChart, /shopops-chart-keyboard-controls/);
-  assert.match(hourlyChart, /aria-pressed/);
-  assert.match(hourlyChart, /shopops-chart-scroll/);
-  assert.ok(
-    (hourlyChart.match(/isAnimationActive=\{false\}/g) ?? []).length >= 3,
-  );
+  assert.match(hourlyChart, /maximumTickLabels=\{9\}/);
+  assert.match(hourlyChart, /distinct Orders below/);
+  assert.match(hourlyChart, /onSelectHour\?\.\(rows\[index\]\.hour\)/);
+  assert.doesNotMatch(hourlyChart, /from "recharts"/);
+  assert.doesNotMatch(hourlyChart, /<button/);
 
   assert.match(trendChart, /revenueLabel/);
-  assert.match(trendChart, /Orders/);
-  assert.match(trendChart, /Units sold/);
-  assert.match(trendChart, /ResponsiveContainer/);
-  assert.match(trendChart, /ComposedChart/);
-  assert.match(trendChart, /<Area/);
-  assert.ok((trendChart.match(/<Line/g) ?? []).length >= 2);
-  assert.match(trendChart, /CartesianGrid/);
-  assert.match(trendChart, /formatCurrencyAxis/);
-  assert.match(trendChart, /formatIntegerAxis/);
-  assert.match(trendChart, /ShopOpsChartTooltip/);
-  assert.match(trendChart, /fillOpacity=\{0\.55\}/);
-  assert.doesNotMatch(trendChart, /<svg/);
-  assert.match(trendChart, /onClick/);
-  assert.match(trendChart, /accessibilityLayer/);
-  assert.match(trendChart, /shopops-chart-keyboard-controls/);
-  assert.match(trendChart, /aria-pressed/);
-  assert.match(trendChart, /shopops-chart-scroll/);
+  assert.match(trendChart, /MirrorSalesChart/);
+  assert.match(trendChart, /sales: row\.revenue/);
+  assert.match(trendChart, /orders: row\.ordersCount/);
+  assert.match(trendChart, /unitsSold: row\.unitsSold/);
+  assert.match(trendChart, /onSelectPeriod\?\.\(rows\[index\]\)/);
+  assert.doesNotMatch(trendChart, /from "recharts"/);
+  assert.doesNotMatch(trendChart, /<button/);
+
+  assert.match(mirrorChart, /export function MirrorSalesChart/);
+  assert.match(mirrorChart, /ResponsiveContainer/);
+  assert.match(mirrorChart, /ComposedChart/);
+  assert.equal((mirrorChart.match(/<Bar\b/g) ?? []).length, 2);
+  assert.match(mirrorChart, /dataKey="upperMirror"/);
+  assert.match(mirrorChart, /dataKey="lowerMirror"/);
+  assert.equal((mirrorChart.match(/stackId="mirror"/g) ?? []).length, 2);
+  assert.doesNotMatch(mirrorChart, /<Line\b/);
+  assert.doesNotMatch(mirrorChart, /<Area\b/);
+  assert.doesNotMatch(mirrorChart, /minPointSize/);
+  assert.doesNotMatch(mirrorChart, /<button/);
+  assert.match(mirrorChart, /CartesianGrid/);
+  assert.match(mirrorChart, /ReferenceLine/);
+  assert.match(mirrorChart, /ShopOpsChartTooltip/);
+  assert.match(mirrorChart, /ShopOpsChartEmptyState/);
+  assert.match(mirrorChart, /buildMirrorChartScale/);
+  assert.match(mirrorChart, /showValueLabels/);
+  assert.match(mirrorChart, /point\.sales !== 0/);
+  assert.match(mirrorChart, /point\.orders !== 0/);
+  assert.match(mirrorChart, /accessibilityLayer/);
+  assert.match(mirrorChart, /onKeyDown=\{handleKeyDown\}/);
+  assert.match(mirrorChart, /ArrowRight/);
+  assert.match(mirrorChart, /ArrowLeft/);
+  assert.match(mirrorChart, /onSelectPoint/);
+  assert.match(mirrorChart, /data-selected-key/);
+  assert.match(mirrorChart, /aria-live="polite"/);
+  assert.match(mirrorChart, /shopops-chart-scroll/);
   assert.ok(
-    (trendChart.match(/isAnimationActive=\{false\}/g) ?? []).length >= 4,
+    (mirrorChart.match(/isAnimationActive=\{false\}/g) ?? []).length >= 3,
   );
 
   assert.match(sectionCard, /borderRadius: 18/);
   assert.equal(sectionCard.includes("minHeight: 420"), false);
   assert.match(sectionCard, /shopops-recharts/);
+  assert.match(sectionCard, /shopops-mirror-sales-chart:focus-visible/);
   assert.match(sharedChart, /ShopOpsChartTooltip/);
   assert.match(sharedChart, /ShopOpsChartEmptyState/);
   assert.match(sharedChart, /SHOP_OPS_CHART_MARGIN/);

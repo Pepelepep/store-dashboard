@@ -97,15 +97,7 @@ export function SectionCard({
           scrollbar-color: #cbd5e1 transparent;
           scrollbar-width: thin;
         }
-        .shopops-chart-keyboard-controls {
-          clip: rect(0 0 0 0);
-          clip-path: inset(50%);
-          height: 1px;
-          overflow: hidden;
-          position: absolute;
-          white-space: nowrap;
-          width: 1px;
-        }
+        .shopops-mirror-sales-chart:focus-visible,
         .shopops-recharts .recharts-wrapper:focus-visible {
           outline: 3px solid #93c5fd;
           outline-offset: 2px;

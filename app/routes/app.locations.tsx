@@ -1695,8 +1695,6 @@ function TrendChart({
 }) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
-  const hasPoints = rows.length > 0;
-
   return (
     <section
       className="shopops-location-chart-card"
@@ -1762,18 +1760,12 @@ function TrendChart({
         </label>
       </div>
 
-      {hasPoints ? (
-        <NetSalesTrendPlot
-          rows={rows}
-          revenueLabel={revenueLabel}
-          selectedPeriod={selectedPeriod}
-          onSelectPeriod={onSelectPeriod}
-        />
-      ) : (
-        <div style={LOCATION_CHART_EMPTY_STYLE}>
-          No sales available for this period.
-        </div>
-      )}
+      <NetSalesTrendPlot
+        rows={rows}
+        revenueLabel={revenueLabel}
+        selectedPeriod={selectedPeriod}
+        onSelectPeriod={onSelectPeriod}
+      />
     </section>
   );
 }
