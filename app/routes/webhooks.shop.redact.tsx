@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
 
+import db from "../db.server";
 import {
   deleteShopScopedSupabaseData,
   getComplianceErrorDetails,
@@ -15,7 +16,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   console.log(`Received ${topic} compliance webhook for ${shop}.`);
 
   try {
-    const deletedCounts = await deleteShopScopedSupabaseData({ supabase, shop });
+    const deletedCounts = await deleteShopScopedSupabaseData({
+      supabase,
+      shop,
+      sessionStore: db,
+    });
 
     await recordComplianceWebhookEvent({
       supabase,
@@ -29,7 +34,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
   } catch (error) {
-    console.error(`Failed to handle ${topic} compliance webhook for ${shop}.`, error);
+    console.error(`Failed to handle ${topic} compliance webhook for ${shop}.`, {
+      message: error instanceof Error ? error.message.slice(0, 500) : "Unknown error",
+    });
     await recordComplianceWebhookEvent({
       supabase,
       shop,
@@ -37,7 +44,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       status: "failed",
       details: getComplianceErrorDetails(error),
     });
+
+    return new Response("Shop redaction temporarily unavailable.", {
+      status: 503,
+    });
   }
 
-  return new Response();
+  return new Response(null, { status: 200 });
 };

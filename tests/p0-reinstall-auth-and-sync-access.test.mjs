@@ -25,6 +25,22 @@ import {
 import { formatRelativeUpdatedAt } from "../app/lib/financial/cogs-setup.ts";
 import { allocateExpensesByLocation } from "../app/lib/financial/expense-allocation.ts";
 import { calculateNetSalesAfterCashRefunds } from "../app/lib/financial/net-sales.ts";
+import { fetchAllSupabasePages } from "../app/lib/db/supabase-pagination.server.ts";
+import { respondToOperationalWebhook } from "../app/lib/webhooks/operational-webhook-response.server.ts";
+import {
+  deleteShopScopedSupabaseData,
+  recordComplianceWebhookEvent,
+  SHOP_REDACTION_TABLES,
+} from "../app/lib/compliance/compliance-webhooks.server.ts";
+import { validateExpenseMonthRange } from "../app/lib/financial/expense-validation.ts";
+import { getRecentOrderChips } from "../app/lib/dashboard/recent-order-flags.ts";
+import {
+  getAccessibleLocationRows,
+  hasNoAssignedLocationAccess,
+} from "../app/lib/auth/location-performance-access.ts";
+import { buildDrilldownResetKey } from "../app/lib/dashboard/drilldown-reset-key.ts";
+import { reconcileTrendRowsWithCashRefunds } from "../app/lib/dashboard/location-trend-reconciliation.ts";
+import { limitRankedBreakdownRows } from "../app/lib/dashboard/ranked-breakdown.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -672,10 +688,13 @@ test("fully returned missing-cost line does not block profit", () => {
     },
   ]);
 
-  assert.equal(calculateRemainingLineCogs({
-    quantity: 1,
-    returned_quantity: 1,
-  }), 0);
+  assert.equal(
+    calculateRemainingLineCogs({
+      quantity: 1,
+      returned_quantity: 1,
+    }),
+    0,
+  );
   assert.equal(summary.cogs, 0);
   assert.equal(summary.cogsIncomplete, false);
   assert.equal(summary.missingCogsLineCount, 0);
@@ -915,8 +934,13 @@ test("Setup remains admin-only and navigation order is stable", () => {
   );
 
   assert.match(setupRoute, /assertAdminAccess/);
-  assert.ok(appRoute.indexOf("Profit Dashboard") < appRoute.indexOf("Location Performance"));
-  assert.ok(appRoute.indexOf("Location Performance") < appRoute.indexOf(">Setup<"));
+  assert.ok(
+    appRoute.indexOf("Profit Dashboard") <
+      appRoute.indexOf("Location Performance"),
+  );
+  assert.ok(
+    appRoute.indexOf("Location Performance") < appRoute.indexOf(">Setup<"),
+  );
   assert.ok(appRoute.indexOf(">Setup<") < appRoute.indexOf(">Staff<"));
   assert.ok(appRoute.indexOf(">Staff<") < appRoute.indexOf(">Data sync<"));
 });
@@ -936,11 +960,15 @@ test("COGS recompute functions and settings update are service-role-only", () =>
   ]) {
     assert.match(
       migration,
-      new RegExp(`REVOKE ALL ON FUNCTION public\\.${signature}[\\s\\S]*?FROM PUBLIC`),
+      new RegExp(
+        `REVOKE ALL ON FUNCTION public\\.${signature}[\\s\\S]*?FROM PUBLIC`,
+      ),
     );
     assert.match(
       migration,
-      new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${signature}[\\s\\S]*?TO service_role`),
+      new RegExp(
+        `GRANT EXECUTE ON FUNCTION public\\.${signature}[\\s\\S]*?TO service_role`,
+      ),
     );
   }
 
@@ -952,10 +980,7 @@ test("COGS recompute functions and settings update are service-role-only", () =>
 
 test("product-cost save disables and reports pending recalculation", () => {
   const component = readFileSync(
-    new URL(
-      "../app/components/setup/ProductCostsSetup.tsx",
-      import.meta.url,
-    ),
+    new URL("../app/components/setup/ProductCostsSetup.tsx", import.meta.url),
     "utf8",
   );
 
@@ -964,7 +989,10 @@ test("product-cost save disables and reports pending recalculation", () => {
     component,
     /navigation\.formData\?\.get\("intent"\) === "save-product-costs"/,
   );
-  assert.match(component, /disabled=\{[\s\S]*?isSaving[\s\S]*?!settingsChanged/);
+  assert.match(
+    component,
+    /disabled=\{[\s\S]*?isSaving[\s\S]*?!settingsChanged/,
+  );
   assert.match(component, /Saving and recalculating\.\.\./);
 });
 
@@ -1091,10 +1119,7 @@ test("relative Product-cost update timestamps are merchant-friendly", () => {
 
 test("Product-cost controls use selection cards and hide preview in Shopify-only mode", () => {
   const component = readFileSync(
-    new URL(
-      "../app/components/setup/ProductCostsSetup.tsx",
-      import.meta.url,
-    ),
+    new URL("../app/components/setup/ProductCostsSetup.tsx", import.meta.url),
     "utf8",
   );
 
@@ -1110,15 +1135,15 @@ test("Product-cost controls use selection cards and hide preview in Shopify-only
     /\{enabled \? \([\s\S]*?<h2 style=\{\{ marginTop: 0 \}\}>Estimated impact preview/,
   );
   assert.match(component, /!settingsChanged/);
-  assert.match(component, /Profit remains unavailable while relevant product costs are/);
+  assert.match(
+    component,
+    /Profit remains unavailable while relevant product costs are/,
+  );
 });
 
 test("missing-product table uses a bounded fetcher with pagination", () => {
   const component = readFileSync(
-    new URL(
-      "../app/components/setup/ProductCostsSetup.tsx",
-      import.meta.url,
-    ),
+    new URL("../app/components/setup/ProductCostsSetup.tsx", import.meta.url),
     "utf8",
   );
   const resourceRoute = readFileSync(
@@ -1148,7 +1173,10 @@ test("dashboard notices live only in their relevant profit KPI cards", () => {
   const grossMarginStart = dashboardCards.indexOf('title="Gross margin"');
   const expensesStart = dashboardCards.indexOf('title="Expenses"');
   const netProfitStart = dashboardCards.indexOf('title="Net profit"');
-  const detailsStart = dashboardCards.indexOf("{isFinancialMetricsV2 ? (", netProfitStart);
+  const detailsStart = dashboardCards.indexOf(
+    "{isFinancialMetricsV2 ? (",
+    netProfitStart,
+  );
   const grossMarginSection = dashboardCards.slice(
     grossMarginStart,
     expensesStart,
@@ -1311,4 +1339,710 @@ test("location-specific expense remains fully assigned to its location", () => {
   );
 
   assert.deepEqual(Array.from(allocation.values()), [0, 1000, 0]);
+});
+
+test("bounded dashboard pagination includes rows beyond the PostgREST page limit", async () => {
+  const sourceRows = Array.from({ length: 2_105 }, (_, index) => ({
+    id: String(index + 1).padStart(5, "0"),
+    amount: 1,
+  }));
+  const requestedRanges = [];
+  const rows = await fetchAllSupabasePages({
+    pageSize: 1000,
+    label: "Test financial rows",
+    getRowKey: (row) => row.id,
+    async fetchPage(from, to) {
+      requestedRanges.push([from, to]);
+      return {
+        data: sourceRows.slice(from, to + 1),
+        error: null,
+      };
+    },
+  });
+
+  assert.equal(
+    rows.reduce((total, row) => total + row.amount, 0),
+    2_105,
+  );
+  assert.deepEqual(requestedRanges, [
+    [0, 999],
+    [1000, 1999],
+    [2000, 2999],
+  ]);
+});
+
+test("pagination rejects duplicate stable keys instead of double-counting", async () => {
+  await assert.rejects(
+    fetchAllSupabasePages({
+      pageSize: 2,
+      label: "Test deterministic rows",
+      getRowKey: (row) => row.id,
+      async fetchPage(from) {
+        return {
+          data: from === 0 ? [{ id: "a" }, { id: "b" }] : [{ id: "b" }],
+          error: null,
+        };
+      },
+    }),
+    /duplicate stable row key/,
+  );
+});
+
+test("a failed later page never returns partial dashboard totals", async () => {
+  let completed = false;
+
+  await assert.rejects(
+    fetchAllSupabasePages({
+      pageSize: 2,
+      label: "Test failing rows",
+      getRowKey: (row) => row.id,
+      async fetchPage(from) {
+        if (from === 0) {
+          return { data: [{ id: "a" }, { id: "b" }], error: null };
+        }
+        return { data: null, error: { message: "temporary failure" } };
+      },
+    }).then(() => {
+      completed = true;
+    }),
+    /page 2 could not be loaded/,
+  );
+
+  assert.equal(completed, false);
+});
+
+test("Dashboard financial and Staff inputs use paged stable reads", () => {
+  const dashboard = readFileSync(
+    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+    "utf8",
+  );
+  const staffResolution = readFileSync(
+    new URL(
+      "../app/lib/staff-identity/staff-identity.server.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(dashboard, /fetchAllSupabasePages/);
+  assert.match(
+    dashboard,
+    /order\("created_at_shopify",[\s\S]*?order\("id",[\s\S]*?range\(from, to\)/,
+  );
+  for (const table of [
+    "order_lines",
+    "order_transactions",
+    "inventory_levels",
+    "variants",
+    "products",
+    "fixed_expenses",
+  ]) {
+    assert.match(dashboard, new RegExp(`from\\("${table}"\\)`));
+  }
+  assert.match(staffResolution, /fetchAllSupabasePages/);
+  assert.match(staffResolution, /order\("id"[\s\S]*?range\(from, to\)/);
+});
+
+test("operational webhook queue insert and duplicate both return success", async () => {
+  const request = new Request("https://example.com/webhooks/orders/create", {
+    method: "POST",
+  });
+  const logs = [];
+  const logger = {
+    log(...args) {
+      logs.push(args);
+    },
+    error() {
+      assert.fail("successful webhook handling must not log an error");
+    },
+  };
+
+  const inserted = await respondToOperationalWebhook({
+    request,
+    payload: { id: 1 },
+    shop,
+    topic: "orders/create",
+    enqueue: async () => ({ skipped: false }),
+    logger,
+  });
+  const duplicate = await respondToOperationalWebhook({
+    request,
+    payload: { id: 1 },
+    shop,
+    topic: "orders/create",
+    enqueue: async () => ({ skipped: true }),
+    logger,
+  });
+
+  assert.equal(inserted.status, 200);
+  assert.equal(duplicate.status, 200);
+  assert.equal(logs.length, 2);
+});
+
+test("transient operational webhook queue failure returns retryable non-2xx", async () => {
+  const errorLogs = [];
+  const response = await respondToOperationalWebhook({
+    request: new Request("https://example.com/webhooks/products/update", {
+      method: "POST",
+    }),
+    payload: { secret: "must-not-be-logged" },
+    shop,
+    topic: "products/update",
+    enqueue: async () => {
+      throw new Error("database temporarily unavailable");
+    },
+    logger: {
+      log() {},
+      error(...args) {
+        errorLogs.push(args);
+      },
+    },
+  });
+
+  assert.equal(response.status, 503);
+  assert.equal(errorLogs.length, 1);
+  assert.equal(JSON.stringify(errorLogs).includes("must-not-be-logged"), false);
+});
+
+test("webhook retry followed by duplicate acknowledgment processes exactly once", async () => {
+  let firstAttempt = true;
+  let durableInsertCount = 0;
+  let eventExists = false;
+  const enqueue = async () => {
+    if (firstAttempt) {
+      firstAttempt = false;
+      throw new Error("transient queue failure");
+    }
+    if (eventExists) return { skipped: true };
+    eventExists = true;
+    durableInsertCount += 1;
+    return { skipped: false };
+  };
+  const input = {
+    request: new Request("https://example.com/webhooks/orders/updated", {
+      method: "POST",
+    }),
+    payload: { id: 2 },
+    shop,
+    topic: "orders/updated",
+    enqueue,
+    logger: { log() {}, error() {} },
+  };
+
+  assert.equal((await respondToOperationalWebhook(input)).status, 503);
+  assert.equal((await respondToOperationalWebhook(input)).status, 200);
+  assert.equal((await respondToOperationalWebhook(input)).status, 200);
+  assert.equal(durableInsertCount, 1);
+});
+
+test("shop redaction inventory covers every current merchant-scoped table", () => {
+  assert.deepEqual(SHOP_REDACTION_TABLES, [
+    "webhook_events",
+    "sync_jobs",
+    "sync_runs",
+    "order_transactions",
+    "fixed_expenses",
+    "user_location_access",
+    "staff_identity_aliases",
+    "staff_people",
+    "order_lines",
+    "orders",
+    "inventory_levels",
+    "inventory_items",
+    "variants",
+    "products",
+    "locations",
+    "staff_members",
+    "sync_automation_state",
+    "pos_attribution_setup",
+    "shops",
+  ]);
+  assert.equal(
+    SHOP_REDACTION_TABLES.includes("compliance_webhook_events"),
+    false,
+  );
+});
+
+test("shop redaction deletes all table rows and Prisma sessions idempotently", async () => {
+  const deletedTables = [];
+  const sessionCalls = [];
+  const supabase = {
+    from(table) {
+      return {
+        select() {
+          return {
+            async eq() {
+              return { count: 0, error: null };
+            },
+          };
+        },
+        delete() {
+          return {
+            async eq() {
+              deletedTables.push(table);
+              return { error: null };
+            },
+          };
+        },
+      };
+    },
+  };
+  const sessionStore = {
+    session: {
+      async deleteMany(args) {
+        sessionCalls.push(args);
+        return { count: 0 };
+      },
+    },
+  };
+
+  await deleteShopScopedSupabaseData({ supabase, shop, sessionStore });
+  await deleteShopScopedSupabaseData({ supabase, shop, sessionStore });
+
+  assert.deepEqual(deletedTables, [
+    ...SHOP_REDACTION_TABLES,
+    ...SHOP_REDACTION_TABLES,
+  ]);
+  assert.deepEqual(sessionCalls, [{ where: { shop } }, { where: { shop } }]);
+});
+
+test("expense month validation rejects an end month before the start month", () => {
+  assert.deepEqual(
+    validateExpenseMonthRange({
+      startMonth: "2026-07",
+      endMonth: "2026-06",
+    }),
+    {
+      end_month: "End month cannot be earlier than start month.",
+    },
+  );
+  assert.deepEqual(
+    validateExpenseMonthRange({
+      startMonth: "2026-07",
+      endMonth: "2026-07",
+    }),
+    {},
+  );
+});
+
+test("expense location validation fails before any expense write and deletion confirms impact", () => {
+  const setupRoute = readFileSync(
+    new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
+    "utf8",
+  );
+  const invalidLocationReturn = setupRoute.indexOf(
+    "Select a location that belongs to this Shopify store.",
+  );
+  const expensePayload = setupRoute.indexOf("const payload = {");
+
+  assert.match(
+    setupRoute,
+    /\.eq\("shop_domain", session\.shop\)[\s\S]*?\.eq\("shopify_location_id", shopifyLocationId\)/,
+  );
+  assert.ok(invalidLocationReturn >= 0);
+  assert.ok(invalidLocationReturn < expensePayload);
+  assert.match(
+    setupRoute,
+    /Delete “\$\{expense\.expense_name\}”\? Reporting will update to remove this expense\./,
+  );
+  assert.match(setupRoute, /event\.preventDefault\(\)/);
+});
+
+function recentLine(overrides = {}) {
+  return {
+    quantity: 2,
+    gross_sales: 100,
+    discounts: 0,
+    returns: 0,
+    returned_quantity: 0,
+    refunded_amount: 0,
+    ...overrides,
+  };
+}
+
+test("recent order badges use exact refund and return precedence", () => {
+  assert.deepEqual(
+    getRecentOrderChips(
+      recentLine({
+        discounts: 10,
+        refunded_amount: 25,
+        returned_quantity: 1,
+      }),
+    ),
+    ["Discounted", "Partial return", "Partial refund"],
+  );
+  assert.deepEqual(
+    getRecentOrderChips(
+      recentLine({ refunded_amount: 100, returned_quantity: 2 }),
+    ),
+    ["Returned", "Refunded"],
+  );
+  assert.deepEqual(getRecentOrderChips(recentLine({ returns: 25 })), [
+    "Return",
+  ]);
+  assert.deepEqual(
+    getRecentOrderChips(recentLine({ gross_sales: 0, refunded_amount: 25 })),
+    ["Refund"],
+  );
+});
+
+test("Location financial summary exposes completeness and expense setup states once", () => {
+  const locationRoute = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const label of [
+    "Net Sales",
+    "COGS",
+    "Gross profit",
+    "Gross margin",
+    "Expenses",
+    "Net profit",
+  ]) {
+    assert.match(locationRoute, new RegExp(`label: "${label}"`));
+  }
+  assert.equal(
+    locationRoute.match(/Includes estimated product costs/g)?.length,
+    1,
+  );
+  assert.match(locationRoute, /missing[\s\n]+product costs\./);
+  assert.match(locationRoute, /No operating expenses configured\./);
+  assert.match(locationRoute, /Add expenses/);
+  assert.match(locationRoute, /expensesSearch\.set\("tab", "expenses"\)/);
+});
+
+test("Dashboard and Location filters expose pending labels and disable repeat submits", () => {
+  const dashboardFilters = readFileSync(
+    new URL(
+      "../app/components/dashboard/DashboardFilters.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const source of [dashboardFilters, locations]) {
+    assert.match(source, /useNavigation/);
+    assert.match(source, /Applying\.\.\./);
+    assert.match(source, /disabled=\{isApplying/);
+  }
+});
+
+test("marketplace identity is exact and Billing behavior remains unchanged", () => {
+  const marketplaceConfig = readFileSync(
+    new URL("../shopify.app.shopops-marketplace.toml", import.meta.url),
+    "utf8",
+  );
+  const billing = readFileSync(
+    new URL("../app/lib/billing.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    marketplaceConfig,
+    /^client_id = "751df93cb283cb05edc5b46b35de06be"$/m,
+  );
+  assert.match(marketplaceConfig, /^name = "ShopOps Studio"$/m);
+  assert.match(marketplaceConfig, /^handle = "shopops-studio"$/m);
+  assert.match(billing, /BILLING_ENABLED/);
+  assert.match(billing, /BILLING_TEST_SHOPS/);
+  assert.match(billing, /price: "\$59\.99\/month"/);
+  assert.match(billing, /trialDays: 14/);
+});
+
+test("POS merchant modal has automatic attribution state and no diagnostics", () => {
+  const modal = readFileSync(
+    new URL(
+      "../extensions/shopops-pos-attribution/src/Modal.jsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const locale = readFileSync(
+    new URL(
+      "../extensions/shopops-pos-attribution/locales/en.default.json",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.equal(modal.includes("DiagnosticsPanel"), false);
+  assert.equal(modal.includes("ENABLE_DEV_DIAGNOSTICS"), false);
+  assert.equal(modal.includes("JSON.stringify"), false);
+  assert.equal(modal.includes("staffMemberId"), false);
+  assert.match(locale, /automatically attributes eligible POS sales/);
+  assert.match(locale, /Staff attribution is active/);
+});
+
+test("Location Performance applies Team Access for admin, manager, viewer, and no-location users", () => {
+  const locations = [
+    { shopify_location_id: "location-a", name: "A" },
+    { shopify_location_id: "location-b", name: "B" },
+    { shopify_location_id: "location-c", name: "C" },
+  ];
+
+  const adminRows = getAccessibleLocationRows({
+    locations,
+    isAdmin: true,
+    allowedLocationIds: new Set(),
+  });
+  const managerRows = getAccessibleLocationRows({
+    locations,
+    isAdmin: false,
+    allowedLocationIds: new Set(["location-a", "location-c"]),
+  });
+  const viewerRows = getAccessibleLocationRows({
+    locations,
+    isAdmin: false,
+    allowedLocationIds: new Set(["location-b"]),
+  });
+  const noLocationRows = getAccessibleLocationRows({
+    locations,
+    isAdmin: false,
+    allowedLocationIds: new Set(),
+  });
+
+  assert.deepEqual(adminRows, locations);
+  assert.deepEqual(
+    managerRows.map((row) => row.shopify_location_id),
+    ["location-a", "location-c"],
+  );
+  assert.deepEqual(
+    viewerRows.map((row) => row.shopify_location_id),
+    ["location-b"],
+  );
+  assert.deepEqual(noLocationRows, []);
+  assert.equal(
+    hasNoAssignedLocationAccess({
+      activeLocationCount: locations.length,
+      accessibleLocationCount: noLocationRows.length,
+      isAdmin: false,
+    }),
+    true,
+  );
+
+  const locationRoute = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+  const appShell = readFileSync(
+    new URL("../app/routes/app.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(locationRoute, /getPermissionContext/);
+  assert.equal(locationRoute.includes("assertAdminAccess"), false);
+  assert.match(
+    appShell,
+    /<a href=\{`\/app\/locations\$\{search\}`\}>Location Performance<\/a>/,
+  );
+  assert.doesNotMatch(
+    appShell,
+    /\{canAdmin \? \([\s\n]*<a href=\{`\/app\/locations/,
+  );
+  assert.match(appShell, /\{canAdmin \? <a href=\{setupPath\}>Setup<\/a>/);
+});
+
+test("Location Net Sales trend reconciles to the headline after order-level cash refunds", () => {
+  const productSalesRows = [
+    { period: "2026-07-01", revenue: 600, ordersCount: 6, unitsSold: 8 },
+    { period: "2026-07-02", revenue: 400, ordersCount: 4, unitsSold: 5 },
+  ];
+  const trendRows = reconcileTrendRowsWithCashRefunds({
+    rows: productSalesRows,
+    refundTransactions: [
+      { amount: 60, processed_at: "2026-07-01T15:00:00.000Z" },
+      { amount: 40, processed_at: "2026-07-02T15:00:00.000Z" },
+    ],
+    merchandiseReturns: 20,
+    getTransactionPeriod: (processedAt) => processedAt.slice(0, 10),
+  });
+  const trendTotal = trendRows.reduce((sum, row) => sum + row.revenue, 0);
+  const headlineNetSales = calculateNetSalesAfterCashRefunds({
+    lineNetSales: 1000,
+    merchandiseReturns: 20,
+    totalRefunds: 100,
+  });
+
+  assert.equal(trendTotal, 920);
+  assert.equal(trendTotal, headlineNetSales);
+  assert.deepEqual(
+    trendRows.map((row) => row.revenue),
+    [552, 368],
+  );
+});
+
+test("Vendor and Staff breakdowns honestly retain product sales without refund allocation", () => {
+  const locationRoute = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+  const productSales = [600, 400].reduce((sum, amount) => sum + amount, 0);
+  const headlineNetSales = calculateNetSalesAfterCashRefunds({
+    lineNetSales: productSales,
+    merchandiseReturns: 20,
+    totalRefunds: 100,
+  });
+
+  assert.equal(productSales, 1000);
+  assert.equal(headlineNetSales, 920);
+  assert.match(locationRoute, /Product sales by Vendor/);
+  assert.match(locationRoute, /Product sales by Staff/);
+  assert.match(
+    locationRoute,
+    /exclude[\s\n]+order-level cash refunds, which cannot be assigned reliably/,
+  );
+});
+
+test("ranked breakdown keeps seven named rows and reconciles the rest as Others", () => {
+  const rows = Array.from({ length: 10 }, (_, index) => ({
+    label: `Vendor ${index + 1}`,
+    value: `vendor-${index + 1}`,
+    revenue: 100 - index,
+    ordersCount: 1,
+    unitsSold: 1,
+    percent: 10,
+  }));
+  const limitedRows = limitRankedBreakdownRows(rows);
+
+  assert.equal(limitedRows.length, 8);
+  assert.deepEqual(
+    limitedRows.slice(0, 7).map((row) => row.label),
+    rows.slice(0, 7).map((row) => row.label),
+  );
+  assert.deepEqual(limitedRows.at(-1), {
+    label: "Others",
+    value: "Others",
+    revenue: 100 - 7 + (100 - 8) + (100 - 9),
+    ordersCount: 3,
+    unitsSold: 3,
+    percent: 30,
+  });
+});
+
+test("primary filter reset key changes only with applied dashboard dimensions", () => {
+  const base = {
+    startDate: "2026-07-01",
+    endDate: "2026-07-26",
+    period: "day",
+    locationIds: ["location-b", "location-a"],
+    staff: "",
+    vendor: "",
+  };
+  const baseKey = buildDrilldownResetKey(base);
+
+  assert.equal(
+    baseKey,
+    buildDrilldownResetKey({
+      ...base,
+      locationIds: ["location-a", "location-b"],
+    }),
+  );
+
+  for (const changed of [
+    { ...base, startDate: "2026-07-02" },
+    { ...base, endDate: "2026-07-25" },
+    { ...base, period: "week" },
+    { ...base, locationIds: ["location-a"] },
+    { ...base, staff: "staff-1" },
+    { ...base, vendor: "Vendor A" },
+  ]) {
+    assert.notEqual(baseKey, buildDrilldownResetKey(changed));
+  }
+
+  for (const relativePath of [
+    "../app/routes/app.db-dashboard.tsx",
+    "../app/routes/app.locations.tsx",
+  ]) {
+    const route = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    assert.match(route, /buildDrilldownResetKey/);
+    assert.match(route, /useEffect\(\(\) => \{[\s\S]*?setActiveDrilldowns\(/);
+  }
+});
+
+test("minimal completed and failed compliance events remain recordable after shop deletion", async () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260601_add_compliance_webhook_events.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const insertedRows = [];
+  const supabase = {
+    from(table) {
+      assert.equal(table, "compliance_webhook_events");
+      return {
+        async insert(row) {
+          insertedRows.push(row);
+          return { error: null };
+        },
+      };
+    },
+  };
+
+  assert.equal(/references\s+public\.shops/i.test(migration), false);
+  assert.equal(/foreign\s+key/i.test(migration), false);
+  await recordComplianceWebhookEvent({
+    supabase,
+    shop,
+    topic: "shop/redact",
+    status: "completed",
+    details: { deleted: true },
+  });
+  await recordComplianceWebhookEvent({
+    supabase,
+    shop,
+    topic: "shop/redact",
+    status: "failed",
+    details: { retryable: true },
+  });
+
+  assert.deepEqual(
+    insertedRows.map((row) => ({
+      shop_domain: row.shop_domain,
+      topic: row.topic,
+      status: row.status,
+    })),
+    [
+      { shop_domain: shop, topic: "shop/redact", status: "completed" },
+      { shop_domain: shop, topic: "shop/redact", status: "failed" },
+    ],
+  );
+  assert.equal(
+    SHOP_REDACTION_TABLES.includes("compliance_webhook_events"),
+    false,
+  );
+});
+
+test("Profit and Location charts use the restrained reconciled chart treatment", () => {
+  const locationRoute = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+  const hourlyChart = readFileSync(
+    new URL("../app/components/dashboard/SalesByHourCard.tsx", import.meta.url),
+    "utf8",
+  );
+  const sectionCard = readFileSync(
+    new URL("../app/components/dashboard/SectionCard.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(locationRoute.includes("conic-gradient"), false);
+  assert.equal(locationRoute.includes("breakdownColors"), false);
+  assert.match(locationRoute, /Net Sales trend/);
+  assert.match(locationRoute, /Orders: \$\{formatNumber\(row\.ordersCount\)\}/);
+  assert.match(locationRoute, /LOCATION_CHART_CARD_STYLE/);
+  assert.match(locationRoute, /LOCATION_CHART_EMPTY_STYLE/);
+  assert.match(locationRoute, /shopops-chart-interactive/);
+  assert.match(hourlyChart, /Product sales/);
+  assert.match(hourlyChart, /Orders: \$\{formatNumber\(row\.ordersCount\)\}/);
+  assert.match(hourlyChart, /CHART_HEIGHT = 260/);
+  assert.match(hourlyChart, /shopops-chart-interactive/);
+  assert.match(sectionCard, /borderRadius: 18/);
+  assert.match(sectionCard, /minHeight: 420/);
 });

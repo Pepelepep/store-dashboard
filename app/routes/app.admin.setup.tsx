@@ -33,6 +33,7 @@ import {
   type ProductCostSetupData,
 } from "../lib/financial/cogs-setup.server";
 import { isValidEstimatePercent } from "../lib/financial/cogs";
+import { validateExpenseMonthRange } from "../lib/financial/expense-validation";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -69,6 +70,8 @@ type ActionData = {
     expense_name?: string;
     monthly_amount?: string;
     start_month?: string;
+    end_month?: string;
+    shopify_location_id?: string;
   };
 };
 
@@ -299,13 +302,15 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     } satisfies ActionData;
   }
-  if (!startMonth) {
+  const monthFieldErrors = validateExpenseMonthRange({
+    startMonth,
+    endMonth,
+  });
+  if (Object.keys(monthFieldErrors).length > 0) {
     return {
       ok: false,
       message: "Please fix the highlighted fields.",
-      fieldErrors: {
-        start_month: "Start month is required.",
-      },
+      fieldErrors: monthFieldErrors,
     } satisfies ActionData;
   }
 
@@ -320,7 +325,17 @@ export async function action({ request }: ActionFunctionArgs) {
       .maybeSingle();
 
     if (locationError) throw new Response(locationError.message, { status: 500 });
-    locationName = location?.name ?? null;
+    if (!location) {
+      return {
+        ok: false,
+        message: "Please fix the highlighted fields.",
+        fieldErrors: {
+          shopify_location_id:
+            "Select a location that belongs to this Shopify store.",
+        },
+      } satisfies ActionData;
+    }
+    locationName = location.name;
   }
 
   const payload = {
@@ -664,10 +679,13 @@ export default function AdminSetupPage() {
                       boxSizing: "border-box",
                       padding: 10,
                       borderRadius: 8,
-                      border: "1px solid #c9cccf",
+                      border: fieldErrors?.end_month
+                        ? "1px solid #d92d20"
+                        : "1px solid #c9cccf",
                     }}
                   />
                   <HelperText>Leave blank for ongoing expenses.</HelperText>
+                  <FieldError>{fieldErrors?.end_month}</FieldError>
                 </label>
 
                 <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
@@ -683,7 +701,9 @@ export default function AdminSetupPage() {
                       boxSizing: "border-box",
                       padding: 10,
                       borderRadius: 8,
-                      border: "1px solid #c9cccf",
+                      border: fieldErrors?.shopify_location_id
+                        ? "1px solid #d92d20"
+                        : "1px solid #c9cccf",
                       background: "white",
                     }}
                   >
@@ -698,6 +718,9 @@ export default function AdminSetupPage() {
                     Global expenses are shared equally across all active
                     locations.
                   </HelperText>
+                  <FieldError>
+                    {fieldErrors?.shopify_location_id}
+                  </FieldError>
                 </label>
               </div>
             </div>
@@ -771,7 +794,8 @@ export default function AdminSetupPage() {
                     <th
                       key={header}
                       style={{
-                        textAlign: "left",
+                        textAlign:
+                          header === "Monthly amount" ? "right" : "left",
                         padding: 10,
                         borderBottom: "1px solid #ddd",
                         whiteSpace: "nowrap",
@@ -789,7 +813,7 @@ export default function AdminSetupPage() {
                     <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{expense.expense_name}</td>
                     <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{expense.expense_category ?? "-"}</td>
                     <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{expense.location_name ?? "Global"}</td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{formatCurrency(Number(expense.monthly_amount ?? 0))}</td>
+                    <td style={{ padding: 10, borderBottom: "1px solid #eee", textAlign: "right" }}>{formatCurrency(Number(expense.monthly_amount ?? 0))}</td>
                     <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{formatMonth(expense.start_month)}</td>
                     <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{formatMonth(expense.end_month)}</td>
                     <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
@@ -818,7 +842,18 @@ export default function AdminSetupPage() {
                           </AppButton>
                         </Form>
 
-                        <Form method="post">
+                        <Form
+                          method="post"
+                          onSubmit={(event) => {
+                            if (
+                              !window.confirm(
+                                `Delete “${expense.expense_name}”? Reporting will update to remove this expense. This cannot be undone.`,
+                              )
+                            ) {
+                              event.preventDefault();
+                            }
+                          }}
+                        >
                           <input type="hidden" name="intent" value="delete" />
                           <input type="hidden" name="id" value={expense.id} />
                           <AppButton type="submit" variant="danger" compact disabled={isSubmitting}>

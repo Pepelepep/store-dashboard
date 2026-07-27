@@ -23,6 +23,7 @@ function SalesTable({
   onRowClick?: (row: VendorRow) => void;
 }) {
   const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
+  const numericHeaders = new Set(["Units", "Revenue", "Product sales"]);
 
   return (
     <div
@@ -43,7 +44,7 @@ function SalesTable({
               <th
                 key={header}
                 style={{
-                  textAlign: "left",
+                  textAlign: numericHeaders.has(header) ? "right" : "left",
                   padding: "12px 10px",
                   borderBottom: "1px solid #dcdcdc",
                   color: "#616161",
@@ -98,6 +99,9 @@ function SalesTable({
                         padding: "12px 10px",
                         borderBottom: "1px solid #f0f0f0",
                         verticalAlign: "top",
+                        textAlign: numericHeaders.has(headers[cellIndex])
+                          ? "right"
+                          : "left",
                       }}
                     >
                       {cell}
@@ -134,13 +138,13 @@ export function SalesByVendorCard({
   onSelectVendor?: (row: VendorRow) => void;
 }) {
   const revenueLabel =
-    financialMetricsVersion === "v2" ? "Net Sales" : "Revenue";
+    financialMetricsVersion === "v2" ? "Product sales" : "Revenue";
 
   return (
     <SectionCard
       title={
         financialMetricsVersion === "v2"
-          ? "Net Sales by Vendor"
+          ? "Product sales by Vendor"
           : "Sales by vendor"
       }
       exportConfig={{

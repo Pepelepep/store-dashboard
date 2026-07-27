@@ -23,6 +23,7 @@ function SalesTable({
   onRowClick?: (row: StaffSalesRow) => void;
 }) {
   const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
+  const numericHeaders = new Set(["Units", "Revenue", "Product sales"]);
 
   return (
     <div
@@ -43,7 +44,7 @@ function SalesTable({
               <th
                 key={header}
                 style={{
-                  textAlign: "left",
+                  textAlign: numericHeaders.has(header) ? "right" : "left",
                   padding: "12px 10px",
                   borderBottom: "1px solid #dcdcdc",
                   color: "#616161",
@@ -97,6 +98,9 @@ function SalesTable({
                       padding: "12px 10px",
                       borderBottom: "1px solid #f0f0f0",
                       verticalAlign: "top",
+                      textAlign: numericHeaders.has(headers[cellIndex])
+                        ? "right"
+                        : "left",
                     }}
                   >
                     {cell}
@@ -125,13 +129,13 @@ export function SalesByStaffCard({
   onSelectStaff?: (row: StaffSalesRow) => void;
 }) {
   const revenueLabel =
-    financialMetricsVersion === "v2" ? "Net Sales" : "Revenue";
+    financialMetricsVersion === "v2" ? "Product sales" : "Revenue";
 
   return (
     <SectionCard
       title={
         financialMetricsVersion === "v2"
-          ? "Net Sales by Staff"
+          ? "Product sales by Staff"
           : "Sales by Staff"
       }
       exportConfig={
@@ -149,7 +153,8 @@ export function SalesByStaffCard({
       }
     >
       <p style={{ color: "#616161", fontSize: 13, marginTop: 0 }}>
-        Sales by Staff tracking begins after ShopOps POS attribution is activated.
+        Sales by Staff tracking begins after ShopOps POS attribution is
+        activated.
       </p>
       {!staffAttributionAvailable ? (
         <div
@@ -163,7 +168,8 @@ export function SalesByStaffCard({
             lineHeight: 1.4,
           }}
         >
-          Staff attribution is unavailable for this store. Sales remain grouped by location/source.
+          Staff attribution is unavailable for this store. Sales remain grouped
+          by location/source.
         </div>
       ) : null}
       {salesByStaff.length > 0 ? (

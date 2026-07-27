@@ -10,17 +10,11 @@ import type {
 } from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
-function formatHourLabel(hour: number) {
-  return String(hour).padStart(2, "0") + ":00";
-}
+const CHART_HEIGHT = 260;
+const BAR_AREA_HEIGHT = 218;
 
-function formatCompactCurrency(value: number) {
-  return new Intl.NumberFormat("fr-CA", {
-    style: "currency",
-    currency: "CAD",
-    notation: "compact",
-    maximumFractionDigits: value >= 1000 ? 1 : 0,
-  }).format(value);
+function formatHourLabel(hour: number) {
+  return `${String(hour).padStart(2, "0")}:00`;
 }
 
 function getBarTitle(row: SalesByHourRow, revenueLabel: string) {
@@ -31,31 +25,6 @@ function getBarTitle(row: SalesByHourRow, revenueLabel: string) {
     `Units: ${formatNumber(row.unitsSold)}`,
     `Average order value: ${formatCurrency(row.averageOrderValue)}`,
   ].join("\n");
-}
-
-function LegendItem({ color, label }: { color: string; label: string }) {
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        color: "#616161",
-        fontSize: 12,
-        fontWeight: 700,
-      }}
-    >
-      <span
-        style={{
-          width: 10,
-          height: 10,
-          borderRadius: 999,
-          background: color,
-        }}
-      />
-      {label}
-    </span>
-  );
 }
 
 export function SalesByHourCard({
@@ -71,189 +40,152 @@ export function SalesByHourCard({
 }) {
   const [hoveredHour, setHoveredHour] = useState<number | null>(null);
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
-  const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
-  const maxRevenue = Math.max(...salesByHour.map((row) => row.revenue), 0);
-  const maxOrders = Math.max(...salesByHour.map((row) => row.ordersCount), 0);
-  const hasSales = salesByHour.some(
-    (row) => row.revenue > 0 || row.ordersCount > 0,
+  const revenueLabel = isFinancialMetricsV2 ? "Product sales" : "Revenue";
+  const maxRevenue = Math.max(
+    ...salesByHour.map((row) => Math.abs(row.revenue)),
+    0,
   );
-  const revenueMaxHeight = 170;
-  const ordersMaxHeight = 96;
+  const hasSales = salesByHour.some(
+    (row) => row.revenue !== 0 || row.ordersCount > 0,
+  );
 
   return (
     <SectionCard
-      title={isFinancialMetricsV2 ? "Hourly Net Sales" : "Sales by hour"}
-      subtitle={`${revenueLabel} and order count grouped by order hour.`}
+      title={isFinancialMetricsV2 ? "Hourly product sales" : "Sales by hour"}
+      subtitle={
+        isFinancialMetricsV2
+          ? "Product sales include discounts and merchandise returns; order-level cash refunds are excluded. Orders appear in each hour’s details."
+          : "Revenue by order hour. Orders appear in each hour’s details."
+      }
     >
       {hasSales ? (
-        <div style={{ display: "grid", gap: 16 }}>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <LegendItem color="#2563eb" label={revenueLabel} />
-            <LegendItem color="#14b8a6" label="Orders" />
-          </div>
-
+        <div style={{ overflowX: "auto" }}>
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(24, minmax(26px, 1fr))",
-              gap: 6,
-              overflowX: "auto",
-              paddingTop: 6,
+              height: CHART_HEIGHT,
+              minWidth: 720,
+              position: "relative",
             }}
           >
-            {salesByHour.map((row) => {
-              const isSelected = selectedHour === row.hour;
-              const isHovered = hoveredHour === row.hour;
-              const revenueHeight =
-                maxRevenue > 0
-                  ? Math.max(
-                      (row.revenue / maxRevenue) * revenueMaxHeight,
-                      row.revenue > 0 ? 6 : 0,
-                    )
-                  : 0;
-              const ordersHeight =
-                maxOrders > 0
-                  ? Math.max(
-                      (row.ordersCount / maxOrders) * ordersMaxHeight,
-                      row.ordersCount > 0 ? 6 : 0,
-                    )
-                  : 0;
+            {[25, 50, 75].map((position) => (
+              <span
+                key={position}
+                aria-hidden="true"
+                style={{
+                  borderTop: "1px solid #eef0f2",
+                  left: 0,
+                  position: "absolute",
+                  right: 0,
+                  top: `${position}%`,
+                }}
+              />
+            ))}
+            <div
+              style={{
+                display: "grid",
+                gap: 6,
+                gridTemplateColumns: "repeat(24, minmax(26px, 1fr))",
+                height: "100%",
+                position: "relative",
+              }}
+            >
+              {salesByHour.map((row) => {
+                const isSelected = selectedHour === row.hour;
+                const isHovered = hoveredHour === row.hour;
+                const barHeight =
+                  maxRevenue > 0
+                    ? Math.max(
+                        (Math.abs(row.revenue) / maxRevenue) * BAR_AREA_HEIGHT,
+                        row.revenue !== 0 ? 5 : 0,
+                      )
+                    : 0;
 
-              return (
-                <div
-                  key={row.hour}
-                  title={getBarTitle(row, revenueLabel)}
-                  role={onSelectHour ? "button" : undefined}
-                  tabIndex={onSelectHour ? 0 : undefined}
-                  onClick={() => onSelectHour?.(row.hour)}
-                  onKeyDown={(event) => {
-                    if (!onSelectHour) return;
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSelectHour(row.hour);
-                    }
-                  }}
-                  onMouseEnter={() => setHoveredHour(row.hour)}
-                  onMouseLeave={() => setHoveredHour(null)}
-                  style={{
-                    display: "grid",
-                    gridTemplateRows: "22px 170px 24px 96px 18px",
-                    justifyItems: "center",
-                    minWidth: 26,
-                    borderRadius: 8,
-                    cursor: onSelectHour ? "pointer" : undefined,
-                    outline: isSelected ? "2px solid #2563eb" : undefined,
-                    outlineOffset: 2,
-                    background: isSelected
-                      ? "#eff6ff"
-                      : isHovered && onSelectHour
-                        ? "#fafafa"
-                        : undefined,
-                    transition:
-                      "background-color 120ms ease, outline-color 120ms ease",
-                  }}
-                >
+                return (
                   <div
-                    style={{
-                      color: "#374151",
-                      fontSize: 10,
-                      fontWeight: 800,
-                      lineHeight: 1,
-                      textAlign: "center",
-                      whiteSpace: "nowrap",
-                      transform: row.revenue > 0 ? "rotate(-35deg)" : undefined,
-                      transformOrigin: "center",
+                    key={row.hour}
+                    aria-label={getBarTitle(row, revenueLabel)}
+                    className="shopops-chart-interactive"
+                    role={onSelectHour ? "button" : undefined}
+                    tabIndex={onSelectHour ? 0 : undefined}
+                    title={getBarTitle(row, revenueLabel)}
+                    onClick={() => onSelectHour?.(row.hour)}
+                    onKeyDown={(event) => {
+                      if (!onSelectHour) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelectHour(row.hour);
+                      }
                     }}
-                  >
-                    {row.revenue > 0 ? formatCompactCurrency(row.revenue) : ""}
-                  </div>
-
-                  <div
+                    onMouseEnter={() => setHoveredHour(row.hour)}
+                    onMouseLeave={() => setHoveredHour(null)}
                     style={{
-                      width: "100%",
-                      height: revenueMaxHeight,
-                      display: "flex",
-                      alignItems: "flex-end",
-                      justifyContent: "center",
+                      background: isSelected
+                        ? "#eff6ff"
+                        : isHovered && onSelectHour
+                          ? "#f8fafc"
+                          : undefined,
+                      border: isSelected
+                        ? "1px solid #93c5fd"
+                        : "1px solid transparent",
+                      borderRadius: 8,
+                      cursor: onSelectHour ? "pointer" : undefined,
+                      display: "grid",
+                      gridTemplateRows: `${BAR_AREA_HEIGHT}px 32px`,
+                      minWidth: 26,
+                      padding: "4px 2px 0",
                     }}
                   >
                     <div
                       style={{
-                        width: "100%",
-                        maxWidth: 28,
-                        height: revenueHeight,
-                        borderRadius: "6px 6px 2px 2px",
-                        background:
-                          row.revenue > 0
-                            ? isSelected
-                              ? "#1d4ed8"
-                              : "#2563eb"
-                            : "#e5e7eb",
+                        alignItems: "flex-end",
+                        display: "flex",
+                        height: BAR_AREA_HEIGHT,
+                        justifyContent: "center",
                       }}
-                    />
-                  </div>
-
-                  <div
-                    style={{
-                      width: "100%",
-                      borderTop: "1px solid #d1d5db",
-                      color: "#616161",
-                      fontSize: 11,
-                      fontWeight: 800,
-                      lineHeight: "23px",
-                      textAlign: "center",
-                    }}
-                  >
-                    {row.hour}
-                  </div>
-
-                  <div
-                    style={{
-                      width: "100%",
-                      height: ordersMaxHeight,
-                      display: "flex",
-                      alignItems: "flex-start",
-                      justifyContent: "center",
-                    }}
-                  >
+                    >
+                      <div
+                        style={{
+                          background:
+                            row.revenue < 0
+                              ? "#64748b"
+                              : isSelected
+                                ? "#1d4ed8"
+                                : "#2563eb",
+                          borderRadius: "5px 5px 2px 2px",
+                          height: barHeight,
+                          maxWidth: 28,
+                          width: "72%",
+                        }}
+                      />
+                    </div>
                     <div
                       style={{
-                        width: "100%",
-                        maxWidth: 28,
-                        height: ordersHeight,
-                        borderRadius: "2px 2px 6px 6px",
-                        background:
-                          row.ordersCount > 0
-                            ? isSelected
-                              ? "#0f766e"
-                              : "#14b8a6"
-                            : "#e5e7eb",
+                        borderTop: "1px solid #d9dee5",
+                        color: "#616161",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        lineHeight: "28px",
+                        textAlign: "center",
                       }}
-                    />
+                    >
+                      {row.hour % 3 === 0 ? formatHourLabel(row.hour) : ""}
+                    </div>
                   </div>
-
-                  <div
-                    style={{
-                      color: "#374151",
-                      fontSize: 11,
-                      fontWeight: 800,
-                      lineHeight: 1,
-                      textAlign: "center",
-                    }}
-                  >
-                    {row.ordersCount > 0 ? formatNumber(row.ordersCount) : ""}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
       ) : (
         <div
           style={{
-            border: "1px solid #f0f0f0",
+            alignItems: "center",
+            background: "#fafafa",
+            border: "1px solid #e5e7eb",
             borderRadius: 12,
             color: "#707070",
+            display: "flex",
+            minHeight: CHART_HEIGHT,
             padding: 16,
           }}
         >

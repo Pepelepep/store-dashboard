@@ -107,6 +107,7 @@ export function AppButton({
 }: AppButtonProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isActive, setIsActive] = useState(false);
+  const [isFocusVisible, setIsFocusVisible] = useState(false);
   const colors = buttonVariants[variant];
   const background = disabled
     ? colors.disabledBackground
@@ -135,6 +136,10 @@ export function AppButton({
       }}
       onMouseDown={() => setIsActive(true)}
       onMouseUp={() => setIsActive(false)}
+      onFocus={(event) =>
+        setIsFocusVisible(event.currentTarget.matches(":focus-visible"))
+      }
+      onBlur={() => setIsFocusVisible(false)}
       style={{
         ...buttonBaseStyle,
         width: fullWidth ? "100%" : undefined,
@@ -146,6 +151,8 @@ export function AppButton({
         padding: compact ? "6px 10px" : buttonBaseStyle.padding,
         borderRadius: compact ? 8 : buttonBaseStyle.borderRadius,
         transform: isActive && !disabled ? "translateY(1px)" : "translateY(0)",
+        outline: isFocusVisible ? "3px solid #93c5fd" : "none",
+        outlineOffset: isFocusVisible ? 2 : undefined,
         ...style,
       }}
     >
@@ -165,6 +172,7 @@ export function AppButtonLink({
 }: AppButtonLinkProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isActive, setIsActive] = useState(false);
+  const [isFocusVisible, setIsFocusVisible] = useState(false);
   const colors = buttonVariants[variant];
   const background = isActive
     ? colors.activeBackground
@@ -184,6 +192,10 @@ export function AppButtonLink({
       }}
       onMouseDown={() => setIsActive(true)}
       onMouseUp={() => setIsActive(false)}
+      onFocus={(event) =>
+        setIsFocusVisible(event.currentTarget.matches(":focus-visible"))
+      }
+      onBlur={() => setIsFocusVisible(false)}
       style={{
         ...buttonBaseStyle,
         display: "inline-flex",
@@ -197,6 +209,8 @@ export function AppButtonLink({
         padding: compact ? "6px 10px" : buttonBaseStyle.padding,
         borderRadius: compact ? 8 : buttonBaseStyle.borderRadius,
         transform: isActive ? "translateY(1px)" : "translateY(0)",
+        outline: isFocusVisible ? "3px solid #93c5fd" : "none",
+        outlineOffset: isFocusVisible ? 2 : undefined,
         textDecoration: "none",
         boxSizing: "border-box",
         ...style,

@@ -44,7 +44,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw redirect(`/app/billing-required${url.search}`);
   }
 
-  const permissions = await getPermissionContext({ request, session, supabase });
+  const permissions = await getPermissionContext({
+    request,
+    session,
+    supabase,
+  });
   const accessRequired =
     !permissions.isAdmin && permissions.allowedLocationIds.size === 0;
 
@@ -62,13 +66,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export default function App() {
-  const {
-    apiKey,
-    billingEnabled,
-    canAdmin,
-    accessRequired,
-    accessIdentity,
-  } = useLoaderData<typeof loader>();
+  const { apiKey, billingEnabled, canAdmin, accessRequired, accessIdentity } =
+    useLoaderData<typeof loader>();
   const location = useLocation();
   const search = location.search;
   const setupSearchParams = new URLSearchParams(search);
@@ -100,7 +99,8 @@ export default function App() {
           >
             <h1 style={{ margin: 0, fontSize: 28 }}>Access required</h1>
             <p style={{ color: "#616161", margin: "8px 0 20px" }}>
-              Ask your admin to add your email or link this Shopify user ID to your existing Team Access.
+              Ask your admin to add your email or link this Shopify user ID to
+              your existing Team Access.
             </p>
 
             <dl style={{ display: "grid", gap: 12, margin: 0 }}>
@@ -125,9 +125,8 @@ export default function App() {
             </dl>
 
             <p style={{ color: "#616161", margin: "20px 0 0" }}>
-              If no email is shown, send the Shopify user ID to your admin.
-              They can add an access label like{" "}
-              <span>Maya - POS Laval</span>.
+              If no email is shown, send the Shopify user ID to your admin. They
+              can add an access label like <span>Maya - POS Laval</span>.
             </p>
           </section>
         </main>
@@ -137,18 +136,10 @@ export default function App() {
             <a href={`/app/db-dashboard${search}`} rel="home">
               Profit Dashboard
             </a>
-            {canAdmin ? (
-              <a href={`/app/locations${search}`}>Location Performance</a>
-            ) : null}
-            {canAdmin ? (
-              <a href={setupPath}>Setup</a>
-            ) : null}
-            {canAdmin ? (
-              <a href={`/app/admin/staff${search}`}>Staff</a>
-            ) : null}
-            {canAdmin ? (
-              <a href={getDataSyncPath(search)}>Data sync</a>
-            ) : null}
+            <a href={`/app/locations${search}`}>Location Performance</a>
+            {canAdmin ? <a href={setupPath}>Setup</a> : null}
+            {canAdmin ? <a href={`/app/admin/staff${search}`}>Staff</a> : null}
+            {canAdmin ? <a href={getDataSyncPath(search)}>Data sync</a> : null}
             {billingEnabled ? (
               <a href={`/app/billing-required${search}`}>Billing</a>
             ) : null}

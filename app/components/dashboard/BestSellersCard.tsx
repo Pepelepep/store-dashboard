@@ -26,6 +26,7 @@ function Table({
   onRowClick?: (row: BestSellerRow) => void;
 }) {
   const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
+  const numericHeaders = new Set(["Units", "Revenue", "Product sales"]);
 
   return (
     <div
@@ -46,7 +47,7 @@ function Table({
               <th
                 key={header}
                 style={{
-                  textAlign: "left",
+                  textAlign: numericHeaders.has(header) ? "right" : "left",
                   padding: "12px 10px",
                   borderBottom: "1px solid #dcdcdc",
                   color: "#616161",
@@ -101,6 +102,9 @@ function Table({
                         padding: "12px 10px",
                         borderBottom: "1px solid #f0f0f0",
                         verticalAlign: "top",
+                        textAlign: numericHeaders.has(headers[cellIndex])
+                          ? "right"
+                          : "left",
                       }}
                     >
                       {cell}
@@ -137,7 +141,7 @@ export function BestSellersCard({
   onSelectBestSeller?: (row: BestSellerRow) => void;
 }) {
   const revenueLabel =
-    financialMetricsVersion === "v2" ? "Product Net Sales" : "Revenue";
+    financialMetricsVersion === "v2" ? "Product sales" : "Revenue";
 
   return (
     <SectionCard
