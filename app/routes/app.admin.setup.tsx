@@ -28,12 +28,23 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { ProductCostsSetup } from "../components/setup/ProductCostsSetup";
 import {
+  PlanSetup,
+  type PlanSetupData,
+} from "../components/setup/PlanSetup";
+import {
   loadProductCostSetup,
   saveProductCostSettings,
   type ProductCostSetupData,
 } from "../lib/financial/cogs-setup.server";
 import { isValidEstimatePercent } from "../lib/financial/cogs";
 import { validateExpenseMonthRange } from "../lib/financial/expense-validation";
+import {
+  buildHostedPricingUrl,
+  getBillingState,
+  getPlanLimits,
+  isAccessibleBillingState,
+} from "../lib/billing.server";
+import { getBillingUsage } from "../lib/billing-usage.server";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -58,9 +69,10 @@ type LoaderData = {
   locations: LocationRow[];
   expenses: ExpenseRow[];
   productCosts: ProductCostSetupData;
+  plan: PlanSetupData | null;
 };
 
-type SetupTab = "expenses" | "product-costs";
+type SetupTab = "expenses" | "product-costs" | "plan";
 
 type ActionData = {
   ok: boolean;
@@ -108,7 +120,7 @@ const expenseCategories = [
 ];
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.setup",
@@ -117,10 +129,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 
   await assertAdminAccess({ request, session, supabase });
+  const billing = await getBillingState({ admin, shop: session.shop });
   const [
     { data: locationsData, error: locationsError },
     { data: expensesData, error: expensesError },
     productCosts,
+    usage,
   ] =
     await Promise.all([
       supabase
@@ -141,6 +155,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
         supabase,
         shop: session.shop,
       }),
+      isAccessibleBillingState(billing)
+        ? getBillingUsage({ supabase, shop: session.shop })
+        : Promise.resolve(null),
     ]);
 
   if (locationsError) throw new Response(locationsError.message, { status: 500 });
@@ -160,11 +177,35 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
+  const planLimits = isAccessibleBillingState(billing)
+    ? getPlanLimits(billing.planHandle)
+    : null;
+  const plan =
+    isAccessibleBillingState(billing) && planLimits && usage
+      ? {
+          currentPlanName: billing.plan.displayName,
+          state: billing.state,
+          trialEndsAt: billing.trialEndsAt,
+          cycleEndsAt: billing.currentBillingCycle?.endTime ?? null,
+          pendingPlanName: billing.pendingPlan?.displayName ?? null,
+          activeLocations: {
+            usage: usage.activeLocations,
+            limit: planLimits.activeLocations,
+          },
+          dashboardUsers: {
+            usage: usage.dashboardUsers,
+            limit: planLimits.dashboardUsers,
+          },
+          managePlanUrl: buildHostedPricingUrl({ shop: session.shop }),
+        }
+      : null;
+
   return {
     shop: session.shop,
     locations,
     expenses,
     productCosts,
+    plan,
   } satisfies LoaderData;
 }
 
@@ -386,7 +427,13 @@ function formatMonth(value: string | null) {
   return value.slice(0, 7);
 }
 
-function SetupTabs({ activeTab }: { activeTab: SetupTab }) {
+function SetupTabs({
+  activeTab,
+  showPlan,
+}: {
+  activeTab: SetupTab;
+  showPlan: boolean;
+}) {
   const location = useLocation();
   const buildTabUrl = (tab: SetupTab) => {
     const searchParams = new URLSearchParams(location.search);
@@ -401,7 +448,7 @@ function SetupTabs({ activeTab }: { activeTab: SetupTab }) {
       style={{
         display: "grid",
         gap: 8,
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gridTemplateColumns: `repeat(${showPlan ? 3 : 2}, minmax(0, 1fr))`,
         marginBottom: 24,
         width: "100%",
       }}
@@ -409,6 +456,7 @@ function SetupTabs({ activeTab }: { activeTab: SetupTab }) {
       {[
         { value: "expenses" as const, label: "Expenses" },
         { value: "product-costs" as const, label: "Product costs" },
+        ...(showPlan ? [{ value: "plan" as const, label: "Plan" }] : []),
       ].map((tab) => (
         <Link
           aria-current={activeTab === tab.value ? "page" : undefined}
@@ -438,13 +486,16 @@ function SetupTabs({ activeTab }: { activeTab: SetupTab }) {
 }
 
 export default function AdminSetupPage() {
-  const { shop, locations, expenses, productCosts } =
+  const { shop, locations, expenses, productCosts, plan } =
     useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const location = useLocation();
   const navigation = useNavigation();
+  const requestedTab = new URLSearchParams(location.search).get("tab");
   const tab: SetupTab =
-    new URLSearchParams(location.search).get("tab") === "product-costs"
+    requestedTab === "plan" && plan
+      ? "plan"
+      : requestedTab === "product-costs"
       ? "product-costs"
       : "expenses";
   const [formState, setFormState] = useState<ExpenseFormState>(emptyExpenseForm);
@@ -514,9 +565,11 @@ export default function AdminSetupPage() {
             }
           }
         `}</style>
-        <SetupTabs activeTab={tab} />
+        <SetupTabs activeTab={tab} showPlan={Boolean(plan)} />
 
-        {tab === "product-costs" ? (
+        {tab === "plan" && plan ? (
+          <PlanSetup data={plan} />
+        ) : tab === "product-costs" ? (
           <ProductCostsSetup
             actionData={actionData}
             data={productCosts}

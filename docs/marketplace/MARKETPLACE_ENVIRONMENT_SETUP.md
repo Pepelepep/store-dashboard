@@ -45,33 +45,39 @@ Marketplace Render service should define:
 - `FINANCIAL_METRICS_VERSION`: recommended `v2` for marketplace review if the demo data and sync path support current financial fields.
 - `ADMIN_EMAILS`: reviewer/admin bootstrap email list for the demo shop.
 - `ADMIN_SHOPIFY_USER_IDS`: optional bootstrap user IDs for reviewer/admin access.
-- `BILLING_ENABLED`: set to `false` by default. Set to `true` only for final billing review.
-- `BILLING_TEST_SHOPS`: comma-separated dev or reviewer shop domains that may bypass the billing gate while billing is enabled.
+- `BILLING_ENABLED`: keep `false` by default. Set to `true` only in a controlled Shopify App Pricing QA environment.
+- `SHOPIFY_PARTNER_ORG_ID`: Partner organization ID used in the Partner API endpoint. Required only when billing is enabled.
+- `SHOPIFY_PARTNER_ACCESS_TOKEN`: server-only Partner API token with Manage apps access. Required only when billing is enabled; never expose it to the browser or logs.
+- `SHOPIFY_PARTNER_APP_GID`: Shopify App GID for the marketplace app. Required only when billing is enabled.
+- `SHOPIFY_PARTNER_API_VERSION`: must be `2026-07` when billing is enabled.
+- `SHOPIFY_APP_HANDLE`: must be `shopops-studio` when billing is enabled.
 - `SHOP_CUSTOM_DOMAIN`: only if the marketplace app needs a custom shop domain. Leave unset by default.
 
 Do not copy current client production secrets into the marketplace environment.
 
 ## Billing Configuration
 
-Billing uses Shopify App Store managed pricing only. Do not configure Stripe or external billing for marketplace review.
+Billing uses Shopify App Pricing only. Do not configure Stripe, create recurring charges from the app, or add an application-owned cancellation flow.
 
-Initial public plan:
+Partner Dashboard plans and application capacity:
 
-- ShopOps Studio: `$59.99/month`
-- Free trial: 14 days
+| Plan           | Handle           | Active locations | Dashboard users | Availability                                |
+| -------------- | ---------------- | ---------------: | --------------: | ------------------------------------------- |
+| Solo           | `solo`           |                1 |               1 | Public                                      |
+| Growth         | `growth`         |                5 |               5 | Public                                      |
+| Multi-location | `multi-location` |               10 |       Unlimited | Public                                      |
+| QA Pilot       | `qa-pilot`       |        Unlimited |       Unlimited | Restricted to approved QA stores in Shopify |
+
+All Shopify App Pricing plans must redirect to `/app/billing/complete`. Plan prices and trials are configured in Shopify rather than application code.
 
 Runtime behavior:
 
 - Keep `BILLING_ENABLED=false` until final review.
-- When `BILLING_ENABLED=false`, app access is not blocked.
-- When `BILLING_ENABLED=true`, shops without an active Shopify managed subscription are sent to the billing-required state.
-- Shops listed in `BILLING_TEST_SHOPS` bypass the billing gate for dev and reviewer testing.
-
-Future pricing draft:
-
-- Starter: `$39.99/month`
-- Growth: `$99.99/month`
-- Pro: `$199.99/month`
+- When `BILLING_ENABLED=false`, Partner API variables are optional, the Partner API is not called during normal app access, app access is not blocked, and plan limits are not enforced.
+- When `BILLING_ENABLED=true`, the app verifies the authenticated shop's current subscription through Partner API version `2026-07` before granting access or accepting a plan-sensitive increase.
+- Shops without a recognized active plan are sent to the billing-required state. Trials remain accessible, and cancel-at-end-of-cycle plans remain accessible through their effective cycle.
+- Temporary Partner API failures produce a retryable billing-unavailable state and never classify the merchant as unpaid.
+- There is no environment-variable billing bypass. QA access uses Shopify's restricted `qa-pilot` plan.
 
 ## Financial Metrics Version Guidance
 
@@ -159,14 +165,14 @@ Embedded app:
 
 ## Scope Decision Table
 
-| Scope | Current recommendation | Review risk | MVP decision needed | Fallback |
-|---|---|---|---|---|
-| `read_orders` | Keep | High because order history can be sensitive | No removal recommended | App cannot provide core sales/margin reporting |
-| `read_all_orders` | Keep | High; historical order access can slow review | Keep for historical analytics and backfills | Limit historical reporting to accessible recent/order-forward data |
-| `read_products` | Keep | Low customer-data risk | No removal recommended | Product/vendor/SKU reporting and joins degrade sharply |
-| `read_inventory` | Keep | Low customer-data risk, medium merchant cost sensitivity | No removal recommended | Disable stock alerts and cost/margin context |
-| `read_locations` | Keep | Low customer-data risk | No removal recommended | Remove location reporting and location permissions |
-| `read_users` | Do not request for public app | N/A for public App Store apps | Public app uses manual email permissions | Future/custom/Plus-only staff directory sync |
+| Scope             | Current recommendation        | Review risk                                              | MVP decision needed                         | Fallback                                                           |
+| ----------------- | ----------------------------- | -------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------ |
+| `read_orders`     | Keep                          | High because order history can be sensitive              | No removal recommended                      | App cannot provide core sales/margin reporting                     |
+| `read_all_orders` | Keep                          | High; historical order access can slow review            | Keep for historical analytics and backfills | Limit historical reporting to accessible recent/order-forward data |
+| `read_products`   | Keep                          | Low customer-data risk                                   | No removal recommended                      | Product/vendor/SKU reporting and joins degrade sharply             |
+| `read_inventory`  | Keep                          | Low customer-data risk, medium merchant cost sensitivity | No removal recommended                      | Disable stock alerts and cost/margin context                       |
+| `read_locations`  | Keep                          | Low customer-data risk                                   | No removal recommended                      | Remove location reporting and location permissions                 |
+| `read_users`      | Do not request for public app | N/A for public App Store apps                            | Public app uses manual email permissions    | Future/custom/Plus-only staff directory sync                       |
 
 Current recommendation:
 

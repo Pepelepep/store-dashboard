@@ -18,6 +18,15 @@ import {
   ensureShopInitialized,
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
+import {
+  BillingAccessRequiredError,
+  BillingTemporarilyUnavailableError,
+  PlanCapacityError,
+  buildHostedPricingUrl,
+  countActiveDashboardUsers,
+  requirePlanCapacity,
+} from "../lib/billing.server";
+import { getDashboardUserRows } from "../lib/billing-usage.server";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -70,6 +79,7 @@ type LoaderData = {
 type ActionData = {
   ok: boolean;
   message: string;
+  managePlanUrl?: string;
   fieldErrors?: {
     access_label?: string;
     staff?: string;
@@ -300,7 +310,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.permissions.action",
@@ -466,6 +476,47 @@ export async function action({ request }: ActionFunctionArgs) {
       ? linkedShopifyUserIds
       : [null]
     : linkedShopifyUserIds;
+
+  try {
+    const dashboardUserRows = await getDashboardUserRows({
+      supabase,
+      shop: session.shop,
+    });
+    const proposedShopifyUserIds = new Set(linkedShopifyUserIds);
+    const proposedLabel = normalizeText(accessLabel).toLowerCase();
+    const userAlreadyExists = dashboardUserRows.some((row) => {
+      const rowEmail = normalizeEmail(row.user_email);
+      const rowShopifyUserId = normalizeText(row.shopify_user_id);
+      const rowLabel = normalizeText(row.access_label).toLowerCase();
+      return (
+        (Boolean(email) && rowEmail === email) ||
+        (Boolean(rowShopifyUserId) &&
+          proposedShopifyUserIds.has(rowShopifyUserId)) ||
+        (!email && Boolean(proposedLabel) && rowLabel === proposedLabel)
+      );
+    });
+
+    await requirePlanCapacity({
+      admin,
+      shop: session.shop,
+      resource: "dashboard_users",
+      currentUsage: countActiveDashboardUsers(dashboardUserRows),
+      requestedIncrease: userAlreadyExists ? 0 : 1,
+    });
+  } catch (error) {
+    if (
+      error instanceof PlanCapacityError ||
+      error instanceof BillingTemporarilyUnavailableError ||
+      error instanceof BillingAccessRequiredError
+    ) {
+      return {
+        ok: false,
+        message: error.message,
+        managePlanUrl: buildHostedPricingUrl({ shop: session.shop }),
+      } satisfies ActionData;
+    }
+    throw error;
+  }
 
   const deleteExistingResults = await Promise.all([
     email
@@ -1180,11 +1231,18 @@ export default function AdminPermissionsPage() {
                   </span>
                 ) : null}
                 {visibleActionData && !visibleActionData.ok ? (
-                  <span style={{ color: "#b42318", fontSize: 14, fontWeight: 700 }}>
-                    {visibleActionData.fieldErrors
-                      ? "Please fix the highlighted fields."
-                      : visibleActionData.message}
-                  </span>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <span style={{ color: "#b42318", fontSize: 14, fontWeight: 700 }}>
+                      {visibleActionData.fieldErrors
+                        ? "Please fix the highlighted fields."
+                        : visibleActionData.message}
+                    </span>
+                    {visibleActionData.managePlanUrl ? (
+                      <a href={visibleActionData.managePlanUrl} target="_top">
+                        Manage plan
+                      </a>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             </Form>

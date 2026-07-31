@@ -1,4 +1,8 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import type {
+  HeadersFunction,
+  LoaderFunctionArgs,
+  MiddlewareFunction,
+} from "react-router";
 import type { DetailedHTMLProps, HTMLAttributes } from "react";
 import {
   Outlet,
@@ -11,7 +15,7 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
-import { getBillingGateState } from "../lib/billing.server";
+import { getBillingState, requireBillingAccess } from "../lib/billing.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
 
@@ -29,20 +33,61 @@ declare global {
   }
 }
 
+function isBillingRoutePath(pathname: string) {
+  return (
+    pathname === "/app/billing-required" || pathname === "/app/billing/complete"
+  );
+}
+
+export const middleware: MiddlewareFunction[] = [
+  async ({ request }, next) => {
+    const url = new URL(request.url);
+    if (isBillingRoutePath(url.pathname)) {
+      return next();
+    }
+
+    const { admin, session } = await authenticate.admin(request);
+    const access = await requireBillingAccess({
+      admin,
+      shop: session.shop,
+    });
+    if (access.access !== "allowed") {
+      url.pathname = "/app/billing-required";
+      url.searchParams.set(
+        "billing_state",
+        access.access === "billing_unavailable" ? "unavailable" : "required",
+      );
+      throw redirect(`${url.pathname}${url.search}`);
+    }
+
+    return next();
+  },
+];
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
+  if (isBillingRoutePath(url.pathname)) {
+    return {
+      apiKey: process.env.SHOPIFY_API_KEY ?? "",
+      billingEnabled: false,
+      canAdmin: false,
+      accessRequired: false,
+      accessIdentity: {
+        shop: session.shop,
+        shopifyUserId: null,
+        email: null,
+      },
+    };
+  }
+
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app",
     shop: session.shop,
     supabase,
   });
-  const billing = await getBillingGateState({ admin, shop: session.shop });
-
-  if (billing.requiresBilling && url.pathname !== "/app/billing-required") {
-    throw redirect(`/app/billing-required${url.search}`);
-  }
+  const billing = await getBillingState({ admin, shop: session.shop });
 
   const permissions = await getPermissionContext({
     request,
@@ -74,10 +119,15 @@ export default function App() {
   setupSearchParams.delete("tab");
   const setupQuery = setupSearchParams.toString();
   const setupPath = `/app/admin/setup${setupQuery ? `?${setupQuery}` : ""}`;
+  const billingConfirmed =
+    new URLSearchParams(location.search).get("billing") === "activated";
+  const isBillingRoute = isBillingRoutePath(location.pathname);
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      {accessRequired ? (
+      {isBillingRoute ? (
+        <Outlet />
+      ) : accessRequired ? (
         <main
           style={{
             minHeight: "100vh",
@@ -140,10 +190,32 @@ export default function App() {
             {canAdmin ? <a href={setupPath}>Setup</a> : null}
             {canAdmin ? <a href={`/app/admin/staff${search}`}>Staff</a> : null}
             {canAdmin ? <a href={getDataSyncPath(search)}>Data sync</a> : null}
-            {billingEnabled ? (
-              <a href={`/app/billing-required${search}`}>Billing</a>
+            {billingEnabled && canAdmin ? (
+              <a
+                href={`${setupPath}${setupPath.includes("?") ? "&" : "?"}tab=plan`}
+              >
+                Plan
+              </a>
             ) : null}
           </ui-nav-menu>
+
+          {billingConfirmed ? (
+            <div
+              role="status"
+              style={{
+                background: "#eaf7ef",
+                border: "1px solid #a8d5b7",
+                borderRadius: 10,
+                color: "#166534",
+                fontWeight: 700,
+                margin: "16px auto 0",
+                maxWidth: 1224,
+                padding: "10px 14px",
+              }}
+            >
+              Plan confirmed.
+            </div>
+          ) : null}
 
           <Outlet />
         </>
