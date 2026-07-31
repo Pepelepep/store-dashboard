@@ -2,151 +2,128 @@ import type { LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData } from "react-router";
 
 import {
-  getBillingGateState,
-  SHOP_OPS_STUDIO_PLAN,
+  buildHostedPricingUrl,
+  getBillingState,
+  refreshBillingState,
 } from "../lib/billing.server";
 import { authenticate } from "../shopify.server";
 
+function buildEmbeddedPath(
+  pathname: string,
+  currentUrl: URL,
+  updates: Record<string, string> = {},
+) {
+  const searchParams = new URLSearchParams(currentUrl.search);
+  searchParams.delete("billing_state");
+  for (const [key, value] of Object.entries(updates)) {
+    searchParams.set(key, value);
+  }
+  const search = searchParams.toString();
+  return `${pathname}${search ? `?${search}` : ""}`;
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
-  const billing = await getBillingGateState({ admin, shop: session.shop });
   const url = new URL(request.url);
+  const billing =
+    url.searchParams.get("retry") === "1"
+      ? await refreshBillingState({ admin, shop: session.shop })
+      : await getBillingState({ admin, shop: session.shop });
 
-  if (!billing.billingEnabled || !billing.requiresBilling) {
-    throw redirect(`/app/db-dashboard${url.search}`);
+  if (
+    billing.state === "disabled" ||
+    billing.state === "active" ||
+    billing.state === "trial" ||
+    billing.state === "canceling"
+  ) {
+    throw redirect(buildEmbeddedPath("/app/db-dashboard", url));
+  }
+
+  if (billing.state === "billing_unavailable") {
+    return {
+      view: "unavailable" as const,
+      retryUrl: buildEmbeddedPath("/app/billing-required", url, {
+        retry: "1",
+      }),
+      supportUrl: "/support",
+    };
   }
 
   return {
-    plan: SHOP_OPS_STUDIO_PLAN,
+    view: "required" as const,
+    pricingUrl: buildHostedPricingUrl({ shop: session.shop }),
+    supportUrl: "/support",
   };
 }
 
+const pageStyle = {
+  background: "#f6f6f7",
+  minHeight: "100vh",
+  padding: "32px 20px",
+};
+
+const cardStyle = {
+  background: "white",
+  border: "1px solid #dfe3e8",
+  borderRadius: 12,
+  margin: "0 auto",
+  maxWidth: 680,
+  padding: 28,
+};
+
+const primaryLinkStyle = {
+  background: "#2563eb",
+  borderRadius: 10,
+  color: "white",
+  display: "inline-flex",
+  fontWeight: 700,
+  padding: "11px 16px",
+  textDecoration: "none",
+};
+
 export default function BillingRequired() {
-  const { plan } = useLoaderData<typeof loader>();
+  const data = useLoaderData<typeof loader>();
 
   return (
-    <main
-      style={{
-        background: "#f6f6f7",
-        minHeight: "100vh",
-        padding: "32px 20px",
-      }}
-    >
-      <section
-        style={{
-          margin: "0 auto",
-          maxWidth: 840,
-        }}
-      >
-        <div
-          style={{
-            background: "white",
-            border: "1px solid #dfe3e8",
-            borderRadius: 8,
-            boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-            padding: 28,
-          }}
-        >
-          <p
-            style={{
-              color: "#5c5f62",
-              fontSize: 13,
-              fontWeight: 700,
-              letterSpacing: 0,
-              margin: "0 0 8px",
-              textTransform: "uppercase",
-            }}
-          >
-            Shopify managed billing
-          </p>
-          <h1
-            style={{
-              color: "#202223",
-              fontSize: 28,
-              lineHeight: 1.2,
-              margin: "0 0 12px",
-            }}
-          >
-            Choose a plan to continue
-          </h1>
-          <p
-            style={{
-              color: "#45484d",
-              fontSize: 16,
-              lineHeight: 1.6,
-              margin: "0 0 24px",
-              maxWidth: 660,
-            }}
-          >
-            ShopOps Studio uses Shopify App Store pricing. Select the{" "}
-            <strong>{plan.name}</strong> plan in Shopify to unlock reporting for
-            this store.
-          </p>
-
-          <div
-            style={{
-              border: "1px solid #dfe3e8",
-              borderRadius: 8,
-              marginBottom: 24,
-              padding: 20,
-            }}
-          >
-            <div
-              style={{
-                alignItems: "baseline",
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "8px 14px",
-                justifyContent: "space-between",
-                marginBottom: 12,
-              }}
-            >
-              <h2
-                style={{
-                  color: "#202223",
-                  fontSize: 20,
-                  lineHeight: 1.25,
-                  margin: 0,
-                }}
-              >
-                {plan.name}
-              </h2>
-              <strong
-                style={{
-                  color: "#1f6f43",
-                  fontSize: 18,
-                }}
-              >
-                {plan.price}
-              </strong>
-            </div>
+    <main style={pageStyle}>
+      <section style={cardStyle}>
+        {data.view === "unavailable" ? (
+          <>
+            <h1 style={{ margin: "0 0 12px", fontSize: 28 }}>
+              Billing temporarily unavailable
+            </h1>
             <p
-              style={{
-                color: "#5c5f62",
-                lineHeight: 1.55,
-                margin: 0,
-              }}
+              style={{ color: "#45484d", lineHeight: 1.6, margin: "0 0 22px" }}
             >
-              Includes a {plan.trialDays}-day free trial. Billing is processed
-              by Shopify.
+              Shopify could not confirm this store&apos;s plan right now. Your
+              subscription has not been changed. Please retry in a moment.
             </p>
-          </div>
-
-          <ol
-            style={{
-              color: "#45484d",
-              display: "grid",
-              gap: 12,
-              lineHeight: 1.5,
-              margin: 0,
-              paddingLeft: 22,
-            }}
-          >
-            <li>Connect your store</li>
-            <li>Sync your data</li>
-            <li>Trust your reporting</li>
-          </ol>
-        </div>
+            <div style={{ alignItems: "center", display: "flex", gap: 14 }}>
+              <a href={data.retryUrl} style={primaryLinkStyle}>
+                Retry
+              </a>
+              <a href={data.supportUrl}>Contact support</a>
+            </div>
+          </>
+        ) : (
+          <>
+            <h1 style={{ margin: "0 0 12px", fontSize: 28 }}>
+              Choose a plan to continue
+            </h1>
+            <p
+              style={{ color: "#45484d", lineHeight: 1.6, margin: "0 0 22px" }}
+            >
+              An active ShopOps Studio plan is required. Shopify hosts plan
+              selection and charge approval securely in Shopify admin.
+            </p>
+            <div style={{ alignItems: "center", display: "flex", gap: 14 }}>
+              <a href={data.pricingUrl} style={primaryLinkStyle} target="_top">
+                Choose a plan
+              </a>
+              <a href={data.supportUrl}>Contact support</a>
+            </div>
+          </>
+        )}
       </section>
     </main>
   );

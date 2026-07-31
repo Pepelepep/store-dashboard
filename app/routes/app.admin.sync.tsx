@@ -12,6 +12,7 @@ import { useEffect } from "react";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { buildHostedPricingUrl } from "../lib/billing.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
   getOfflineAdminClient,
@@ -51,6 +52,7 @@ type LoaderData = {
   viewAllActivity: boolean;
   maintenance: MaintenanceHealth | null;
   webhookCounts: Record<string, number>;
+  managePlanUrl: string;
 };
 type ActionData = { ok: boolean; message: string; operationStatus?: string };
 
@@ -118,6 +120,49 @@ function triggerLabel(job: SyncJobRow) {
   if (job.details?.source === "cron") return "Automatic";
   if (job.details?.source === "webhook") return "Webhook";
   return "Manual";
+}
+
+function isLocationPlanLimitMessage(value: string | null | undefined) {
+  return Boolean(
+    value?.includes("allows") && value.includes("active location"),
+  );
+}
+
+function isLocationPlanLimitJob(job: SyncJobRow) {
+  const errorDetails = job.details?.errorDetails;
+  return (
+    errorDetails !== null &&
+    errorDetails !== undefined &&
+    typeof errorDetails === "object" &&
+    "code" in errorDetails &&
+    errorDetails.code === "plan_capacity" &&
+    "resource" in errorDetails &&
+    errorDetails.resource === "active_locations"
+  );
+}
+
+function locationLimitAction(errorMessage: string | null | undefined) {
+  return errorMessage?.startsWith("Multi-location allows 10 active locations.")
+    ? { href: "/support", label: "Contact support" }
+    : { href: null, label: "Manage plan" };
+}
+
+function LocationPlanLimitAction({
+  errorMessage,
+  managePlanUrl,
+}: {
+  errorMessage: string | null | undefined;
+  managePlanUrl: string;
+}) {
+  const action = locationLimitAction(errorMessage);
+  return (
+    <a
+      href={action.href ?? managePlanUrl}
+      target={action.href ? undefined : "_top"}
+    >
+      {action.label}
+    </a>
+  );
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -199,6 +244,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     viewAllActivity,
     maintenance: maintenanceResult.data as MaintenanceHealth | null,
     webhookCounts,
+    managePlanUrl: buildHostedPricingUrl({ shop: session.shop }),
   } satisfies LoaderData;
 }
 
@@ -326,6 +372,7 @@ export default function DataSyncPage() {
     viewAllActivity,
     maintenance,
     webhookCounts,
+    managePlanUrl,
   } = useLoaderData<LoaderData>();
   const result = useActionData<ActionData>();
   const navigation = useNavigation();
@@ -461,6 +508,7 @@ export default function DataSyncPage() {
                 : success
                   ? "Up to date"
                   : "Not synced";
+            const planLimitAction = locationLimitAction(error?.error_message);
             return (
               <div className="resource-row" key={resource.type}>
                 <b>{resource.label}</b>
@@ -482,6 +530,18 @@ export default function DataSyncPage() {
                   {status === "Needs attention"
                     ? error?.error_message?.slice(0, 120)
                     : ""}
+                  {status === "Needs attention" &&
+                  isLocationPlanLimitMessage(error?.error_message) ? (
+                    <>
+                      {" "}
+                      <a
+                        href={planLimitAction.href ?? managePlanUrl}
+                        target={planLimitAction.href ? undefined : "_top"}
+                      >
+                        {planLimitAction.label}
+                      </a>
+                    </>
+                  ) : null}
                 </small>
               </div>
             );
@@ -528,6 +588,13 @@ export default function DataSyncPage() {
                     {job.error_message ??
                       "Operation details are available for support."}
                   </span>
+                  {isLocationPlanLimitJob(job) ||
+                  isLocationPlanLimitMessage(job.error_message) ? (
+                    <LocationPlanLimitAction
+                      errorMessage={job.error_message}
+                      managePlanUrl={managePlanUrl}
+                    />
+                  ) : null}
                 </div>
               </details>
             ) : (

@@ -3,6 +3,16 @@ import { calculateRemainingLineCogs } from "../financial/cogs";
 import { calculateNetSalesAfterCashRefunds } from "../financial/net-sales";
 import { upsertPosStaffIdentityAliasesFromOrderLines } from "../staff-identity/staff-identity.server";
 import { hasConfiguredScope } from "../shopify/scopes.server";
+import {
+  BillingAccessRequiredError,
+  BillingTemporarilyUnavailableError,
+  PlanCapacityError,
+  applyActiveLocationLimit,
+  getPlanLimits,
+  isAccessibleBillingState,
+  logPlanLimitRejection,
+  refreshBillingState,
+} from "../billing.server";
 
 type SupabaseAdminClient = ReturnType<typeof getSupabaseAdminClient>;
 
@@ -2385,11 +2395,64 @@ export async function syncLocations({
         throw new Error("Location pagination returned no cursor.");
     }
 
+    const billing = await refreshBillingState({ admin, shop });
+    if (billing.state === "billing_unavailable") {
+      throw new BillingTemporarilyUnavailableError();
+    }
+    if (
+      billing.state === "missing_subscription" ||
+      billing.state === "unsupported_plan"
+    ) {
+      throw new BillingAccessRequiredError();
+    }
+
+    let allowedActiveLocationIds: Set<string> | null = null;
+    let blockedActiveLocationIds: string[] = [];
+    let activeLocationLimit: number | null = null;
+    if (isAccessibleBillingState(billing)) {
+      const { data: existingLocations, error: existingLocationsError } =
+        await supabase
+          .from("locations")
+          .select("shopify_location_id, is_active")
+          .eq("shop_domain", shop);
+      if (existingLocationsError) {
+        throw new Error(existingLocationsError.message);
+      }
+
+      activeLocationLimit = getPlanLimits(billing.planHandle).activeLocations;
+      const limitResult = applyActiveLocationLimit({
+        incoming: locations.map((location) => ({
+          id: location.id,
+          isActive: location.isActive,
+        })),
+        existingActiveIds: (existingLocations ?? [])
+          .filter((location) => location.is_active === true)
+          .map((location) => String(location.shopify_location_id)),
+        limit: activeLocationLimit,
+      });
+      allowedActiveLocationIds = limitResult.activeIds;
+      blockedActiveLocationIds = limitResult.blockedIds;
+
+      if (activeLocationLimit !== null && blockedActiveLocationIds.length > 0) {
+        logPlanLimitRejection({
+          shop,
+          billingState: billing.state,
+          planHandle: billing.planHandle,
+          resource: "active_locations",
+          usage: limitResult.usage,
+          limit: activeLocationLimit,
+        });
+      }
+    }
+
     const rows = locations.map((location) => ({
       shop_domain: shop,
       shopify_location_id: location.id,
       name: location.name,
-      is_active: location.isActive,
+      is_active:
+        location.isActive &&
+        (allowedActiveLocationIds === null ||
+          allowedActiveLocationIds.has(location.id)),
       city: location.address?.city ?? null,
       province: location.address?.province ?? null,
       country: location.address?.country ?? null,
@@ -2404,6 +2467,19 @@ export async function syncLocations({
       if (error) {
         throw new Error(error.message);
       }
+    }
+
+    if (
+      isAccessibleBillingState(billing) &&
+      activeLocationLimit !== null &&
+      blockedActiveLocationIds.length > 0
+    ) {
+      throw new PlanCapacityError({
+        resource: "active_locations",
+        usage: allowedActiveLocationIds?.size ?? activeLocationLimit,
+        limit: activeLocationLimit,
+        planHandle: billing.planHandle,
+      });
     }
 
     const result = {

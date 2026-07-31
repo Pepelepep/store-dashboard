@@ -50,8 +50,83 @@ import {
   hasMirrorChartActivity,
 } from "../app/lib/dashboard/chart-formatters.ts";
 import { computeHourlySalesRows } from "../app/lib/dashboard/hourly-sales.ts";
+import {
+  PLAN_DEFINITIONS,
+  PlanCapacityError,
+  applyActiveLocationLimit,
+  buildHostedPricingUrl,
+  clearBillingCache,
+  countActiveDashboardUsers,
+  getActiveSubscription,
+  getBillingEnvironment,
+  getBillingState,
+  requireBillingAccess,
+  requirePlanCapacity,
+  resolveCurrentPlan,
+  verifyBillingCallbackPlan,
+} from "../app/lib/billing.server.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
+
+const enabledBillingEnvironment = {
+  enabled: true,
+  organizationId: "123456",
+  accessToken: "partner-test-token",
+  appGid: "gid://shopify/App/123456",
+  apiVersion: "2026-07",
+  appHandle: "shopops-studio",
+};
+
+function billingAdmin(shopGid = "gid://shopify/Shop/123456", onCall) {
+  return {
+    async graphql() {
+      onCall?.();
+      return Response.json({ data: { shop: { id: shopGid } } });
+    },
+  };
+}
+
+function activeSubscriptionPayload({
+  shopDomain,
+  handle = "solo",
+  shopGid = "gid://shopify/Shop/123456",
+  trialEndsAt = null,
+  cancelAtEndOfCycle = false,
+  currentBillingCycle = {
+    startTime: "2026-07-01T00:00:00.000Z",
+    endTime: "2026-08-01T00:00:00.000Z",
+  },
+  pendingHandle = null,
+} = {}) {
+  return {
+    data: {
+      activeSubscription: {
+        shop: {
+          id: shopGid,
+          myshopifyDomain: shopDomain,
+        },
+        billingPeriod: "EVERY_30_DAYS",
+        cancelAtEndOfCycle,
+        trialEndsAt,
+        currentBillingCycle,
+        items: [{ handle }],
+        pendingUpdate: pendingHandle
+          ? {
+              billingPeriod: "EVERY_30_DAYS",
+              items: [{ handle: pendingHandle }],
+            }
+          : null,
+      },
+    },
+  };
+}
+
+function subscriptionFetch(payload, onCall) {
+  return async (url, init) => {
+    onCall?.({ url: String(url), init });
+    return Response.json(payload);
+  };
+}
 
 function offlineContext(accessToken, graphql) {
   return {
@@ -1021,12 +1096,13 @@ test("Setup defaults to Expenses with equal-width segmented navigation", () => {
   assert.ok(expensesIndex < productCostsIndex);
   assert.match(
     setupRoute,
-    /get\("tab"\) === "product-costs"[\s\S]*?\? "product-costs"[\s\S]*?: "expenses"/,
+    /requestedTab === "product-costs"[\s\S]*?\? "product-costs"[\s\S]*?: "expenses"/,
   );
   assert.match(
     setupRoute,
-    /gridTemplateColumns: "repeat\(2, minmax\(0, 1fr\)\)"/,
+    /gridTemplateColumns: `repeat\(\$\{showPlan \? 3 : 2\}, minmax\(0, 1fr\)\)`/,
   );
+  assert.match(setupRoute, /\{ value: "plan" as const, label: "Plan" \}/);
   assert.match(setupRoute, /className="setup-segmented-control"/);
 });
 
@@ -1741,7 +1817,7 @@ test("Dashboard and Location filters expose pending labels and disable repeat su
   }
 });
 
-test("marketplace identity is exact and Billing behavior remains unchanged", () => {
+test("marketplace identity and Shopify App Pricing configuration are exact", () => {
   const marketplaceConfig = readFileSync(
     new URL("../shopify.app.shopops-marketplace.toml", import.meta.url),
     "utf8",
@@ -1758,9 +1834,539 @@ test("marketplace identity is exact and Billing behavior remains unchanged", () 
   assert.match(marketplaceConfig, /^name = "ShopOps Studio"$/m);
   assert.match(marketplaceConfig, /^handle = "shopops-studio"$/m);
   assert.match(billing, /BILLING_ENABLED/);
-  assert.match(billing, /BILLING_TEST_SHOPS/);
-  assert.match(billing, /price: "\$59\.99\/month"/);
-  assert.match(billing, /trialDays: 14/);
+  assert.match(billing, /EXPECTED_PARTNER_API_VERSION = "2026-07"/);
+  assert.match(billing, /EXPECTED_SHOPIFY_APP_HANDLE = "shopops-studio"/);
+  assert.doesNotMatch(billing, /BILLING_TEST_SHOPS/);
+  assert.deepEqual(Object.keys(PLAN_DEFINITIONS), [
+    "solo",
+    "growth",
+    "multi-location",
+    "qa-pilot",
+  ]);
+  assert.deepEqual(PLAN_DEFINITIONS.solo, {
+    displayName: "Solo",
+    activeLocations: 1,
+    dashboardUsers: 1,
+  });
+  assert.deepEqual(PLAN_DEFINITIONS.growth, {
+    displayName: "Growth",
+    activeLocations: 5,
+    dashboardUsers: 5,
+  });
+  assert.deepEqual(PLAN_DEFINITIONS["multi-location"], {
+    displayName: "Multi-location",
+    activeLocations: 10,
+    dashboardUsers: null,
+  });
+  assert.deepEqual(PLAN_DEFINITIONS["qa-pilot"], {
+    displayName: "QA Pilot",
+    activeLocations: null,
+    dashboardUsers: null,
+  });
+});
+
+test("billing-disabled mode requires no Partner configuration, lookup, redirect, or limit enforcement", async () => {
+  let adminCalls = 0;
+  let partnerCalls = 0;
+  const environment = getBillingEnvironment({ BILLING_ENABLED: "false" });
+  const admin = billingAdmin("gid://shopify/Shop/disabled", () => {
+    adminCalls += 1;
+  });
+  const fetchImpl = async () => {
+    partnerCalls += 1;
+    throw new Error("Partner API must not be called");
+  };
+
+  const state = await getBillingState({
+    admin,
+    shop: "billing-disabled.myshopify.com",
+    environment,
+    fetchImpl,
+  });
+  const access = await requireBillingAccess({
+    admin,
+    shop: "billing-disabled.myshopify.com",
+    environment,
+    fetchImpl,
+  });
+  const capacity = await requirePlanCapacity({
+    admin,
+    shop: "billing-disabled.myshopify.com",
+    resource: "active_locations",
+    currentUsage: 100,
+    environment,
+    fetchImpl,
+  });
+
+  assert.deepEqual(state, { state: "disabled", billingEnabled: false });
+  assert.equal(access.access, "allowed");
+  assert.equal(capacity.enforced, false);
+  assert.equal(adminCalls, 0);
+  assert.equal(partnerCalls, 0);
+});
+
+test("billing environment validates enabled Partner API settings server-side", () => {
+  assert.throws(
+    () => getBillingEnvironment({ BILLING_ENABLED: "true" }),
+    /SHOPIFY_PARTNER_ORG_ID/,
+  );
+  assert.deepEqual(
+    getBillingEnvironment({
+      BILLING_ENABLED: "true",
+      SHOPIFY_PARTNER_ORG_ID: "123456",
+      SHOPIFY_PARTNER_ACCESS_TOKEN: "secret",
+      SHOPIFY_PARTNER_APP_GID: "gid://shopify/App/123456",
+      SHOPIFY_PARTNER_API_VERSION: "2026-07",
+      SHOPIFY_APP_HANDLE: "shopops-studio",
+    }),
+    {
+      enabled: true,
+      organizationId: "123456",
+      accessToken: "secret",
+      appGid: "gid://shopify/App/123456",
+      apiVersion: "2026-07",
+      appHandle: "shopops-studio",
+    },
+  );
+});
+
+test("hosted pricing URL uses the canonical Shopify Admin route", () => {
+  assert.equal(
+    buildHostedPricingUrl({ shop: "example-store.myshopify.com" }),
+    "https://admin.shopify.com/store/example-store/charges/shopops-studio/pricing_plans",
+  );
+  assert.throws(
+    () => buildHostedPricingUrl({ shop: "example.com" }),
+    /canonical myshopify\.com domain/,
+  );
+});
+
+test("subscription item handles resolve only exact configured plans", () => {
+  for (const handle of ["solo", "growth", "multi-location", "qa-pilot"]) {
+    assert.equal(resolveCurrentPlan([{ handle }]), handle);
+  }
+  assert.equal(resolveCurrentPlan([{ handle: "unknown" }]), null);
+  assert.equal(resolveCurrentPlan([{ handle: "toString" }]), null);
+  assert.equal(resolveCurrentPlan([]), null);
+  assert.equal(
+    resolveCurrentPlan([{ handle: "solo" }, { handle: "growth" }]),
+    null,
+  );
+});
+
+test("Partner activeSubscription resolves all plans, trials, cancellation, and pending changes", async () => {
+  const cases = [
+    { handle: "solo", expectedState: "active" },
+    { handle: "growth", expectedState: "active" },
+    { handle: "multi-location", expectedState: "active" },
+    { handle: "qa-pilot", expectedState: "active" },
+    {
+      handle: "growth",
+      expectedState: "trial",
+      trialEndsAt: "2026-08-15T00:00:00.000Z",
+      currentBillingCycle: null,
+    },
+    {
+      handle: "growth",
+      expectedState: "canceling",
+      cancelAtEndOfCycle: true,
+      pendingHandle: "solo",
+    },
+  ];
+
+  for (const [index, billingCase] of cases.entries()) {
+    const shopDomain = `billing-state-${index}.myshopify.com`;
+    const payload = activeSubscriptionPayload({
+      shopDomain,
+      ...billingCase,
+    });
+    const state = await getBillingState({
+      admin: billingAdmin(),
+      shop: shopDomain,
+      environment: enabledBillingEnvironment,
+      fetchImpl: subscriptionFetch(payload),
+      now: () => new Date("2026-07-31T00:00:00.000Z"),
+      bypassCache: true,
+    });
+
+    assert.equal(state.state, billingCase.expectedState);
+    assert.equal(state.planHandle, billingCase.handle);
+    if (billingCase.pendingHandle) {
+      assert.equal(state.pendingPlanHandle, billingCase.pendingHandle);
+    }
+  }
+});
+
+test("missing, unsupported, malformed, and unavailable Partner responses remain distinct", async () => {
+  const fixtures = [
+    {
+      name: "missing",
+      payload: { data: { activeSubscription: null } },
+      expectedState: "missing_subscription",
+    },
+    {
+      name: "unsupported",
+      payload: activeSubscriptionPayload({
+        shopDomain: "billing-unsupported.myshopify.com",
+        handle: "legacy-plan",
+      }),
+      expectedState: "unsupported_plan",
+    },
+    {
+      name: "malformed",
+      payload: { data: { activeSubscription: { items: [] } } },
+      expectedState: "billing_unavailable",
+      expectedReason: "malformed_response",
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const shopDomain = `billing-${fixture.name}.myshopify.com`;
+    const state = await getBillingState({
+      admin: billingAdmin(),
+      shop: shopDomain,
+      environment: enabledBillingEnvironment,
+      fetchImpl: subscriptionFetch(fixture.payload),
+      bypassCache: true,
+    });
+    assert.equal(state.state, fixture.expectedState);
+    if (fixture.expectedReason)
+      assert.equal(state.reason, fixture.expectedReason);
+  }
+
+  const unavailable = await getBillingState({
+    admin: billingAdmin(),
+    shop: "billing-partner-down.myshopify.com",
+    environment: enabledBillingEnvironment,
+    fetchImpl: async () => new Response("service unavailable", { status: 503 }),
+    bypassCache: true,
+  });
+  assert.deepEqual(unavailable, {
+    state: "billing_unavailable",
+    billingEnabled: true,
+    reason: "http",
+  });
+  assert.notEqual(unavailable.state, "missing_subscription");
+});
+
+test("Partner API timeout, throttling, authentication, and GraphQL failures are controlled unavailable states", async () => {
+  const common = {
+    environment: enabledBillingEnvironment,
+    shop: "billing-errors.myshopify.com",
+    shopGid: "gid://shopify/Shop/123456",
+  };
+  const throttled = await getActiveSubscription({
+    ...common,
+    fetchImpl: async () => Response.json({}, { status: 429 }),
+  });
+  const authentication = await getActiveSubscription({
+    ...common,
+    fetchImpl: async () => Response.json({}, { status: 401 }),
+  });
+  const graphql = await getActiveSubscription({
+    ...common,
+    fetchImpl: async () =>
+      Response.json({ errors: [{ message: "temporary failure" }] }),
+  });
+  const timeout = await getActiveSubscription({
+    ...common,
+    timeoutMs: 1,
+    fetchImpl: async (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      }),
+  });
+
+  assert.deepEqual(throttled, {
+    kind: "unavailable",
+    reason: "throttled",
+  });
+  assert.deepEqual(authentication, {
+    kind: "unavailable",
+    reason: "authentication",
+  });
+  assert.deepEqual(graphql, { kind: "unavailable", reason: "graphql" });
+  assert.deepEqual(timeout, { kind: "unavailable", reason: "timeout" });
+});
+
+test("Partner request uses versioned endpoint, app/shop variables, and server token header", async () => {
+  const shopDomain = "billing-request.myshopify.com";
+  let request;
+  const state = await getBillingState({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl: subscriptionFetch(
+      activeSubscriptionPayload({ shopDomain }),
+      (value) => {
+        request = value;
+      },
+    ),
+    bypassCache: true,
+  });
+
+  assert.equal(state.state, "active");
+  assert.equal(
+    request.url,
+    "https://partners.shopify.com/123456/api/2026-07/graphql.json",
+  );
+  assert.equal(
+    request.init.headers["X-Shopify-Access-Token"],
+    "partner-test-token",
+  );
+  assert.deepEqual(JSON.parse(request.init.body).variables, {
+    appId: "gid://shopify/App/123456",
+    shopId: "gid://shopify/Shop/123456",
+  });
+});
+
+test("billing cache reuses reads and explicit refresh paths bypass it", async () => {
+  const shopDomain = "billing-cache.myshopify.com";
+  let partnerCalls = 0;
+  const fetchImpl = subscriptionFetch(
+    activeSubscriptionPayload({ shopDomain }),
+    () => {
+      partnerCalls += 1;
+    },
+  );
+  clearBillingCache(shopDomain);
+
+  await getBillingState({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+  await getBillingState({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+  await requirePlanCapacity({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    resource: "dashboard_users",
+    currentUsage: 0,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+
+  assert.equal(partnerCalls, 2);
+});
+
+test("billing callback matching rejects forged and mismatched plan handles", () => {
+  const active = {
+    state: "active",
+    billingEnabled: true,
+    planHandle: "solo",
+    plan: PLAN_DEFINITIONS.solo,
+    billingPeriod: "EVERY_30_DAYS",
+    cancelAtEndOfCycle: false,
+    trialEndsAt: null,
+    currentBillingCycle: {
+      startTime: "2026-07-01T00:00:00.000Z",
+      endTime: "2026-08-01T00:00:00.000Z",
+    },
+    pendingPlanHandle: null,
+    pendingPlan: null,
+  };
+
+  assert.equal(
+    verifyBillingCallbackPlan({
+      billing: active,
+      returnedPlanHandle: "solo",
+    }),
+    true,
+  );
+  assert.equal(
+    verifyBillingCallbackPlan({
+      billing: active,
+      returnedPlanHandle: "multi-location",
+    }),
+    false,
+  );
+  assert.equal(
+    verifyBillingCallbackPlan({
+      billing: { state: "missing_subscription", billingEnabled: true },
+      returnedPlanHandle: "solo",
+    }),
+    false,
+  );
+});
+
+test("location capacity permits plan limits, blocks only additions, and preserves downgrade history", () => {
+  const plans = [
+    { handle: "solo", limit: 1 },
+    { handle: "growth", limit: 5 },
+    { handle: "multi-location", limit: 10 },
+    { handle: "qa-pilot", limit: null },
+  ];
+
+  for (const { handle, limit } of plans) {
+    const count = limit ?? 25;
+    const allowed = applyActiveLocationLimit({
+      incoming: Array.from({ length: count }, (_, index) => ({
+        id: `${handle}-${index}`,
+        isActive: true,
+      })),
+      existingActiveIds: [],
+      limit,
+    });
+    assert.equal(allowed.blockedIds.length, 0);
+
+    const oneMore = applyActiveLocationLimit({
+      incoming: Array.from({ length: count + 1 }, (_, index) => ({
+        id: `${handle}-${index}`,
+        isActive: true,
+      })),
+      existingActiveIds: [],
+      limit,
+    });
+    assert.equal(oneMore.blockedIds.length, limit === null ? 0 : 1);
+  }
+
+  const downgraded = applyActiveLocationLimit({
+    incoming: ["a", "b", "c", "d"].map((id) => ({ id, isActive: true })),
+    existingActiveIds: ["a", "b", "c"],
+    limit: 1,
+  });
+  assert.deepEqual([...downgraded.activeIds].sort(), ["a", "b", "c"]);
+  assert.deepEqual(downgraded.blockedIds, ["d"]);
+});
+
+test("dashboard-user capacity uses only Team access identities and permits over-limit edits", async () => {
+  const dashboardRows = [
+    {
+      id: "1",
+      access_label: "Owner",
+      user_email: "owner@example.com",
+      shopify_user_id: "100",
+    },
+    {
+      id: "2",
+      access_label: "Owner",
+      user_email: "OWNER@example.com",
+      shopify_user_id: "100",
+    },
+  ];
+  const detectedPosSellers = [{ id: "pos-1" }, { id: "pos-2" }];
+  const staffProfilesWithoutDashboardAccess = [{ id: "staff-1" }];
+  assert.equal(countActiveDashboardUsers(dashboardRows), 1);
+  assert.equal(detectedPosSellers.length, 2);
+  assert.equal(staffProfilesWithoutDashboardAccess.length, 1);
+
+  let calls = 0;
+  const editResult = await requirePlanCapacity({
+    admin: billingAdmin("gid://shopify/Shop/edit", () => {
+      calls += 1;
+    }),
+    shop: "billing-over-limit-edit.myshopify.com",
+    resource: "dashboard_users",
+    currentUsage: 20,
+    requestedIncrease: 0,
+    environment: enabledBillingEnvironment,
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("must not fetch for an edit");
+    },
+  });
+  assert.equal(editResult.enforced, false);
+  assert.equal(calls, 0);
+});
+
+test("dashboard-user enforcement allows each finite boundary and blocks the next user", async () => {
+  for (const [index, { handle, limit }] of [
+    { handle: "solo", limit: 1 },
+    { handle: "growth", limit: 5 },
+  ].entries()) {
+    const allowedShop = `user-limit-allowed-${index}.myshopify.com`;
+    await requirePlanCapacity({
+      admin: billingAdmin(),
+      shop: allowedShop,
+      resource: "dashboard_users",
+      currentUsage: limit - 1,
+      environment: enabledBillingEnvironment,
+      fetchImpl: subscriptionFetch(
+        activeSubscriptionPayload({ shopDomain: allowedShop, handle }),
+      ),
+    });
+
+    const blockedShop = `user-limit-blocked-${index}.myshopify.com`;
+    await assert.rejects(
+      requirePlanCapacity({
+        admin: billingAdmin(),
+        shop: blockedShop,
+        resource: "dashboard_users",
+        currentUsage: limit,
+        environment: enabledBillingEnvironment,
+        fetchImpl: subscriptionFetch(
+          activeSubscriptionPayload({ shopDomain: blockedShop, handle }),
+        ),
+      }),
+      PlanCapacityError,
+    );
+  }
+
+  for (const [index, handle] of ["multi-location", "qa-pilot"].entries()) {
+    const shopDomain = `user-limit-unlimited-${index}.myshopify.com`;
+    const result = await requirePlanCapacity({
+      admin: billingAdmin(),
+      shop: shopDomain,
+      resource: "dashboard_users",
+      currentUsage: 10_000,
+      environment: enabledBillingEnvironment,
+      fetchImpl: subscriptionFetch(
+        activeSubscriptionPayload({ shopDomain, handle }),
+      ),
+    });
+    assert.equal(result.limit, null);
+  }
+});
+
+test("billing route safety excludes OAuth, webhooks, charge creation, and client secrets", () => {
+  const appRoute = readFileSync(
+    new URL("../app/routes/app.tsx", import.meta.url),
+    "utf8",
+  );
+  const callbackRoute = readFileSync(
+    new URL("../app/routes/app.billing.complete.tsx", import.meta.url),
+    "utf8",
+  );
+  const billingRequiredRoute = readFileSync(
+    new URL("../app/routes/app.billing-required.tsx", import.meta.url),
+    "utf8",
+  );
+  const billingServer = readFileSync(
+    new URL("../app/lib/billing.server.ts", import.meta.url),
+    "utf8",
+  );
+  const allBillingSources = [
+    appRoute,
+    callbackRoute,
+    billingRequiredRoute,
+    billingServer,
+  ].join("\n");
+
+  assert.match(appRoute, /export const middleware/);
+  assert.match(appRoute, /isBillingRoutePath/);
+  assert.match(appRoute, /isBillingRoute \? \(/);
+  assert.match(
+    appRoute,
+    /if \(isBillingRoutePath\(url\.pathname\)\)[\s\S]*?billingEnabled: false/,
+  );
+  assert.match(callbackRoute, /authenticate\.admin\(request\)/);
+  assert.match(callbackRoute, /refreshBillingState/);
+  assert.match(callbackRoute, /isRecognizedPlanHandle/);
+  assert.match(callbackRoute, /if \(!returnedPlanHandle\)/);
+  assert.match(callbackRoute, /No matching active subscription was found\./);
+  assert.doesNotMatch(allBillingSources, /appSubscriptionCreate/);
+  assert.doesNotMatch(allBillingSources, /charge_id/);
+  assert.doesNotMatch(billingRequiredRoute, /SHOPIFY_PARTNER_ACCESS_TOKEN/);
+  assert.doesNotMatch(callbackRoute, /SHOPIFY_PARTNER_ACCESS_TOKEN/);
+  assert.doesNotMatch(appRoute, /SHOPIFY_PARTNER_ACCESS_TOKEN/);
 });
 
 test("POS merchant modal has automatic attribution state and no diagnostics", () => {
@@ -2245,10 +2851,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.doesNotMatch(trendChart, /<button/);
 
   assert.match(mirrorChart, /export function MirrorSalesChart/);
-  assert.equal(
-    (mirrorChart.match(/<ResponsiveContainer\b/g) ?? []).length,
-    2,
-  );
+  assert.equal((mirrorChart.match(/<ResponsiveContainer\b/g) ?? []).length, 2);
   assert.equal(mirrorPlots.length, 2);
   assert.equal((mirrorChart.match(/<Bar\b/g) ?? []).length, 2);
   assert.equal((mirrorChart.match(/data=\{chartData\}/g) ?? []).length, 2);
@@ -2306,10 +2909,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(mirrorChart, /index === hoveredIndex/);
   assert.match(mirrorChart, /index === focusedIndex/);
   assert.match(mirrorChart, /index === selectedIndex/);
-  assert.match(
-    mirrorChart,
-    /showLabelForIndex\(index\) && point\.sales !== 0/,
-  );
+  assert.match(mirrorChart, /showLabelForIndex\(index\) && point\.sales !== 0/);
   assert.match(
     mirrorChart,
     /showLabelForIndex\(index\) && point\.orders !== 0/,
