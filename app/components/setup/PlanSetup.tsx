@@ -2,6 +2,7 @@ import { Link } from "react-router";
 
 import type { EntitlementMembership } from "../../lib/entitlement-model";
 import { AppButtonLink } from "../ui/AppButton";
+import { StatusBadge } from "../ui/StatusBadge";
 import {
   ContentCard,
   ExternalAction,
@@ -37,6 +38,18 @@ function formatDate(value: string | null) {
 export function PlanSetup({ data }: { data: PlanSetupData }) {
   const trialEnd = formatDate(data.trialEndsAt);
   const cycleEnd = formatDate(data.cycleEndsAt);
+  const subscriptionStatus =
+    data.state === "canceling"
+      ? "Canceling"
+      : data.state === "trial"
+        ? "Trial"
+        : "Active";
+  const subscriptionStatusVariant =
+    data.state === "canceling"
+      ? ("warning" as const)
+      : data.state === "trial"
+        ? ("info" as const)
+        : ("success" as const);
 
   return (
     <div>
@@ -50,7 +63,7 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
         <div style={{ marginBottom: 20 }}>
           <InlineNotice tone="warning">
             <strong>Action required.</strong> Update the affected reporting
-            locations or dashboard access before opening reports.
+            locations or ShopOps access before opening reports.
             <div
               style={{
                 display: "flex",
@@ -65,7 +78,7 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
                 </Link>
               ) : null}
               {data.userLimitExceeded ? (
-                <Link to="/app/people?tab=access">Manage dashboard access</Link>
+                <Link to="/app/people?tab=access">Manage ShopOps access</Link>
               ) : null}
             </div>
             {!data.canManagePlan ? (
@@ -79,7 +92,7 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
       ) : null}
 
       <ContentCard
-        title={`Current plan: ${data.currentPlanName}`}
+        title="Current plan"
         action={
           data.canManagePlan && data.managePlanUrl ? (
             <ExternalAction href={data.managePlanUrl}>
@@ -92,30 +105,61 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
           style={{
             display: "grid",
             gap: 16,
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             margin: 0,
           }}
         >
           <div>
-            <dt style={{ color: "#616161", fontWeight: 700 }}>Status</dt>
-            <dd style={{ margin: "4px 0 0" }}>
-              {data.state === "canceling"
-                ? `Cancels at end of cycle${cycleEnd ? ` on ${cycleEnd}` : ""}`
-                : data.state.charAt(0).toUpperCase() + data.state.slice(1)}
+            <dt className="shopops-summary-card__label">Plan</dt>
+            <dd
+              style={{
+                fontSize: 22,
+                fontVariantNumeric: "tabular-nums",
+                fontWeight: 800,
+                lineHeight: 1.25,
+                margin: "7px 0 0",
+              }}
+            >
+              {data.currentPlanName}
+            </dd>
+          </div>
+          <div>
+            <dt className="shopops-summary-card__label">Subscription status</dt>
+            <dd style={{ margin: "8px 0 0" }}>
+              <StatusBadge variant={subscriptionStatusVariant}>
+                {subscriptionStatus}
+              </StatusBadge>
+              {data.state === "canceling" ? (
+                <div className="shopops-helper-text">
+                  Cancels at the end of the billing cycle
+                  {cycleEnd ? ` on ${cycleEnd}` : ""}.
+                </div>
+              ) : null}
             </dd>
           </div>
           {data.state === "trial" && trialEnd ? (
             <div>
-              <dt style={{ color: "#616161", fontWeight: 700 }}>Trial ends</dt>
-              <dd style={{ margin: "4px 0 0" }}>{trialEnd}</dd>
+              <dt className="shopops-summary-card__label">Trial ends</dt>
+              <dd
+                style={{
+                  fontSize: 18,
+                  fontVariantNumeric: "tabular-nums",
+                  fontWeight: 750,
+                  margin: "7px 0 0",
+                }}
+              >
+                {trialEnd}
+              </dd>
             </div>
           ) : null}
           {data.pendingPlanName ? (
             <div>
-              <dt style={{ color: "#616161", fontWeight: 700 }}>
+              <dt className="shopops-summary-card__label">
                 Pending plan change
               </dt>
-              <dd style={{ margin: "4px 0 0" }}>{data.pendingPlanName}</dd>
+              <dd style={{ fontWeight: 700, margin: "7px 0 0" }}>
+                {data.pendingPlanName}
+              </dd>
             </div>
           ) : null}
         </dl>
@@ -143,21 +187,21 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
               to="/app/people?tab=access"
               variant="secondary"
             >
-              Manage dashboard access
+              Manage ShopOps access
             </AppButtonLink>
           }
-          label="Dashboard users"
+          label="ShopOps users"
           limit={data.dashboardUsers.limit}
           usage={data.dashboardUsers.usage}
         />
       </div>
 
-      <ContentCard title="Dashboard access">
+      <ContentCard title="ShopOps access">
         <p style={{ color: "#616161" }}>
-          Dashboard users are people who can open ShopOps Studio. The store
-          owner counts as one. Shopify administrators do not receive ShopOps
-          access automatically. POS sellers and Staff profiles without dashboard
-          access do not count.
+          ShopOps users are people who can open ShopOps Studio. The store owner
+          counts as one. Shopify administrators do not receive ShopOps access
+          automatically. POS sellers and Staff profiles without ShopOps access
+          do not count.
         </p>
         <p style={{ marginBottom: 0 }}>
           <strong>Store owner:</strong>{" "}
