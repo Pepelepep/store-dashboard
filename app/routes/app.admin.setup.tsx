@@ -4,9 +4,7 @@ import type {
   ShouldRevalidateFunctionArgs,
 } from "react-router";
 import {
-  data,
   Form,
-  Link,
   redirect,
   useActionData,
   useLoaderData,
@@ -28,8 +26,8 @@ import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SectionTabs } from "../components/ui/SectionTabs";
 import { ProductCostsSetup } from "../components/setup/ProductCostsSetup";
-import { PlanSetup, type PlanSetupData } from "../components/setup/PlanSetup";
 import {
   loadProductCostSetup,
   saveProductCostSettings,
@@ -38,15 +36,10 @@ import {
 import { isValidEstimatePercent } from "../lib/financial/cogs";
 import { validateExpenseMonthRange } from "../lib/financial/expense-validation";
 import {
-  buildHostedPricingUrl,
   getBillingState,
   isAccessibleBillingState,
 } from "../lib/billing.server";
-import {
-  getEntitlementSnapshot,
-  getFreshPlanLimits,
-} from "../lib/entitlements.server";
-import { consumePlanConfirmedFlash } from "../lib/flash.server";
+import { getEntitlementSnapshot } from "../lib/entitlements.server";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -71,10 +64,9 @@ type LoaderData = {
   locations: LocationRow[];
   expenses: ExpenseRow[];
   productCosts: ProductCostSetupData;
-  plan: PlanSetupData | null;
 };
 
-type SetupTab = "expenses" | "product-costs" | "plan";
+type CostsTab = "products" | "expenses";
 
 type ActionData = {
   ok: boolean;
@@ -122,7 +114,35 @@ const expenseCategories = [
 ];
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  if (url.pathname === "/app/admin/setup") {
+    const legacyTab = url.searchParams.get("tab");
+    if (
+      legacyTab === "plan" ||
+      legacyTab === "billing" ||
+      legacyTab === "plan-and-billing"
+    ) {
+      url.searchParams.set("tab", "plan");
+      throw redirect(`/app/settings?${url.searchParams.toString()}`);
+    }
+    if (
+      legacyTab === "locations" ||
+      legacyTab === "location-entitlement" ||
+      legacyTab === "reporting-locations"
+    ) {
+      url.searchParams.set("tab", "reporting");
+      throw redirect(`/app/locations?${url.searchParams.toString()}`);
+    }
+    url.searchParams.set(
+      "tab",
+      legacyTab === "product-costs" || legacyTab === "products"
+        ? "products"
+        : "expenses",
+    );
+    throw redirect(`/app/costs?${url.searchParams.toString()}`);
+  }
+
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.setup",
@@ -130,16 +150,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase,
   });
 
-  const permissions = await assertAdminAccess({ request, session, supabase });
-  const billing = await getBillingState({ admin, shop: session.shop });
-  const entitlementSnapshot = isAccessibleBillingState(billing)
-    ? await getEntitlementSnapshot({
-        supabase,
-        shop: session.shop,
-        billing,
-      })
-    : null;
-  const planFlash = await consumePlanConfirmedFlash(request);
+  await assertAdminAccess({ request, session, supabase });
   const [
     { data: locationsData, error: locationsError },
     { data: expensesData, error: expensesError },
@@ -184,51 +195,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
-  const plan =
-    isAccessibleBillingState(billing) && entitlementSnapshot
-      ? {
-          currentPlanName: billing.plan.displayName,
-          planHandle: entitlementSnapshot.limits.planHandle,
-          state: billing.state,
-          trialEndsAt: billing.trialEndsAt,
-          cycleEndsAt: billing.currentBillingCycle?.endTime ?? null,
-          pendingPlanName: billing.pendingPlan?.displayName ?? null,
-          activeLocations: {
-            usage: entitlementSnapshot.activeReportingLocations,
-            limit: entitlementSnapshot.limits.activeLocations,
-          },
-          dashboardUsers: {
-            usage: entitlementSnapshot.activeDashboardUsers,
-            limit: entitlementSnapshot.limits.dashboardUsers,
-          },
-          managePlanUrl:
-            permissions.isOwner && permissions.identity.isShopifyAccountOwner
-              ? buildHostedPricingUrl({ shop: session.shop })
-              : null,
-          canManagePlan:
-            permissions.isOwner && permissions.identity.isShopifyAccountOwner,
-          owner: entitlementSnapshot.owner,
-          memberships: entitlementSnapshot.memberships,
-          reportingLocations: entitlementSnapshot.locations,
-          resolutionRequired: entitlementSnapshot.resolutionRequired,
-          userLimitExceeded: entitlementSnapshot.userLimitExceeded,
-          locationLimitExceeded: entitlementSnapshot.locationLimitExceeded,
-          locationSelectionRequired:
-            entitlementSnapshot.locationSelectionRequired,
-          flashMessage: planFlash.message,
-        }
-      : null;
-
-  const loaderPayload = {
+  return {
     shop: session.shop,
     locations,
     expenses,
     productCosts,
-    plan,
   } satisfies LoaderData;
-  return planFlash.setCookie
-    ? data(loaderPayload, { headers: { "Set-Cookie": planFlash.setCookie } })
-    : loaderPayload;
 }
 
 export function shouldRevalidate({
@@ -254,6 +226,18 @@ export function shouldRevalidate({
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  const requestUrl = new URL(request.url);
+  if (requestUrl.pathname === "/app/admin/setup") {
+    const legacyTab = requestUrl.searchParams.get("tab");
+    requestUrl.searchParams.set(
+      "tab",
+      legacyTab === "product-costs" || legacyTab === "products"
+        ? "products"
+        : "expenses",
+    );
+    throw redirect(`/app/costs?${requestUrl.searchParams.toString()}`);
+  }
+
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
@@ -262,82 +246,10 @@ export async function action({ request }: ActionFunctionArgs) {
     supabase,
   });
 
-  const permissions = await assertAdminAccess({ request, session, supabase });
+  await assertAdminAccess({ request, session, supabase });
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "save");
-
-  if (
-    intent === "save-reporting-locations" ||
-    intent === "save-dashboard-memberships"
-  ) {
-    if (!permissions.membership) {
-      throw new Response("Dashboard membership is required.", { status: 403 });
-    }
-    const { billing: freshBilling, limits } = await getFreshPlanLimits({
-      admin,
-      shop: session.shop,
-    });
-    if (intent === "save-dashboard-memberships") {
-      const currentEntitlements = await getEntitlementSnapshot({
-        supabase,
-        shop: session.shop,
-        billing: freshBilling,
-      });
-      if (!currentEntitlements.userLimitExceeded) {
-        return {
-          ok: false,
-          intent,
-          message: "Manage dashboard users from the Staff page.",
-        } satisfies ActionData;
-      }
-    }
-    const rpcResult =
-      intent === "save-reporting-locations"
-        ? await supabase.rpc("select_reporting_locations", {
-            p_shop_domain: session.shop,
-            p_actor_membership_id: permissions.membership.id,
-            p_location_ids: formData
-              .getAll("location_ids")
-              .map((value) => String(value)),
-            p_location_limit: limits.activeLocations,
-          })
-        : await supabase.rpc("select_active_dashboard_memberships", {
-            p_shop_domain: session.shop,
-            p_actor_membership_id: permissions.membership.id,
-            p_membership_ids: formData
-              .getAll("membership_ids")
-              .map((value) => String(value)),
-            p_dashboard_user_limit: limits.dashboardUsers,
-          });
-    if (rpcResult.error) {
-      const messages: Record<string, string> = {
-        dashboard_plan_capacity:
-          "Select fewer dashboard users or manage your plan.",
-        invalid_location_selection:
-          "Select only active Shopify locations for this store.",
-        invalid_membership_selection:
-          "Select only active dashboard users for this store.",
-        last_admin_required: "The last ShopOps admin must remain active.",
-        location_plan_capacity: "Select fewer locations or manage your plan.",
-        owner_membership_locked: "The store owner must remain selected.",
-        reporting_location_required: "Select at least one reporting location.",
-      };
-      return {
-        ok: false,
-        intent,
-        message: messages[rpcResult.error.message] ?? rpcResult.error.message,
-      } satisfies ActionData;
-    }
-    return {
-      ok: true,
-      intent,
-      message:
-        intent === "save-reporting-locations"
-          ? "Reporting locations saved."
-          : "Dashboard access selection saved.",
-    } satisfies ActionData;
-  }
 
   const currentBilling = await getBillingState({ admin, shop: session.shop });
   if (isAccessibleBillingState(currentBilling)) {
@@ -350,7 +262,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const url = new URL(request.url);
       url.searchParams.set("tab", "plan");
       url.searchParams.set("resolution", "required");
-      throw redirect(`/app/admin/setup?${url.searchParams.toString()}`);
+      throw redirect(`/app/settings?${url.searchParams.toString()}`);
     }
   }
 
@@ -535,78 +447,14 @@ function formatMonth(value: string | null) {
   return value.slice(0, 7);
 }
 
-function SetupTabs({
-  activeTab,
-  showPlan,
-}: {
-  activeTab: SetupTab;
-  showPlan: boolean;
-}) {
-  const location = useLocation();
-  const buildTabUrl = (tab: SetupTab) => {
-    const searchParams = new URLSearchParams(location.search);
-    searchParams.set("tab", tab);
-    return `${location.pathname}?${searchParams.toString()}`;
-  };
-
-  return (
-    <nav
-      aria-label="Setup sections"
-      className="setup-segmented-control"
-      style={{
-        display: "grid",
-        gap: 8,
-        gridTemplateColumns: `repeat(${showPlan ? 3 : 2}, minmax(0, 1fr))`,
-        marginBottom: 24,
-        width: "100%",
-      }}
-    >
-      {[
-        { value: "expenses" as const, label: "Expenses" },
-        { value: "product-costs" as const, label: "Product costs" },
-        ...(showPlan ? [{ value: "plan" as const, label: "Plan" }] : []),
-      ].map((tab) => (
-        <Link
-          aria-current={activeTab === tab.value ? "page" : undefined}
-          key={tab.value}
-          to={buildTabUrl(tab.value)}
-          style={{
-            background: activeTab === tab.value ? "#eaf2ff" : "white",
-            border:
-              activeTab === tab.value
-                ? "2px solid #2563eb"
-                : "1px solid #c9cccf",
-            borderRadius: 12,
-            color: activeTab === tab.value ? "#174ea6" : "#374151",
-            fontWeight: 800,
-            padding: "13px 16px",
-            textAlign: "center",
-            textDecoration: "none",
-            boxSizing: "border-box",
-            width: "100%",
-          }}
-        >
-          {tab.label}
-        </Link>
-      ))}
-    </nav>
-  );
-}
-
 export default function AdminSetupPage() {
-  const { shop, locations, expenses, productCosts, plan } =
+  const { shop, locations, expenses, productCosts } =
     useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const location = useLocation();
   const navigation = useNavigation();
   const requestedTab = new URLSearchParams(location.search).get("tab");
-  const tab: SetupTab = plan?.resolutionRequired
-    ? "plan"
-    : requestedTab === "plan" && plan
-      ? "plan"
-      : requestedTab === "product-costs"
-        ? "product-costs"
-        : "expenses";
+  const tab: CostsTab = requestedTab === "expenses" ? "expenses" : "products";
   const [formState, setFormState] =
     useState<ExpenseFormState>(emptyExpenseForm);
   const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
@@ -665,23 +513,21 @@ export default function AdminSetupPage() {
     >
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <header style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>Setup</h1>
+          <h1 style={{ margin: 0, fontSize: 32 }}>Costs</h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Configure the inputs ShopOps uses to calculate profit.
+            Manage product costs and recurring operating expenses.
           </p>
         </header>
-        <style>{`
-          @media (max-width: 420px) {
-            .setup-segmented-control {
-              grid-template-columns: 1fr !important;
-            }
-          }
-        `}</style>
-        <SetupTabs activeTab={tab} showPlan={Boolean(plan)} />
+        <SectionTabs
+          activeTab={tab}
+          ariaLabel="Costs sections"
+          tabs={[
+            { value: "products", label: "Product costs" },
+            { value: "expenses", label: "Operating expenses" },
+          ]}
+        />
 
-        {tab === "plan" && plan ? (
-          <PlanSetup data={plan} />
-        ) : tab === "product-costs" ? (
+        {tab === "products" ? (
           <ProductCostsSetup
             actionData={actionData}
             data={productCosts}

@@ -238,6 +238,12 @@ export type DashboardLoaderData = {
           showReconnectAction: boolean;
         };
     noAssignedLocations: boolean;
+    onboarding: {
+      selectReportingLocations: boolean;
+      addProductCosts: boolean;
+      addOperatingExpenses: boolean;
+      reviewDashboardAccess: boolean;
+    };
   };
   selectedDays: number;
   financialMetricsVersion: FinancialMetricsVersion;

@@ -5,16 +5,17 @@ import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { authenticate } from "../shopify.server";
 
-function staffPath(request: Request) {
+function peopleAccessPath(request: Request) {
   const url = new URL(request.url);
-  return `/app/admin/staff${url.search}`;
+  url.searchParams.set("tab", "access");
+  return `/app/people?${url.searchParams.toString()}`;
 }
 
 async function requireAccessAndRedirect(request: Request) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await assertAdminAccess({ request, session, supabase });
-  throw redirect(staffPath(request));
+  throw redirect(peopleAccessPath(request));
 }
 
 export function loader({ request }: LoaderFunctionArgs) {

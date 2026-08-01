@@ -656,7 +656,7 @@ function ExpensesCoverageSection({
           </HelperText>
         </div>
         <AppButtonLink
-          to={`/app/admin/setup?tab=expenses${preservedSearch ? `&${preservedSearch.slice(1)}` : ""}`}
+          to={`/app/costs?tab=expenses${preservedSearch ? `&${preservedSearch.slice(1)}` : ""}`}
           compact
         >
           Open Expense Setup
@@ -908,7 +908,7 @@ export default function DataQualityPage() {
             message="Run the first sync to import Shopify locations, products, inventory, and orders."
             bullets={[
               "Manual sync requests are queued and processed by the background worker.",
-              "After sync finishes, Profit Dashboard and Location Performance will show Shopify reporting data.",
+              "After sync finishes, Dashboard and Locations will show Shopify reporting data.",
             ]}
             cta={{
               to: getDataSyncPath(preservedSearch),

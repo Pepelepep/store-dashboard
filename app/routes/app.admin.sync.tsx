@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
+  redirect,
   useActionData,
   useLoaderData,
   useLocation,
@@ -165,6 +166,11 @@ function LocationPlanLimitAction({
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+  if (url.pathname === "/app/admin/sync") {
+    url.searchParams.set("tab", "sync");
+    throw redirect(`/app/settings?${url.searchParams.toString()}`);
+  }
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
@@ -173,7 +179,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase,
   });
   await assertAdminAccess({ request, session, supabase });
-  const url = new URL(request.url);
   const viewAllActivity = url.searchParams.get("activity") === "all";
   const page = Math.max(
     0,
@@ -243,7 +248,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     viewAllActivity,
     maintenance: maintenanceResult.data as MaintenanceHealth | null,
     webhookCounts,
-    managePlanUrl: "/app/admin/setup?tab=plan",
+    managePlanUrl: "/app/settings?tab=plan",
   } satisfies LoaderData;
 }
 

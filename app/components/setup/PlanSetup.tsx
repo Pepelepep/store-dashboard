@@ -1,11 +1,6 @@
-import { Form, Link, useActionData, useNavigation } from "react-router";
+import { Link } from "react-router";
 
-import type {
-  EntitlementLimits,
-  EntitlementLocation,
-  EntitlementMembership,
-} from "../../lib/entitlement-model";
-import { getCapacityState } from "../../lib/entitlement-model";
+import type { EntitlementMembership } from "../../lib/entitlement-model";
 
 export type PlanSetupData = {
   currentPlanName: string;
@@ -13,25 +8,16 @@ export type PlanSetupData = {
   trialEndsAt: string | null;
   cycleEndsAt: string | null;
   pendingPlanName: string | null;
-  planHandle: EntitlementLimits["planHandle"];
   activeLocations: { usage: number; limit: number | null };
   dashboardUsers: { usage: number; limit: number | null };
   managePlanUrl: string | null;
   canManagePlan: boolean;
   owner: EntitlementMembership | null;
-  memberships: EntitlementMembership[];
-  reportingLocations: EntitlementLocation[];
   resolutionRequired: boolean;
   userLimitExceeded: boolean;
   locationLimitExceeded: boolean;
   locationSelectionRequired: boolean;
   flashMessage: string | null;
-};
-
-type PlanActionData = {
-  ok: boolean;
-  intent?: string;
-  message?: string;
 };
 
 function formatDate(value: string | null) {
@@ -72,17 +58,8 @@ const primaryLinkStyle = {
 } as const;
 
 export function PlanSetup({ data }: { data: PlanSetupData }) {
-  const actionData = useActionData<PlanActionData>();
-  const navigation = useNavigation();
   const trialEnd = formatDate(data.trialEndsAt);
   const cycleEnd = formatDate(data.cycleEndsAt);
-  const isSubmitting = navigation.state !== "idle";
-  const activeMemberships = data.memberships.filter(
-    (membership) => membership.status === "active",
-  );
-  const dashboardCapacity = getCapacityState(data.dashboardUsers);
-  const soloCapacityMessage =
-    "Solo includes dashboard access for the store owner. Upgrade to Growth to add another dashboard user.";
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -113,27 +90,31 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
             padding: 14,
           }}
         >
-          <strong>Plan limits need attention.</strong> Select the dashboard
-          users and reporting locations that should remain active before opening
-          reports.
+          <strong>Action required.</strong> Update the affected reporting
+          locations or dashboard access before opening reports.
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              marginTop: 10,
+            }}
+          >
+            {data.locationLimitExceeded || data.locationSelectionRequired ? (
+              <Link to="/app/locations?tab=reporting">
+                Manage reporting locations
+              </Link>
+            ) : null}
+            {data.userLimitExceeded ? (
+              <Link to="/app/people?tab=access">Manage dashboard access</Link>
+            ) : null}
+          </div>
           {!data.canManagePlan ? (
             <div style={{ marginTop: 6 }}>
               The store owner can change the Shopify plan if more capacity is
               needed.
             </div>
           ) : null}
-        </div>
-      ) : null}
-
-      {actionData?.message && actionData.intent?.startsWith("save-") ? (
-        <div
-          role={actionData.ok ? "status" : "alert"}
-          style={{
-            color: actionData.ok ? "#166534" : "#b42318",
-            fontWeight: 700,
-          }}
-        >
-          {actionData.message}
         </div>
       ) : null}
 
@@ -191,7 +172,9 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
           <div>
             <dt style={{ color: "#616161", fontWeight: 700 }}>Store owner</dt>
             <dd style={{ margin: "4px 0 0" }}>
-              {data.owner?.displayName ?? "Waiting for the Shopify store owner"}
+              {data.owner
+                ? `${data.owner.displayName} — Owner (always active and locked)`
+                : "Waiting for the Shopify store owner"}
             </dd>
           </div>
           {data.state === "trial" && trialEnd ? (
@@ -232,131 +215,19 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
       </section>
 
       <section style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Manage reporting locations</h2>
-        <p style={{ color: "#616161" }}>
-          Shopify locations remain detected and synchronized. Only selected
-          reporting locations appear in ShopOps reports; disabling one keeps its
-          historical data.
-        </p>
-        <Form method="post" style={{ display: "grid", gap: 10 }}>
-          <input type="hidden" name="intent" value="save-reporting-locations" />
-          {data.reportingLocations.map((location) => (
-            <label
-              key={location.id}
-              style={{ alignItems: "center", display: "flex", gap: 10 }}
-            >
-              <input
-                defaultChecked={
-                  location.shopifyIsActive && location.reportingEnabled
-                }
-                disabled={!location.shopifyIsActive}
-                name="location_ids"
-                type="checkbox"
-                value={location.shopifyLocationId}
-              />
-              <span>
-                {location.name}
-                {!location.shopifyIsActive ? " (inactive in Shopify)" : ""}
-              </span>
-            </label>
-          ))}
-          {data.reportingLocations.length === 0 ? (
-            <p style={{ color: "#616161" }}>
-              No Shopify locations detected yet.
-            </p>
-          ) : null}
-          <button disabled={isSubmitting} type="submit">
-            {isSubmitting &&
-            navigation.formData?.get("intent") === "save-reporting-locations"
-              ? "Saving..."
-              : "Save reporting locations"}
-          </button>
-        </Form>
-      </section>
-
-      <section style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Dashboard access</h2>
+        <h2 style={{ marginTop: 0 }}>Manage ShopOps access</h2>
         <p style={{ color: "#616161" }}>
           Dashboard users are people who can open ShopOps Studio. The store
           owner counts as one. Shopify administrators do not receive ShopOps
           access automatically. POS sellers and Staff profiles without dashboard
           access do not count.
         </p>
-        {dashboardCapacity === "over_limit" ? (
-          <p style={{ color: "#b42318", fontWeight: 700 }}>
-            {data.planHandle === "solo"
-              ? soloCapacityMessage
-              : "Your plan limit has been exceeded. Upgrade your plan or remove an existing dashboard user's access."}
-          </p>
-        ) : dashboardCapacity === "at_limit" ? (
-          <p style={{ color: "#616161" }}>
-            {data.planHandle === "solo"
-              ? soloCapacityMessage
-              : "All available capacity is currently in use."}
-          </p>
-        ) : null}
-        {data.userLimitExceeded ? (
-          <Form method="post" style={{ display: "grid", gap: 10 }}>
-            <input
-              type="hidden"
-              name="intent"
-              value="save-dashboard-memberships"
-            />
-            {activeMemberships.map((membership) =>
-              membership.isOwner ? (
-                <div
-                  key={membership.id}
-                  style={{ alignItems: "center", display: "flex", gap: 10 }}
-                >
-                  <input
-                    name="membership_ids"
-                    type="hidden"
-                    value={membership.id}
-                  />
-                  <input checked disabled readOnly type="checkbox" />
-                  <span>{membership.displayName} — Owner (always active)</span>
-                </div>
-              ) : (
-                <label
-                  key={membership.id}
-                  style={{ alignItems: "center", display: "flex", gap: 10 }}
-                >
-                  <input
-                    defaultChecked
-                    name="membership_ids"
-                    type="checkbox"
-                    value={membership.id}
-                  />
-                  <span>
-                    {membership.displayName} — {membership.role}
-                  </span>
-                </label>
-              ),
-            )}
-            <button disabled={isSubmitting} type="submit">
-              {isSubmitting &&
-              navigation.formData?.get("intent") ===
-                "save-dashboard-memberships"
-                ? "Saving..."
-                : "Save dashboard access"}
-            </button>
-          </Form>
-        ) : (
-          <div style={{ display: "grid", gap: 8 }}>
-            {activeMemberships.map((membership) => (
-              <div key={membership.id}>
-                {membership.displayName} —{" "}
-                {membership.isOwner
-                  ? "Owner (always active) — Locked"
-                  : membership.role}
-              </div>
-            ))}
-          </div>
-        )}
-        <p style={{ marginBottom: 0 }}>
-          Invite, activate, deactivate, and assign locations on the{" "}
-          <Link to="/app/admin/staff">Staff page</Link>.
-        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Link to="/app/locations?tab=reporting">
+            Manage reporting locations
+          </Link>
+          <Link to="/app/people?tab=access">Manage dashboard access</Link>
+        </div>
       </section>
     </div>
   );

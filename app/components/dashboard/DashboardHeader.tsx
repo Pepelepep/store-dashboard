@@ -46,10 +46,11 @@ export function DashboardHeader({
       <div style={{ marginBottom: 18 }}>
         <div>
           <h1 style={{ fontSize: 32, lineHeight: 1.15, margin: 0 }}>
-            Profit Dashboard
+            Dashboard
           </h1>
           <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Track Shopify sales, discounts, refunds, COGS, margins, and inventory risk from synced store data.
+            Track Shopify sales, discounts, refunds, COGS, margins, and
+            inventory risk from synced store data.
           </p>
         </div>
       </div>
