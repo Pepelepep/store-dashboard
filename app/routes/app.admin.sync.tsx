@@ -12,7 +12,6 @@ import { useEffect } from "react";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
-import { buildHostedPricingUrl } from "../lib/billing.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
   getOfflineAdminClient,
@@ -144,7 +143,7 @@ function isLocationPlanLimitJob(job: SyncJobRow) {
 function locationLimitAction(errorMessage: string | null | undefined) {
   return errorMessage?.startsWith("Multi-location allows 10 active locations.")
     ? { href: "/support", label: "Contact support" }
-    : { href: null, label: "Manage plan" };
+    : { href: null, label: "Review plan limits" };
 }
 
 function LocationPlanLimitAction({
@@ -244,7 +243,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     viewAllActivity,
     maintenance: maintenanceResult.data as MaintenanceHealth | null,
     webhookCounts,
-    managePlanUrl: buildHostedPricingUrl({ shop: session.shop }),
+    managePlanUrl: "/app/admin/setup?tab=plan",
   } satisfies LoaderData;
 }
 

@@ -15,7 +15,7 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getPermissionContext } from "../lib/auth/permissions.server";
-import { getBillingState, requireBillingAccess } from "../lib/billing.server";
+import { requireBillingAccess } from "../lib/billing.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
 
@@ -65,14 +65,13 @@ export const middleware: MiddlewareFunction[] = [
 ];
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   if (isBillingRoutePath(url.pathname)) {
     return {
       apiKey: process.env.SHOPIFY_API_KEY ?? "",
-      billingEnabled: false,
       canAdmin: false,
-      accessRequired: false,
+      accessState: "allowed" as const,
       accessIdentity: {
         shop: session.shop,
         shopifyUserId: null,
@@ -87,21 +86,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const billing = await getBillingState({ admin, shop: session.shop });
-
   const permissions = await getPermissionContext({
     request,
     session,
     supabase,
   });
-  const accessRequired =
-    !permissions.isAdmin && permissions.allowedLocationIds.size === 0;
+  const accessState = !permissions.hasOwner
+    ? ("owner_setup_required" as const)
+    : !permissions.isActiveMember
+      ? ("no_access" as const)
+      : ("allowed" as const);
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY ?? "",
-    billingEnabled: billing.billingEnabled,
     canAdmin: permissions.isAdmin,
-    accessRequired,
+    accessState,
     accessIdentity: {
       shop: permissions.identity.shop,
       shopifyUserId: permissions.identity.shopifyUserId,
@@ -111,7 +110,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export default function App() {
-  const { apiKey, billingEnabled, canAdmin, accessRequired, accessIdentity } =
+  const { apiKey, canAdmin, accessState, accessIdentity } =
     useLoaderData<typeof loader>();
   const location = useLocation();
   const search = location.search;
@@ -119,15 +118,13 @@ export default function App() {
   setupSearchParams.delete("tab");
   const setupQuery = setupSearchParams.toString();
   const setupPath = `/app/admin/setup${setupQuery ? `?${setupQuery}` : ""}`;
-  const billingConfirmed =
-    new URLSearchParams(location.search).get("billing") === "activated";
   const isBillingRoute = isBillingRoutePath(location.pathname);
 
   return (
     <AppProvider embedded apiKey={apiKey}>
       {isBillingRoute ? (
         <Outlet />
-      ) : accessRequired ? (
+      ) : accessState !== "allowed" ? (
         <main
           style={{
             minHeight: "100vh",
@@ -149,8 +146,9 @@ export default function App() {
           >
             <h1 style={{ margin: 0, fontSize: 28 }}>Access required</h1>
             <p style={{ color: "#616161", margin: "8px 0 20px" }}>
-              Ask your admin to add your email or link this Shopify user ID to
-              your existing Team Access.
+              {accessState === "owner_setup_required"
+                ? "ShopOps Studio setup must be completed by the Shopify store owner."
+                : "You don't have access to ShopOps Studio. Contact the store owner."}
             </p>
 
             <dl style={{ display: "grid", gap: 12, margin: 0 }}>
@@ -173,11 +171,6 @@ export default function App() {
                 </div>
               ) : null}
             </dl>
-
-            <p style={{ color: "#616161", margin: "20px 0 0" }}>
-              If no email is shown, send the Shopify user ID to your admin. They
-              can add an access label like <span>Maya - POS Laval</span>.
-            </p>
           </section>
         </main>
       ) : (
@@ -190,32 +183,7 @@ export default function App() {
             {canAdmin ? <a href={setupPath}>Setup</a> : null}
             {canAdmin ? <a href={`/app/admin/staff${search}`}>Staff</a> : null}
             {canAdmin ? <a href={getDataSyncPath(search)}>Data sync</a> : null}
-            {billingEnabled && canAdmin ? (
-              <a
-                href={`${setupPath}${setupPath.includes("?") ? "&" : "?"}tab=plan`}
-              >
-                Plan
-              </a>
-            ) : null}
           </ui-nav-menu>
-
-          {billingConfirmed ? (
-            <div
-              role="status"
-              style={{
-                background: "#eaf7ef",
-                border: "1px solid #a8d5b7",
-                borderRadius: 10,
-                color: "#166534",
-                fontWeight: 700,
-                margin: "16px auto 0",
-                maxWidth: 1224,
-                padding: "10px 14px",
-              }}
-            >
-              Plan confirmed.
-            </div>
-          ) : null}
 
           <Outlet />
         </>

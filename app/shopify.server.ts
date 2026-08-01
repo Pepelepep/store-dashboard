@@ -14,6 +14,10 @@ const shopify = shopifyApp({
   scopes: process.env.SCOPES?.split(","),
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
+  useOnlineTokens: true,
+  // The Shopify adapter and generated Prisma client expose incompatible
+  // generic versions even though this is the adapter's required runtime shape.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sessionStorage: new PrismaSessionStorage(prisma) as any,
   distribution: AppDistribution.AppStore,
   future: {

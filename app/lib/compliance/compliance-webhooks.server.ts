@@ -7,6 +7,7 @@ export const SHOP_REDACTION_TABLES = [
   "order_transactions",
   "fixed_expenses",
   "user_location_access",
+  "dashboard_memberships",
   "staff_identity_aliases",
   "staff_people",
   "order_lines",
@@ -53,7 +54,9 @@ function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function getOrderIdCandidates(orderIds: Array<string | number> | null | undefined) {
+function getOrderIdCandidates(
+  orderIds: Array<string | number> | null | undefined,
+) {
   const candidates = new Set<string>();
 
   for (const rawOrderId of orderIds ?? []) {
@@ -98,13 +101,20 @@ export async function recordComplianceWebhookEvent({
   });
 
   if (error) {
-    console.error(`Failed to record compliance webhook event for ${topic}.`, error);
+    console.error(
+      `Failed to record compliance webhook event for ${topic}.`,
+      error,
+    );
   }
 }
 
-export function getSafeCustomerRequestDetails(payload: CustomerCompliancePayload) {
+export function getSafeCustomerRequestDetails(
+  payload: CustomerCompliancePayload,
+) {
   return {
-    dataRequestId: payload.data_request?.id ? String(payload.data_request.id) : null,
+    dataRequestId: payload.data_request?.id
+      ? String(payload.data_request.id)
+      : null,
     customerIdPresent: Boolean(payload.customer?.id),
     customerEmailPresent: Boolean(payload.customer?.email),
     customerPhonePresent: Boolean(payload.customer?.phone),
@@ -199,7 +209,10 @@ export async function deleteShopScopedSupabaseData({
     const rowCount = await getShopScopedRowCount({ supabase, table, shop });
     deletedCounts[table] = rowCount;
 
-    const { error } = await supabase.from(table).delete().eq("shop_domain", shop);
+    const { error } = await supabase
+      .from(table)
+      .delete()
+      .eq("shop_domain", shop);
     if (error) throw error;
   }
 

@@ -26,8 +26,10 @@ import {
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
 import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
+import { getFreshPlanLimits } from "../lib/entitlements.server";
 
 type PermissionRow = {
+  membership_id: string | null;
   person_id: string | null;
   user_email: string | null;
   shopify_user_id: string | null;
@@ -38,7 +40,15 @@ type PermissionRow = {
 type LocationRow = {
   shopify_location_id: string;
   name: string;
-  is_active: boolean;
+};
+type MembershipRow = {
+  id: string;
+  person_id: string | null;
+  normalized_email: string | null;
+  display_name: string;
+  role: "owner" | "admin" | "manager" | "viewer";
+  status: "active" | "disabled";
+  is_owner: boolean;
 };
 type SellerMetric = {
   lastOrderName: string | null;
@@ -56,6 +66,7 @@ type StaffAlias = Omit<StaffIdentityAliasRow, "alias_type"> & {
 type StaffProfile = StaffPersonRow & {
   aliases: StaffAlias[];
   dashboardAccess: string;
+  membership: MembershipRow | null;
   permissions: PermissionRow[];
   posMetrics: SellerMetric;
   canHardDelete: boolean;
@@ -170,39 +181,11 @@ function blankMetric(): SellerMetric {
   };
 }
 
-function accessStatus(
-  person: StaffPersonRow,
-  aliases: StaffAlias[],
-  permissions: PermissionRow[],
-) {
-  const emails = new Set(
-    [
-      person.email,
-      ...aliases
-        .filter((alias) => alias.alias_type === STAFF_ALIAS_TYPES.email)
-        .map((alias) => alias.alias_value),
-    ]
-      .map((value) => value?.trim().toLowerCase())
-      .filter(Boolean),
-  );
-  const ids = new Set(
-    aliases
-      .filter(
-        (alias) => alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId,
-      )
-      .map((alias) => alias.alias_value),
-  );
-  const matches = permissions.filter(
-    (row) =>
-      row.person_id === person.id ||
-      Boolean(
-        (row.user_email && emails.has(row.user_email.toLowerCase())) ||
-        (row.shopify_user_id && ids.has(row.shopify_user_id)),
-      ),
-  );
-  if (!matches.length) return "No access";
-  if (matches.some((row) => row.role === "admin")) return "Admin";
-  if (matches.some((row) => row.role === "manager")) return "Manager";
+function accessStatus(membership: MembershipRow | null) {
+  if (!membership || membership.status !== "active") return "No access";
+  if (membership.is_owner) return "Owner";
+  if (membership.role === "admin") return "Admin";
+  if (membership.role === "manager") return "Manager";
   return "Viewer";
 }
 
@@ -219,6 +202,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     peopleResult,
     aliasesResult,
     permissionsResult,
+    membershipsResult,
     locationsResult,
     metricsResult,
     setupResult,
@@ -241,14 +225,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase
       .from("user_location_access")
       .select(
-        "person_id, user_email, shopify_user_id, role, shopify_location_id, location_name",
+        "membership_id, person_id, user_email, shopify_user_id, role, shopify_location_id, location_name",
+      )
+      .eq("shop_domain", session.shop),
+    supabase
+      .from("dashboard_memberships")
+      .select(
+        "id, person_id, normalized_email, display_name, role, status, is_owner",
       )
       .eq("shop_domain", session.shop),
     supabase
       .from("locations")
-      .select("shopify_location_id, name, is_active")
+      .select("shopify_location_id, name")
       .eq("shop_domain", session.shop)
-      .eq("is_active", true)
+      .eq("shopify_is_active", true)
+      .eq("reporting_enabled", true)
       .order("name"),
     supabase
       .from("staff_pos_seller_metrics")
@@ -276,6 +267,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     peopleResult,
     aliasesResult,
     permissionsResult,
+    membershipsResult,
     locationsResult,
     metricsResult,
     setupResult,
@@ -285,6 +277,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const people = (peopleResult.data ?? []) as StaffPersonRow[];
   const aliases = (aliasesResult.data ?? []) as StaffAlias[];
   const permissions = (permissionsResult.data ?? []) as PermissionRow[];
+  const memberships = (membershipsResult.data ?? []) as MembershipRow[];
   const metrics = new Map<string, SellerMetric>();
   for (const row of metricsResult.data ?? []) {
     const candidate = getStaffIdentityAliasCandidates({
@@ -315,14 +308,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const personAliases = aliases.filter(
       (alias) => alias.person_id === person.id,
     );
+    const membership =
+      memberships.find((item) => item.person_id === person.id) ?? null;
     const personPermissions = permissions.filter(
-      (row) => row.person_id === person.id,
+      (row) =>
+        row.person_id === person.id ||
+        Boolean(membership && row.membership_id === membership.id),
     );
-    const personDashboardAccess = accessStatus(
-      person,
-      personAliases,
-      permissions,
-    );
+    const personDashboardAccess = accessStatus(membership);
     const posMetrics = personAliases.reduce((total, alias) => {
       const item = metrics.get(metricKey(alias));
       if (!item) return total;
@@ -350,10 +343,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ...person,
       aliases: personAliases,
       dashboardAccess: personDashboardAccess,
+      membership,
       permissions: personPermissions,
       posMetrics,
       canHardDelete:
-        personDashboardAccess === "No access" &&
+        membership === null &&
         personAliases.length === 0 &&
         posMetrics.orderCount === 0,
     };
@@ -414,18 +408,29 @@ function friendlyAccessError(message?: string) {
     message?.includes("dashboard_identity_in_use")
   )
     return "That login email is already used by another staff member.";
+  if (message?.includes("dashboard_plan_capacity"))
+    return "Your plan limit has been reached. Upgrade your plan or remove an existing dashboard user's access.";
+  if (message?.includes("owner_membership_locked"))
+    return "The store owner cannot be removed, disabled, or demoted.";
+  if (message?.includes("last_admin_required"))
+    return "The last active ShopOps Admin cannot be removed or demoted.";
+  if (message?.includes("active_staff_member_required"))
+    return "Restore this Staff profile before enabling dashboard access.";
   return "Dashboard access could not be saved. Nothing was changed.";
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.staff.action",
     shop: session.shop,
     supabase,
   });
-  await assertAdminAccess({ request, session, supabase });
+  const permissions = await assertAdminAccess({ request, session, supabase });
+  if (!permissions.membership) {
+    throw new Response("Dashboard membership is required.", { status: 403 });
+  }
   const data = await request.formData();
   const intent = text(data.get("intent"));
   const personId = text(data.get("person_id"));
@@ -615,17 +620,41 @@ export async function action({ request }: ActionFunctionArgs) {
     const email = text(data.get("email")).toLowerCase() || null;
     if (!personId || !displayName)
       return { ok: false, message: "Display name is required." };
+    const existingMembership = await supabase
+      .from("dashboard_memberships")
+      .select("id, normalized_email, status")
+      .eq("shop_domain", session.shop)
+      .eq("person_id", personId)
+      .maybeSingle();
+    if (existingMembership.error)
+      return { ok: false, message: existingMembership.error.message };
+    if (
+      existingMembership.data?.status === "active" &&
+      (existingMembership.data.normalized_email ?? "") !== (email ?? "")
+    ) {
+      return {
+        ok: false,
+        message: "Update the login email from Edit dashboard access.",
+      };
+    }
     const result = await supabase
       .from("staff_people")
       .update({ display_name: displayName, email, updated_at: now })
       .eq("shop_domain", session.shop)
       .eq("id", personId);
-    if (!result.error)
+    if (!result.error) {
       await supabase
         .from("user_location_access")
         .update({ access_label: displayName })
         .eq("shop_domain", session.shop)
         .eq("person_id", personId);
+      if (existingMembership.data)
+        await supabase
+          .from("dashboard_memberships")
+          .update({ display_name: displayName, updated_at: now })
+          .eq("shop_domain", session.shop)
+          .eq("id", existingMembership.data.id);
+    }
     return result.error
       ? { ok: false, message: result.error.message }
       : { ok: true, message: "Profile updated." };
@@ -648,10 +677,14 @@ export async function action({ request }: ActionFunctionArgs) {
         };
   }
   if (intent === "remove_staff") {
-    const result = await supabase.rpc("remove_or_archive_staff", {
-      p_shop_domain: session.shop,
-      p_person_id: personId,
-    });
+    const result = await supabase.rpc(
+      "archive_staff_with_dashboard_protection",
+      {
+        p_shop_domain: session.shop,
+        p_actor_membership_id: permissions.membership.id,
+        p_person_id: personId,
+      },
+    );
     return result.error
       ? { ok: false, message: result.error.message }
       : {
@@ -672,12 +705,23 @@ export async function action({ request }: ActionFunctionArgs) {
       : { ok: true, message: "Staff restored." };
   }
   if (intent === "remove_dashboard_access") {
-    const result = await supabase.rpc("remove_staff_dashboard_access", {
+    const target = await supabase
+      .from("dashboard_memberships")
+      .select("id")
+      .eq("shop_domain", session.shop)
+      .eq("person_id", personId)
+      .maybeSingle();
+    if (target.error)
+      return { ok: false, message: friendlyAccessError(target.error.message) };
+    if (!target.data)
+      return { ok: true, message: "Dashboard access is already disabled." };
+    const result = await supabase.rpc("disable_dashboard_membership", {
       p_shop_domain: session.shop,
-      p_person_id: personId,
+      p_actor_membership_id: permissions.membership.id,
+      p_target_membership_id: target.data.id,
     });
     return result.error
-      ? { ok: false, message: "Dashboard access could not be removed." }
+      ? { ok: false, message: friendlyAccessError(result.error.message) }
       : {
           ok: true,
           message:
@@ -687,6 +731,10 @@ export async function action({ request }: ActionFunctionArgs) {
   if (intent === "save_dashboard_access") {
     const email = text(data.get("email")).toLowerCase();
     const role = text(data.get("role"));
+    const { limits } = await getFreshPlanLimits({
+      admin,
+      shop: session.shop,
+    });
     const aliases = await supabase
       .from("staff_identity_aliases")
       .select("alias_value")
@@ -695,8 +743,9 @@ export async function action({ request }: ActionFunctionArgs) {
       .eq("alias_type", STAFF_ALIAS_TYPES.shopifyAdminUserId);
     if (aliases.error)
       return { ok: false, message: friendlyAccessError(aliases.error.message) };
-    const result = await supabase.rpc("replace_staff_dashboard_access", {
+    const result = await supabase.rpc("replace_dashboard_membership_access", {
       p_shop_domain: session.shop,
+      p_actor_membership_id: permissions.membership.id,
       p_person_id: personId,
       p_canonical_email: email,
       p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
@@ -706,6 +755,7 @@ export async function action({ request }: ActionFunctionArgs) {
           (aliases.data ?? []).map((row) => row.alias_value).filter(Boolean),
         ),
       ],
+      p_dashboard_user_limit: limits.dashboardUsers,
     });
     return result.error
       ? { ok: false, message: friendlyAccessError(result.error.message) }
@@ -806,7 +856,15 @@ function AccessForm({
   profile: StaffProfile;
   locations: LocationRow[];
 }) {
-  const role = profile.permissions[0]?.role ?? "viewer";
+  if (profile.membership?.is_owner) {
+    return (
+      <p className="hint">
+        The Shopify store owner is always active, always an administrator, and
+        cannot be edited or removed.
+      </p>
+    );
+  }
+  const role = profile.membership?.role ?? "viewer";
   const allLocations = profile.permissions.some(
     (row) => row.shopify_location_id === "*",
   );
@@ -1519,21 +1577,25 @@ export default function StaffPage() {
                       >
                         View
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => open("access", profile)}
-                      >
-                        {profile.dashboardAccess === "No access"
-                          ? "Enable access"
-                          : "Edit access"}
-                      </button>
-                      {profile.is_active ? (
+                      {!profile.membership?.is_owner ? (
                         <button
                           type="button"
-                          onClick={() => open("remove", profile)}
+                          onClick={() => open("access", profile)}
                         >
-                          Remove staff
+                          {profile.dashboardAccess === "No access"
+                            ? "Enable access"
+                            : "Edit access"}
                         </button>
+                      ) : null}
+                      {profile.is_active ? (
+                        !profile.membership?.is_owner ? (
+                          <button
+                            type="button"
+                            onClick={() => open("remove", profile)}
+                          >
+                            Remove staff
+                          </button>
+                        ) : null
                       ) : (
                         <Form method="post">
                           <input
@@ -1768,7 +1830,8 @@ export default function StaffPage() {
           onClose={() => setOverlay("details")}
         >
           <AccessForm profile={selected} locations={data.locations} />
-          {selected.dashboardAccess !== "No access" ? (
+          {selected.dashboardAccess !== "No access" &&
+          !selected.membership?.is_owner ? (
             <Form method="post" className="remove-access">
               <input
                 type="hidden"
@@ -1818,9 +1881,13 @@ export default function StaffPage() {
                 </p>
                 <small>Login email controls access to ShopOps.</small>
               </div>
-              <Button onClick={() => setOverlay("access")}>
-                {selected.dashboardAccess === "No access" ? "Enable" : "Edit"}
-              </Button>
+              {selected.membership?.is_owner ? (
+                <StatusBadge variant="neutral">Locked</StatusBadge>
+              ) : (
+                <Button onClick={() => setOverlay("access")}>
+                  {selected.dashboardAccess === "No access" ? "Enable" : "Edit"}
+                </Button>
+              )}
             </section>
             <section>
               <div>
@@ -1882,7 +1949,7 @@ export default function StaffPage() {
                 )}
               </div>
             </details>
-            {selected.is_active ? (
+            {selected.is_active && !selected.membership?.is_owner ? (
               <div className="detail-remove">
                 <Button danger onClick={() => setOverlay("remove")}>
                   Remove staff

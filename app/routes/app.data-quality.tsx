@@ -6,7 +6,7 @@ import { HelperText } from "../components/ui/HelperText";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertReportingEntitlements } from "../lib/entitlements.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
 import {
@@ -171,14 +171,22 @@ async function getFailedSyncCount({
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.data-quality",
     shop: session.shop,
     supabase,
   });
-  const permissions = await assertAdminAccess({ request, session, supabase });
+  const { permissions } = await assertReportingEntitlements({
+    request,
+    session,
+    supabase,
+    admin,
+  });
+  if (!permissions.isAdmin) {
+    throw new Response("Forbidden: admin access required", { status: 403 });
+  }
   const url = new URL(request.url);
   const preservedSearch = url.search;
   const errors: string[] = [];
@@ -187,7 +195,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .from("locations")
     .select("shopify_location_id, name, is_active")
     .eq("shop_domain", session.shop)
-    .eq("is_active", true)
+    .eq("shopify_is_active", true)
+    .eq("reporting_enabled", true)
     .order("name", { ascending: true });
 
   if (locationsError) errors.push(locationsError.message);

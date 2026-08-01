@@ -4,8 +4,10 @@ import type {
   ShouldRevalidateFunctionArgs,
 } from "react-router";
 import {
+  data,
   Form,
   Link,
+  redirect,
   useActionData,
   useLoaderData,
   useLocation,
@@ -27,10 +29,7 @@ import { InlineResult } from "../components/ui/InlineResult";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { ProductCostsSetup } from "../components/setup/ProductCostsSetup";
-import {
-  PlanSetup,
-  type PlanSetupData,
-} from "../components/setup/PlanSetup";
+import { PlanSetup, type PlanSetupData } from "../components/setup/PlanSetup";
 import {
   loadProductCostSetup,
   saveProductCostSettings,
@@ -41,10 +40,13 @@ import { validateExpenseMonthRange } from "../lib/financial/expense-validation";
 import {
   buildHostedPricingUrl,
   getBillingState,
-  getPlanLimits,
   isAccessibleBillingState,
 } from "../lib/billing.server";
-import { getBillingUsage } from "../lib/billing-usage.server";
+import {
+  getEntitlementSnapshot,
+  getFreshPlanLimits,
+} from "../lib/entitlements.server";
+import { consumePlanConfirmedFlash } from "../lib/flash.server";
 
 type LocationRow = {
   shopify_location_id: string;
@@ -128,39 +130,44 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase,
   });
 
-  await assertAdminAccess({ request, session, supabase });
+  const permissions = await assertAdminAccess({ request, session, supabase });
   const billing = await getBillingState({ admin, shop: session.shop });
+  const entitlementSnapshot = isAccessibleBillingState(billing)
+    ? await getEntitlementSnapshot({
+        supabase,
+        shop: session.shop,
+        billing,
+      })
+    : null;
+  const planFlash = await consumePlanConfirmedFlash(request);
   const [
     { data: locationsData, error: locationsError },
     { data: expensesData, error: expensesError },
     productCosts,
-    usage,
-  ] =
-    await Promise.all([
-      supabase
-        .from("locations")
-        .select("shopify_location_id, name")
-        .eq("shop_domain", session.shop)
-        .eq("is_active", true)
-        .order("name", { ascending: true }),
-      supabase
-        .from("fixed_expenses")
-        .select(
-          "id, shop_domain, shopify_location_id, location_name, expense_name, expense_category, monthly_amount, start_month, end_month, is_active",
-        )
-        .eq("shop_domain", session.shop)
-        .order("start_month", { ascending: false })
-        .order("expense_name", { ascending: true }),
-      loadProductCostSetup({
-        supabase,
-        shop: session.shop,
-      }),
-      isAccessibleBillingState(billing)
-        ? getBillingUsage({ supabase, shop: session.shop })
-        : Promise.resolve(null),
-    ]);
+  ] = await Promise.all([
+    supabase
+      .from("locations")
+      .select("shopify_location_id, name")
+      .eq("shop_domain", session.shop)
+      .eq("shopify_is_active", true)
+      .eq("reporting_enabled", true)
+      .order("name", { ascending: true }),
+    supabase
+      .from("fixed_expenses")
+      .select(
+        "id, shop_domain, shopify_location_id, location_name, expense_name, expense_category, monthly_amount, start_month, end_month, is_active",
+      )
+      .eq("shop_domain", session.shop)
+      .order("start_month", { ascending: false })
+      .order("expense_name", { ascending: true }),
+    loadProductCostSetup({
+      supabase,
+      shop: session.shop,
+    }),
+  ]);
 
-  if (locationsError) throw new Response(locationsError.message, { status: 500 });
+  if (locationsError)
+    throw new Response(locationsError.message, { status: 500 });
   if (expensesError) throw new Response(expensesError.message, { status: 500 });
 
   const locations = (locationsData ?? []) as LocationRow[];
@@ -177,11 +184,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
-  const planLimits = isAccessibleBillingState(billing)
-    ? getPlanLimits(billing.planHandle)
-    : null;
   const plan =
-    isAccessibleBillingState(billing) && planLimits && usage
+    isAccessibleBillingState(billing) && entitlementSnapshot
       ? {
           currentPlanName: billing.plan.displayName,
           state: billing.state,
@@ -189,24 +193,39 @@ export async function loader({ request }: LoaderFunctionArgs) {
           cycleEndsAt: billing.currentBillingCycle?.endTime ?? null,
           pendingPlanName: billing.pendingPlan?.displayName ?? null,
           activeLocations: {
-            usage: usage.activeLocations,
-            limit: planLimits.activeLocations,
+            usage: entitlementSnapshot.activeReportingLocations,
+            limit: entitlementSnapshot.limits.activeLocations,
           },
           dashboardUsers: {
-            usage: usage.dashboardUsers,
-            limit: planLimits.dashboardUsers,
+            usage: entitlementSnapshot.activeDashboardUsers,
+            limit: entitlementSnapshot.limits.dashboardUsers,
           },
-          managePlanUrl: buildHostedPricingUrl({ shop: session.shop }),
+          managePlanUrl: permissions.isOwner
+            ? buildHostedPricingUrl({ shop: session.shop })
+            : null,
+          canManagePlan: permissions.isOwner,
+          owner: entitlementSnapshot.owner,
+          memberships: entitlementSnapshot.memberships,
+          reportingLocations: entitlementSnapshot.locations,
+          resolutionRequired: entitlementSnapshot.resolutionRequired,
+          userLimitExceeded: entitlementSnapshot.userLimitExceeded,
+          locationLimitExceeded: entitlementSnapshot.locationLimitExceeded,
+          locationSelectionRequired:
+            entitlementSnapshot.locationSelectionRequired,
+          flashMessage: planFlash.message,
         }
       : null;
 
-  return {
+  const loaderPayload = {
     shop: session.shop,
     locations,
     expenses,
     productCosts,
     plan,
   } satisfies LoaderData;
+  return planFlash.setCookie
+    ? data(loaderPayload, { headers: { "Set-Cookie": planFlash.setCookie } })
+    : loaderPayload;
 }
 
 export function shouldRevalidate({
@@ -220,15 +239,11 @@ export function shouldRevalidate({
 
   const currentSearch = new URLSearchParams(currentUrl.search);
   const nextSearch = new URLSearchParams(nextUrl.search);
-  const tabChanged =
-    currentSearch.get("tab") !== nextSearch.get("tab");
+  const tabChanged = currentSearch.get("tab") !== nextSearch.get("tab");
   currentSearch.delete("tab");
   nextSearch.delete("tab");
 
-  if (
-    tabChanged &&
-    currentSearch.toString() === nextSearch.toString()
-  ) {
+  if (tabChanged && currentSearch.toString() === nextSearch.toString()) {
     return false;
   }
 
@@ -236,7 +251,7 @@ export function shouldRevalidate({
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.setup.action",
@@ -244,10 +259,97 @@ export async function action({ request }: ActionFunctionArgs) {
     supabase,
   });
 
-  await assertAdminAccess({ request, session, supabase });
+  const permissions = await assertAdminAccess({ request, session, supabase });
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "save");
+
+  if (
+    intent === "save-reporting-locations" ||
+    intent === "save-dashboard-memberships"
+  ) {
+    if (!permissions.membership) {
+      throw new Response("Dashboard membership is required.", { status: 403 });
+    }
+    const { billing: freshBilling, limits } = await getFreshPlanLimits({
+      admin,
+      shop: session.shop,
+    });
+    if (intent === "save-dashboard-memberships") {
+      const currentEntitlements = await getEntitlementSnapshot({
+        supabase,
+        shop: session.shop,
+        billing: freshBilling,
+      });
+      if (!currentEntitlements.userLimitExceeded) {
+        return {
+          ok: false,
+          intent,
+          message: "Manage dashboard users from the Staff page.",
+        } satisfies ActionData;
+      }
+    }
+    const rpcResult =
+      intent === "save-reporting-locations"
+        ? await supabase.rpc("select_reporting_locations", {
+            p_shop_domain: session.shop,
+            p_actor_membership_id: permissions.membership.id,
+            p_location_ids: formData
+              .getAll("location_ids")
+              .map((value) => String(value)),
+            p_location_limit: limits.activeLocations,
+          })
+        : await supabase.rpc("select_active_dashboard_memberships", {
+            p_shop_domain: session.shop,
+            p_actor_membership_id: permissions.membership.id,
+            p_membership_ids: formData
+              .getAll("membership_ids")
+              .map((value) => String(value)),
+            p_dashboard_user_limit: limits.dashboardUsers,
+          });
+    if (rpcResult.error) {
+      const messages: Record<string, string> = {
+        dashboard_plan_capacity:
+          "Select fewer dashboard users or manage your plan.",
+        invalid_location_selection:
+          "Select only active Shopify locations for this store.",
+        invalid_membership_selection:
+          "Select only active dashboard users for this store.",
+        last_admin_required: "The last ShopOps admin must remain active.",
+        location_plan_capacity: "Select fewer locations or manage your plan.",
+        owner_membership_locked: "The store owner must remain selected.",
+        reporting_location_required: "Select at least one reporting location.",
+      };
+      return {
+        ok: false,
+        intent,
+        message: messages[rpcResult.error.message] ?? rpcResult.error.message,
+      } satisfies ActionData;
+    }
+    return {
+      ok: true,
+      intent,
+      message:
+        intent === "save-reporting-locations"
+          ? "Reporting locations saved."
+          : "Dashboard access selection saved.",
+    } satisfies ActionData;
+  }
+
+  const currentBilling = await getBillingState({ admin, shop: session.shop });
+  if (isAccessibleBillingState(currentBilling)) {
+    const currentEntitlements = await getEntitlementSnapshot({
+      supabase,
+      shop: session.shop,
+      billing: currentBilling,
+    });
+    if (currentEntitlements.resolutionRequired) {
+      const url = new URL(request.url);
+      url.searchParams.set("tab", "plan");
+      url.searchParams.set("resolution", "required");
+      throw redirect(`/app/admin/setup?${url.searchParams.toString()}`);
+    }
+  }
 
   if (intent === "save-product-costs") {
     const enabled =
@@ -257,10 +359,7 @@ export async function action({ request }: ActionFunctionArgs) {
     const rawPercent = String(formData.get("estimate_percent") ?? "").trim();
     const percent = rawPercent === "" ? null : Number(rawPercent);
 
-    if (
-      enabled &&
-      (percent === null || !isValidEstimatePercent(percent))
-    ) {
+    if (enabled && (percent === null || !isValidEstimatePercent(percent))) {
       return {
         ok: false,
         intent,
@@ -317,12 +416,15 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   const expenseName = String(formData.get("expense_name") ?? "").trim();
-  const expenseCategory = String(formData.get("expense_category") ?? "").trim() || null;
+  const expenseCategory =
+    String(formData.get("expense_category") ?? "").trim() || null;
   const monthlyAmount = Number(formData.get("monthly_amount") ?? 0);
   const startMonth = String(formData.get("start_month") ?? "");
   const endMonthRaw = String(formData.get("end_month") ?? "").trim();
   const endMonth = endMonthRaw || null;
-  const shopifyLocationIdRaw = String(formData.get("shopify_location_id") ?? "").trim();
+  const shopifyLocationIdRaw = String(
+    formData.get("shopify_location_id") ?? "",
+  ).trim();
   const shopifyLocationId = shopifyLocationIdRaw || null;
 
   if (!expenseName) {
@@ -363,9 +465,12 @@ export async function action({ request }: ActionFunctionArgs) {
       .select("name")
       .eq("shop_domain", session.shop)
       .eq("shopify_location_id", shopifyLocationId)
+      .eq("shopify_is_active", true)
+      .eq("reporting_enabled", true)
       .maybeSingle();
 
-    if (locationError) throw new Response(locationError.message, { status: 500 });
+    if (locationError)
+      throw new Response(locationError.message, { status: 500 });
     if (!location) {
       return {
         ok: false,
@@ -492,19 +597,23 @@ export default function AdminSetupPage() {
   const location = useLocation();
   const navigation = useNavigation();
   const requestedTab = new URLSearchParams(location.search).get("tab");
-  const tab: SetupTab =
-    requestedTab === "plan" && plan
+  const tab: SetupTab = plan?.resolutionRequired
+    ? "plan"
+    : requestedTab === "plan" && plan
       ? "plan"
       : requestedTab === "product-costs"
-      ? "product-costs"
-      : "expenses";
-  const [formState, setFormState] = useState<ExpenseFormState>(emptyExpenseForm);
+        ? "product-costs"
+        : "expenses";
+  const [formState, setFormState] =
+    useState<ExpenseFormState>(emptyExpenseForm);
   const [isActionFeedbackHidden, setIsActionFeedbackHidden] = useState(false);
   const isSubmitting = navigation.state !== "idle";
   const activeIntent = navigation.formData?.get("intent");
   const isSaving = isSubmitting && activeIntent === "save";
   const visibleActionData = isActionFeedbackHidden ? undefined : actionData;
-  const fieldErrors = visibleActionData?.ok ? undefined : visibleActionData?.fieldErrors;
+  const fieldErrors = visibleActionData?.ok
+    ? undefined
+    : visibleActionData?.fieldErrors;
   const isEditing = Boolean(formState.id);
 
   useEffect(() => {
@@ -577,363 +686,491 @@ export default function AdminSetupPage() {
           />
         ) : (
           <>
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 16,
-            padding: 20,
-            marginBottom: 24,
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>
-            {isEditing ? "Edit expense" : "Add expense"}
-          </h2>
-
-          <Form method="post">
-            <input type="hidden" name="intent" value="save" />
-            {formState.id ? (
-              <input type="hidden" name="id" value={formState.id} />
-            ) : null}
-
-            <div
+            <section
               style={{
-                display: "grid",
-                gap: 16,
+                background: "white",
+                border: "1px solid #e3e3e3",
+                borderRadius: 16,
+                padding: 20,
+                marginBottom: 24,
               }}
             >
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                  gap: 14,
-                  alignItems: "start",
-                }}
-              >
-                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                  Name
-                  <input
-                    name="expense_name"
-                    required
-                    value={formState.expense_name}
-                    onChange={(event) =>
-                      updateFormField("expense_name", event.target.value)
-                    }
-                    style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: 10,
-                      borderRadius: 8,
-                      border: fieldErrors?.expense_name
-                        ? "1px solid #d92d20"
-                        : "1px solid #c9cccf",
-                    }}
-                  />
-                  <HelperText>Use a clear recurring expense name.</HelperText>
-                  <FieldError>{fieldErrors?.expense_name}</FieldError>
-                </label>
+              <h2 style={{ marginTop: 0 }}>
+                {isEditing ? "Edit expense" : "Add expense"}
+              </h2>
 
-                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                  Category
-                  <select
-                    name="expense_category"
-                    value={formState.expense_category}
-                    onChange={(event) =>
-                      updateFormField("expense_category", event.target.value)
-                    }
+              <Form method="post">
+                <input type="hidden" name="intent" value="save" />
+                {formState.id ? (
+                  <input type="hidden" name="id" value={formState.id} />
+                ) : null}
+
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 16,
+                  }}
+                >
+                  <div
                     style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: 10,
-                      borderRadius: 8,
-                      border: "1px solid #c9cccf",
-                      background: "white",
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(220px, 1fr))",
+                      gap: 14,
+                      alignItems: "start",
                     }}
                   >
-                    <option value="">Select category</option>
-                    {expenseCategories.map((category) => (
-                      <option key={category} value={category}>
-                        {category}
-                      </option>
-                    ))}
-                  </select>
-                  <HelperText>Choose the closest reporting category.</HelperText>
-                </label>
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                      Name
+                      <input
+                        name="expense_name"
+                        required
+                        value={formState.expense_name}
+                        onChange={(event) =>
+                          updateFormField("expense_name", event.target.value)
+                        }
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          padding: 10,
+                          borderRadius: 8,
+                          border: fieldErrors?.expense_name
+                            ? "1px solid #d92d20"
+                            : "1px solid #c9cccf",
+                        }}
+                      />
+                      <HelperText>
+                        Use a clear recurring expense name.
+                      </HelperText>
+                      <FieldError>{fieldErrors?.expense_name}</FieldError>
+                    </label>
 
-                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                  Monthly amount
-                  <input
-                    name="monthly_amount"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    value={formState.monthly_amount}
-                    onChange={(event) =>
-                      updateFormField("monthly_amount", event.target.value)
-                    }
-                    style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: 10,
-                      borderRadius: 8,
-                      border: fieldErrors?.monthly_amount
-                        ? "1px solid #d92d20"
-                        : "1px solid #c9cccf",
-                    }}
-                  />
-                  <HelperText>Enter the fixed monthly amount before tax if applicable.</HelperText>
-                  <FieldError>{fieldErrors?.monthly_amount}</FieldError>
-                </label>
-              </div>
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                      Category
+                      <select
+                        name="expense_category"
+                        value={formState.expense_category}
+                        onChange={(event) =>
+                          updateFormField(
+                            "expense_category",
+                            event.target.value,
+                          )
+                        }
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          padding: 10,
+                          borderRadius: 8,
+                          border: "1px solid #c9cccf",
+                          background: "white",
+                        }}
+                      >
+                        <option value="">Select category</option>
+                        {expenseCategories.map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                      <HelperText>
+                        Choose the closest reporting category.
+                      </HelperText>
+                    </label>
 
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                  gap: 14,
-                  alignItems: "start",
-                }}
-              >
-                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                  Start month
-                  <input
-                    name="start_month"
-                    type="month"
-                    required
-                    value={formState.start_month}
-                    onChange={(event) =>
-                      updateFormField("start_month", event.target.value)
-                    }
-                    style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: 10,
-                      borderRadius: 8,
-                      border: fieldErrors?.start_month
-                        ? "1px solid #d92d20"
-                        : "1px solid #c9cccf",
-                    }}
-                  />
-                  <FieldError>{fieldErrors?.start_month}</FieldError>
-                </label>
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                      Monthly amount
+                      <input
+                        name="monthly_amount"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        required
+                        value={formState.monthly_amount}
+                        onChange={(event) =>
+                          updateFormField("monthly_amount", event.target.value)
+                        }
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          padding: 10,
+                          borderRadius: 8,
+                          border: fieldErrors?.monthly_amount
+                            ? "1px solid #d92d20"
+                            : "1px solid #c9cccf",
+                        }}
+                      />
+                      <HelperText>
+                        Enter the fixed monthly amount before tax if applicable.
+                      </HelperText>
+                      <FieldError>{fieldErrors?.monthly_amount}</FieldError>
+                    </label>
+                  </div>
 
-                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                  End month
-                  <input
-                    name="end_month"
-                    type="month"
-                    value={formState.end_month}
-                    onChange={(event) =>
-                      updateFormField("end_month", event.target.value)
-                    }
+                  <div
                     style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: 10,
-                      borderRadius: 8,
-                      border: fieldErrors?.end_month
-                        ? "1px solid #d92d20"
-                        : "1px solid #c9cccf",
-                    }}
-                  />
-                  <HelperText>Leave blank for ongoing expenses.</HelperText>
-                  <FieldError>{fieldErrors?.end_month}</FieldError>
-                </label>
-
-                <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                  Location
-                  <select
-                    name="shopify_location_id"
-                    value={formState.shopify_location_id}
-                    onChange={(event) =>
-                      updateFormField("shopify_location_id", event.target.value)
-                    }
-                    style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: 10,
-                      borderRadius: 8,
-                      border: fieldErrors?.shopify_location_id
-                        ? "1px solid #d92d20"
-                        : "1px solid #c9cccf",
-                      background: "white",
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(220px, 1fr))",
+                      gap: 14,
+                      alignItems: "start",
                     }}
                   >
-                    <option value="">Global / all locations</option>
-                    {locations.map((location) => (
-                      <option key={location.shopify_location_id} value={location.shopify_location_id}>
-                        {location.name}
-                      </option>
-                    ))}
-                  </select>
-                  <HelperText>
-                    Global expenses are shared equally across all active
-                    locations.
-                  </HelperText>
-                  <FieldError>
-                    {fieldErrors?.shopify_location_id}
-                  </FieldError>
-                </label>
-              </div>
-            </div>
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                      Start month
+                      <input
+                        name="start_month"
+                        type="month"
+                        required
+                        value={formState.start_month}
+                        onChange={(event) =>
+                          updateFormField("start_month", event.target.value)
+                        }
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          padding: 10,
+                          borderRadius: 8,
+                          border: fieldErrors?.start_month
+                            ? "1px solid #d92d20"
+                            : "1px solid #c9cccf",
+                        }}
+                      />
+                      <FieldError>{fieldErrors?.start_month}</FieldError>
+                    </label>
 
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                flexWrap: "wrap",
-                gap: 10,
-                marginTop: 16,
-              }}
-            >
-              <AppButton type="submit" disabled={isSubmitting} variant="primary">
-                {isSaving
-                  ? isEditing
-                    ? "Updating..."
-                    : "Saving..."
-                  : isEditing
-                    ? "Update expense"
-                    : "Save expense"}
-              </AppButton>
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                      End month
+                      <input
+                        name="end_month"
+                        type="month"
+                        value={formState.end_month}
+                        onChange={(event) =>
+                          updateFormField("end_month", event.target.value)
+                        }
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          padding: 10,
+                          borderRadius: 8,
+                          border: fieldErrors?.end_month
+                            ? "1px solid #d92d20"
+                            : "1px solid #c9cccf",
+                        }}
+                      />
+                      <HelperText>Leave blank for ongoing expenses.</HelperText>
+                      <FieldError>{fieldErrors?.end_month}</FieldError>
+                    </label>
 
-              {isEditing ? (
-                <AppButton
-                  type="button"
-                  variant="secondary"
-                  disabled={isSubmitting}
-                  onClick={resetForm}
+                    <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                      Location
+                      <select
+                        name="shopify_location_id"
+                        value={formState.shopify_location_id}
+                        onChange={(event) =>
+                          updateFormField(
+                            "shopify_location_id",
+                            event.target.value,
+                          )
+                        }
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          padding: 10,
+                          borderRadius: 8,
+                          border: fieldErrors?.shopify_location_id
+                            ? "1px solid #d92d20"
+                            : "1px solid #c9cccf",
+                          background: "white",
+                        }}
+                      >
+                        <option value="">Global / all locations</option>
+                        {locations.map((location) => (
+                          <option
+                            key={location.shopify_location_id}
+                            value={location.shopify_location_id}
+                          >
+                            {location.name}
+                          </option>
+                        ))}
+                      </select>
+                      <HelperText>
+                        Global expenses are shared equally across all active
+                        locations.
+                      </HelperText>
+                      <FieldError>
+                        {fieldErrors?.shopify_location_id}
+                      </FieldError>
+                    </label>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    gap: 10,
+                    marginTop: 16,
+                  }}
                 >
-                  Cancel edit
-                </AppButton>
-              ) : (
-                <AppButton
-                  type="button"
-                  variant="secondary"
-                  disabled={isSubmitting}
-                  onClick={resetForm}
-                >
-                  New expense
-                </AppButton>
-              )}
+                  <AppButton
+                    type="submit"
+                    disabled={isSubmitting}
+                    variant="primary"
+                  >
+                    {isSaving
+                      ? isEditing
+                        ? "Updating..."
+                        : "Saving..."
+                      : isEditing
+                        ? "Update expense"
+                        : "Save expense"}
+                  </AppButton>
 
-              {visibleActionData?.message ? (
-                <InlineResult variant={visibleActionData.ok ? "success" : "error"}>
-                  {visibleActionData.message}
-                </InlineResult>
-              ) : null}
-            </div>
-          </Form>
-        </section>
-
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>Current expenses</h2>
-          <HelperText>
-            Disable keeps the expense history but excludes it from future active calculations.
-          </HelperText>
-
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-              <thead>
-                <tr>
-                  {["Name", "Category", "Location", "Monthly amount", "Start", "End", "Active", "Actions"].map((header) => (
-                    <th
-                      key={header}
-                      style={{
-                        textAlign:
-                          header === "Monthly amount" ? "right" : "left",
-                        padding: 10,
-                        borderBottom: "1px solid #ddd",
-                        whiteSpace: "nowrap",
-                      }}
+                  {isEditing ? (
+                    <AppButton
+                      type="button"
+                      variant="secondary"
+                      disabled={isSubmitting}
+                      onClick={resetForm}
                     >
-                      {header}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
+                      Cancel edit
+                    </AppButton>
+                  ) : (
+                    <AppButton
+                      type="button"
+                      variant="secondary"
+                      disabled={isSubmitting}
+                      onClick={resetForm}
+                    >
+                      New expense
+                    </AppButton>
+                  )}
 
-              <tbody>
-                {expenses.map((expense) => (
-                  <tr key={expense.id}>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{expense.expense_name}</td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{expense.expense_category ?? "-"}</td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{expense.location_name ?? "Global"}</td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee", textAlign: "right" }}>{formatCurrency(Number(expense.monthly_amount ?? 0))}</td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{formatMonth(expense.start_month)}</td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>{formatMonth(expense.end_month)}</td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-                      <StatusBadge variant={expense.is_active ? "success" : "neutral"}>
-                        {expense.is_active ? "Active" : "Inactive"}
-                      </StatusBadge>
-                    </td>
-                    <td style={{ padding: 10, borderBottom: "1px solid #eee" }}>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <AppButton
-                          type="button"
-                          variant="secondary"
-                          compact
-                          disabled={isSubmitting}
-                          onClick={() => editExpense(expense)}
-                        >
-                          Edit
-                        </AppButton>
+                  {visibleActionData?.message ? (
+                    <InlineResult
+                      variant={visibleActionData.ok ? "success" : "error"}
+                    >
+                      {visibleActionData.message}
+                    </InlineResult>
+                  ) : null}
+                </div>
+              </Form>
+            </section>
 
-                        <Form method="post">
-                          <input type="hidden" name="intent" value="toggle" />
-                          <input type="hidden" name="id" value={expense.id} />
-                          <input type="hidden" name="is_active" value={String(expense.is_active)} />
-                          <AppButton type="submit" variant="secondary" compact disabled={isSubmitting}>
-                            {expense.is_active ? "Disable" : "Enable"}
-                          </AppButton>
-                        </Form>
+            <section
+              style={{
+                background: "white",
+                border: "1px solid #e3e3e3",
+                borderRadius: 16,
+                padding: 20,
+              }}
+            >
+              <h2 style={{ marginTop: 0 }}>Current expenses</h2>
+              <HelperText>
+                Disable keeps the expense history but excludes it from future
+                active calculations.
+              </HelperText>
 
-                        <Form
-                          method="post"
-                          onSubmit={(event) => {
-                            if (
-                              !window.confirm(
-                                `Delete “${expense.expense_name}”? Reporting will update to remove this expense. This cannot be undone.`,
-                              )
-                            ) {
-                              event.preventDefault();
-                            }
+              <div style={{ overflowX: "auto" }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 14,
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      {[
+                        "Name",
+                        "Category",
+                        "Location",
+                        "Monthly amount",
+                        "Start",
+                        "End",
+                        "Active",
+                        "Actions",
+                      ].map((header) => (
+                        <th
+                          key={header}
+                          style={{
+                            textAlign:
+                              header === "Monthly amount" ? "right" : "left",
+                            padding: 10,
+                            borderBottom: "1px solid #ddd",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          <input type="hidden" name="intent" value="delete" />
-                          <input type="hidden" name="id" value={expense.id} />
-                          <AppButton type="submit" variant="danger" compact disabled={isSubmitting}>
-                            Delete
-                          </AppButton>
-                        </Form>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
 
-                {expenses.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} style={{ padding: 16, color: "#616161" }}>
-                      <div style={{ fontWeight: 700 }}>
-                        No expenses configured yet.
-                      </div>
-                      <div style={{ marginTop: 4 }}>
-                        Add fixed expenses to calculate location profitability.
-                      </div>
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                  <tbody>
+                    {expenses.map((expense) => (
+                      <tr key={expense.id}>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          {expense.expense_name}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          {expense.expense_category ?? "-"}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          {expense.location_name ?? "Global"}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                            textAlign: "right",
+                          }}
+                        >
+                          {formatCurrency(Number(expense.monthly_amount ?? 0))}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          {formatMonth(expense.start_month)}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          {formatMonth(expense.end_month)}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          <StatusBadge
+                            variant={expense.is_active ? "success" : "neutral"}
+                          >
+                            {expense.is_active ? "Active" : "Inactive"}
+                          </StatusBadge>
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <AppButton
+                              type="button"
+                              variant="secondary"
+                              compact
+                              disabled={isSubmitting}
+                              onClick={() => editExpense(expense)}
+                            >
+                              Edit
+                            </AppButton>
+
+                            <Form method="post">
+                              <input
+                                type="hidden"
+                                name="intent"
+                                value="toggle"
+                              />
+                              <input
+                                type="hidden"
+                                name="id"
+                                value={expense.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="is_active"
+                                value={String(expense.is_active)}
+                              />
+                              <AppButton
+                                type="submit"
+                                variant="secondary"
+                                compact
+                                disabled={isSubmitting}
+                              >
+                                {expense.is_active ? "Disable" : "Enable"}
+                              </AppButton>
+                            </Form>
+
+                            <Form
+                              method="post"
+                              onSubmit={(event) => {
+                                if (
+                                  !window.confirm(
+                                    `Delete “${expense.expense_name}”? Reporting will update to remove this expense. This cannot be undone.`,
+                                  )
+                                ) {
+                                  event.preventDefault();
+                                }
+                              }}
+                            >
+                              <input
+                                type="hidden"
+                                name="intent"
+                                value="delete"
+                              />
+                              <input
+                                type="hidden"
+                                name="id"
+                                value={expense.id}
+                              />
+                              <AppButton
+                                type="submit"
+                                variant="danger"
+                                compact
+                                disabled={isSubmitting}
+                              >
+                                Delete
+                              </AppButton>
+                            </Form>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {expenses.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          style={{ padding: 16, color: "#616161" }}
+                        >
+                          <div style={{ fontWeight: 700 }}>
+                            No expenses configured yet.
+                          </div>
+                          <div style={{ marginTop: 4 }}>
+                            Add fixed expenses to calculate location
+                            profitability.
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </>
         )}
       </div>
