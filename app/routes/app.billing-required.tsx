@@ -6,7 +6,11 @@ import {
   getBillingState,
   refreshBillingState,
 } from "../lib/billing.server";
-import { assertOwnerAccess } from "../lib/auth/permissions.server";
+import {
+  getCurrentUserIdentity,
+  getPermissionContext,
+  OwnerBootstrapError,
+} from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
@@ -28,13 +32,57 @@ function buildEmbeddedPath(
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  const url = new URL(request.url);
+  const identity = getCurrentUserIdentity({ session });
+  if (!identity.isShopifyAccountOwner) {
+    return {
+      view: "owner_setup" as const,
+      supportUrl: "/support",
+    };
+  }
+
+  try {
+    const permissions = await getPermissionContext({
+      request,
+      session,
+      supabase,
+      route: "billing-required",
+    });
+    if (!permissions.isOwner) {
+      console.error("[owner-bootstrap] controlled failure", {
+        route: "billing-required",
+        shop: session.shop,
+        reason: "membership_unresolved",
+      });
+      return {
+        view: "unavailable" as const,
+        description:
+          "ShopOps could not finish setting up owner access. Nothing was changed. Please retry in a moment.",
+        retryUrl: buildEmbeddedPath("/app/billing-required", url, {
+          retry: "1",
+        }),
+        supportUrl: "/support",
+      };
+    }
+  } catch (error) {
+    if (!(error instanceof OwnerBootstrapError)) throw error;
+    return {
+      view: "unavailable" as const,
+      description:
+        "ShopOps could not finish setting up owner access. Nothing was changed. Please retry in a moment.",
+      retryUrl: buildEmbeddedPath("/app/billing-required", url, {
+        retry: "1",
+      }),
+      supportUrl: "/support",
+    };
+  }
+
   await ensureShopInitialized({
     route: "billing-required",
     shop: session.shop,
     supabase,
   });
-  await assertOwnerAccess({ request, session, supabase });
-  const url = new URL(request.url);
+
   const billing =
     url.searchParams.get("retry") === "1"
       ? await refreshBillingState({ admin, shop: session.shop })
@@ -52,6 +100,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (billing.state === "billing_unavailable") {
     return {
       view: "unavailable" as const,
+      description:
+        "Shopify could not confirm this store's plan right now. Your subscription has not been changed. Please retry in a moment.",
       retryUrl: buildEmbeddedPath("/app/billing-required", url, {
         retry: "1",
       }),
@@ -61,6 +111,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     view: "required" as const,
+    reason: billing.state,
     pricingUrl: buildHostedPricingUrl({ shop: session.shop }),
     supportUrl: "/support",
   };
@@ -105,8 +156,7 @@ export default function BillingRequired() {
             <p
               style={{ color: "#45484d", lineHeight: 1.6, margin: "0 0 22px" }}
             >
-              Shopify could not confirm this store&apos;s plan right now. Your
-              subscription has not been changed. Please retry in a moment.
+              {data.description}
             </p>
             <div style={{ alignItems: "center", display: "flex", gap: 14 }}>
               <a href={data.retryUrl} style={primaryLinkStyle}>
@@ -114,6 +164,18 @@ export default function BillingRequired() {
               </a>
               <a href={data.supportUrl}>Contact support</a>
             </div>
+          </>
+        ) : data.view === "owner_setup" ? (
+          <>
+            <h1 style={{ margin: "0 0 12px", fontSize: 28 }}>
+              Store owner setup required
+            </h1>
+            <p
+              style={{ color: "#45484d", lineHeight: 1.6, margin: "0 0 22px" }}
+            >
+              ShopOps Studio requires setup by the store owner.
+            </p>
+            <a href={data.supportUrl}>Contact support</a>
           </>
         ) : (
           <>
@@ -123,8 +185,9 @@ export default function BillingRequired() {
             <p
               style={{ color: "#45484d", lineHeight: 1.6, margin: "0 0 22px" }}
             >
-              An active ShopOps Studio plan is required. Shopify hosts plan
-              selection and charge approval securely in Shopify admin.
+              {data.reason === "unsupported_plan"
+                ? "Shopify returned a plan ShopOps does not recognize. Choose a supported plan or contact support."
+                : "An active ShopOps Studio plan is required. Shopify hosts plan selection and charge approval securely in Shopify admin."}
             </p>
             <div style={{ alignItems: "center", display: "flex", gap: 14 }}>
               <a href={data.pricingUrl} style={primaryLinkStyle} target="_top">

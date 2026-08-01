@@ -8,7 +8,10 @@ import {
   refreshBillingState,
   verifyBillingCallbackPlan,
 } from "../lib/billing.server";
-import { assertOwnerAccess } from "../lib/auth/permissions.server";
+import {
+  assertOwnerAccess,
+  OwnerBootstrapError,
+} from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { setPlanConfirmedFlash } from "../lib/flash.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
@@ -28,12 +31,24 @@ function buildVerifiedRedirect(url: URL) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  try {
+    await assertOwnerAccess({
+      request,
+      session,
+      supabase,
+      route: "billing-complete",
+    });
+  } catch (error) {
+    if (!(error instanceof OwnerBootstrapError)) throw error;
+    throw new Response("Owner setup is temporarily unavailable.", {
+      status: 503,
+    });
+  }
   await ensureShopInitialized({
     route: "billing-complete",
     shop: session.shop,
     supabase,
   });
-  await assertOwnerAccess({ request, session, supabase });
   const url = new URL(request.url);
   const returnedPlanHandle = url.searchParams.get("plan_handle");
 

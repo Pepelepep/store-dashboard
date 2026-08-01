@@ -61,7 +61,11 @@ import {
   resolveCurrentPlan,
   verifyBillingCallbackPlan,
 } from "../app/lib/billing.server.ts";
-import { summarizeEntitlements } from "../app/lib/entitlement-model.ts";
+import {
+  getCapacityState,
+  summarizeEntitlements,
+} from "../app/lib/entitlement-model.ts";
+import { resolveOwnerMaterializationIdentifiers } from "../app/lib/auth/owner-bootstrap.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -2264,6 +2268,51 @@ test("Solo owner consumes its only seat and explicit location selection resolves
   assert.equal(extraUser.resolutionRequired, true);
 });
 
+test("verified owner bootstrap reuses matching identities without creating a duplicate", () => {
+  const identity = {
+    shopifyUserId: "42",
+    email: "owner@example.com",
+  };
+
+  assert.deepEqual(
+    resolveOwnerMaterializationIdentifiers({ identity, memberships: [] }),
+    { shopifyUserId: "42", normalizedEmail: "owner@example.com" },
+  );
+
+  const existing = membership("existing", "admin", {
+    shopifyUserId: "42",
+    userEmail: "owner@example.com",
+  });
+  assert.deepEqual(
+    resolveOwnerMaterializationIdentifiers({
+      identity,
+      memberships: [existing],
+    }),
+    { shopifyUserId: "42", normalizedEmail: "owner@example.com" },
+  );
+
+  const splitIdentity = resolveOwnerMaterializationIdentifiers({
+    identity,
+    memberships: [
+      membership("by-user-id", "admin", { shopifyUserId: "42" }),
+      membership("by-email", "viewer", {
+        userEmail: "owner@example.com",
+      }),
+    ],
+  });
+  assert.deepEqual(splitIdentity, {
+    shopifyUserId: "42",
+    normalizedEmail: null,
+  });
+});
+
+test("capacity messaging distinguishes below, exactly at, and above the limit", () => {
+  assert.equal(getCapacityState({ usage: 0, limit: 1 }), "available");
+  assert.equal(getCapacityState({ usage: 1, limit: 1 }), "at_limit");
+  assert.equal(getCapacityState({ usage: 2, limit: 1 }), "over_limit");
+  assert.equal(getCapacityState({ usage: 20, limit: null }), "unlimited");
+});
+
 test("finite reporting-location limits block over-limit states without changing detected locations", () => {
   for (const { planHandle, limit } of [
     { planHandle: "solo", limit: 1 },
@@ -2432,6 +2481,18 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
     new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
     "utf8",
   );
+  const appRoute = readFileSync(
+    new URL("../app/routes/app.tsx", import.meta.url),
+    "utf8",
+  );
+  const billingRequired = readFileSync(
+    new URL("../app/routes/app.billing-required.tsx", import.meta.url),
+    "utf8",
+  );
+  const billingComplete = readFileSync(
+    new URL("../app/routes/app.billing.complete.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(shopifyServer, /useOnlineTokens:\s*true/);
   assert.match(permissions, /associatedUser\?\.account_owner/);
@@ -2446,6 +2507,42 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
     permissions,
     /ADMIN_EMAILS|ADMIN_SHOPIFY_USER_IDS|fresh_install/,
   );
+  assert.ok(
+    appRoute.indexOf("await getPermissionContext") <
+      appRoute.indexOf("await requireBillingAccess"),
+    "Owner bootstrap must run before the middleware billing gate",
+  );
+  assert.match(appRoute, /error instanceof OwnerBootstrapError/);
+  assert.match(permissions, /resolveOwnerMaterializationIdentifiers/);
+  assert.match(permissions, /for \(let attempt = 0; attempt < 2/);
+  assert.match(permissions, /\[owner-bootstrap\] controlled failure/);
+  assert.doesNotMatch(
+    permissions,
+    /authorization headers|complete query strings|Partner API token/,
+  );
+  assert.ok(
+    billingRequired.indexOf("const identity = getCurrentUserIdentity") <
+      billingRequired.indexOf("const billing ="),
+  );
+  assert.ok(
+    billingRequired.indexOf("await getPermissionContext") <
+      billingRequired.indexOf("await ensureShopInitialized"),
+  );
+  assert.match(billingRequired, /view: "owner_setup"/);
+  assert.match(
+    billingRequired,
+    /ShopOps Studio requires setup by the store owner\./,
+  );
+  assert.match(billingRequired, /error instanceof OwnerBootstrapError/);
+  assert.ok(
+    billingComplete.indexOf("await assertOwnerAccess") <
+      billingComplete.indexOf("const billing = await refreshBillingState"),
+  );
+  assert.ok(
+    billingComplete.indexOf("await assertOwnerAccess") <
+      billingComplete.indexOf("await ensureShopInitialized"),
+  );
+  assert.match(billingComplete, /Owner setup is temporarily unavailable\./);
 });
 
 test("membership RPCs lock each shop and enforce owner, last-admin, archived-staff, and concurrent capacity rules", () => {
@@ -2481,6 +2578,15 @@ test("membership RPCs lock each shop and enforce owner, last-admin, archived-sta
   assert.match(staffRoute, /replace_dashboard_membership_access/);
   assert.match(staffRoute, /disable_dashboard_membership/);
   assert.match(staffRoute, /archive_staff_with_dashboard_protection/);
+  assert.match(
+    staffRoute,
+    /Solo includes dashboard access for the store owner\. Upgrade to Growth to add another dashboard user\./,
+  );
+  assert.match(
+    staffRoute,
+    /intent === "create_person" \|\| intent === "create_from_alias"/,
+  );
+  assert.match(staffRoute, /Dashboard access was not changed\./);
   assert.doesNotMatch(staffRoute, /replace_staff_dashboard_access/);
   assert.match(legacyRoute, /\/app\/admin\/staff/);
   assert.doesNotMatch(legacyRoute, /\.rpc\(/);
@@ -2536,7 +2642,10 @@ test("Shopify location state, reporting selection, report filters, and full sync
     /\.in\("retail_location_id", selectedLocationIds\)/,
   );
   assert.match(sync, /shopify_is_active: location\.isActive/);
-  assert.match(sync, /!billingEnabled[\s\S]*reporting_enabled: location\.isActive/);
+  assert.match(
+    sync,
+    /!billingEnabled[\s\S]*reporting_enabled: location\.isActive/,
+  );
   assert.match(sync, /reporting_enabled: false/);
   assert.doesNotMatch(sync, /applyActiveLocationLimit|PlanCapacityError/);
 });
@@ -2565,7 +2674,15 @@ test("Plan is Setup-only, owner-only pricing uses a one-time server flash, and o
   assert.match(plan, /`\$\{usage\} of \$\{limit\}/);
   assert.match(
     plan,
-    /Your plan limit has been reached\. Upgrade your plan or remove an[\s\S]*existing dashboard user/,
+    /Solo includes dashboard access for the store owner\. Upgrade to Growth to add another dashboard user\./,
+  );
+  assert.match(plan, /dashboardCapacity === "over_limit"/);
+  assert.match(plan, /dashboardCapacity === "at_limit"/);
+  assert.match(plan, /All available capacity is currently in use\./);
+  assert.doesNotMatch(plan, /usage\s*>=\s*data\.dashboardUsers\.limit/);
+  assert.doesNotMatch(
+    plan,
+    /Solo[\s\S]{0,200}remove an existing dashboard user/,
   );
   assert.match(callback, /assertOwnerAccess/);
   assert.match(callback, /setPlanConfirmedFlash/);
