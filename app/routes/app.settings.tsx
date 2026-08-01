@@ -1,8 +1,10 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { data, useLoaderData, useLocation } from "react-router";
+import { SettingsIcon } from "@shopify/polaris-icons";
 
 import { PlanSetup, type PlanSetupData } from "../components/setup/PlanSetup";
 import { SectionTabs } from "../components/ui/SectionTabs";
+import { PageHeader, ShopOpsPage } from "../components/ui/ShopOpsPage";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
   buildHostedPricingUrl,
@@ -103,55 +105,26 @@ export default function SettingsPage() {
       : "sync";
 
   return (
-    <>
-      <section
-        style={{
-          background: "#f6f6f7",
-          fontFamily:
-            "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-          padding: "28px 28px 0",
-        }}
-      >
-        <div style={{ margin: "0 auto", maxWidth: 1280 }}>
-          <header style={{ marginBottom: 20 }}>
-            <h1 style={{ fontSize: 32, margin: 0 }}>Settings</h1>
-          </header>
-          <SectionTabs
-            activeTab={tab}
-            ariaLabel="Settings sections"
-            tabs={[
-              { value: "sync", label: "Data sync" },
-              { value: "plan", label: "Plan & billing" },
-            ]}
-          />
-        </div>
-      </section>
-      {tab === "plan" ? <PlanBillingContent /> : <DataSyncPage />}
-    </>
+    <ShopOpsPage>
+      <PageHeader
+        description="Manage synchronization, usage, and billing."
+        icon={SettingsIcon}
+        title="Settings"
+      />
+      <SectionTabs
+        activeTab={tab}
+        ariaLabel="Settings sections"
+        tabs={[
+          { value: "sync", label: "Data sync" },
+          { value: "plan", label: "Plan & billing" },
+        ]}
+      />
+      {tab === "plan" ? <PlanBillingContent /> : <DataSyncPage embedded />}
+    </ShopOpsPage>
   );
 }
 
 function PlanBillingContent() {
   const { plan } = useLoaderData<PlanLoaderData>();
-  return (
-    <main
-      style={{
-        background: "#f6f6f7",
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-        minHeight: "calc(100vh - 150px)",
-        padding: "0 28px 28px",
-      }}
-    >
-      <div style={{ margin: "0 auto", maxWidth: 1280 }}>
-        <header style={{ marginBottom: 20 }}>
-          <h2 style={{ fontSize: 26, margin: 0 }}>Plan &amp; billing</h2>
-          <p style={{ color: "#616161", margin: "6px 0 0" }}>
-            Review plan usage and open the right place to manage capacity.
-          </p>
-        </header>
-        <PlanSetup data={plan} />
-      </div>
-    </main>
-  );
+  return <PlanSetup data={plan} />;
 }

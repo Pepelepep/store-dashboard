@@ -3,6 +3,8 @@ import type {
   DashboardFilterOption,
   LocationRow,
 } from "../../lib/dashboard/dashboard-types";
+import { ChartVerticalIcon } from "@shopify/polaris-icons";
+import { ContentCard, PageHeader } from "../ui/ShopOpsPage";
 import { DashboardFilters } from "./DashboardFilters";
 
 export function DashboardHeader({
@@ -33,102 +35,59 @@ export function DashboardHeader({
   selectedDays: number;
 }) {
   return (
-    <header
-      style={{
-        marginBottom: 24,
-        background: "white",
-        border: "1px solid #e5e7eb",
-        borderRadius: 20,
-        padding: 24,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-      }}
-    >
-      <div style={{ marginBottom: 18 }}>
-        <div>
-          <h1 style={{ fontSize: 32, lineHeight: 1.15, margin: 0 }}>
-            Dashboard
-          </h1>
-          <p style={{ color: "#616161", margin: "8px 0 0" }}>
-            Track Shopify sales, discounts, refunds, COGS, margins, and
-            inventory risk from synced store data.
-          </p>
-        </div>
-      </div>
-      <DashboardFilters
-        locations={locations}
-        selectedLocationId={selectedLocationId}
-        selectedStaff={selectedStaff}
-        selectedVendor={selectedVendor}
-        staffOptions={staffOptions}
-        vendorOptions={vendorOptions}
-        startDate={startDate}
-        endDate={endDate}
-        preservedSearchParams={preservedSearchParams}
+    <>
+      <PageHeader
+        description="Track Shopify sales, discounts, refunds, COGS, margins, and inventory risk from synced store data."
+        icon={ChartVerticalIcon}
+        title="Dashboard"
       />
+      <ContentCard>
+        <DashboardFilters
+          locations={locations}
+          selectedLocationId={selectedLocationId}
+          selectedStaff={selectedStaff}
+          selectedVendor={selectedVendor}
+          staffOptions={staffOptions}
+          vendorOptions={vendorOptions}
+          startDate={startDate}
+          endDate={endDate}
+          preservedSearchParams={preservedSearchParams}
+        />
 
-      <div
-        style={{
-          marginTop: 18,
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
-        <span
+        <div
           style={{
-            background: "white",
-            border: "1px solid #e5e7eb",
-            borderRadius: 999,
-            padding: "5px 9px",
-            fontSize: 12,
-            fontWeight: 800,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            marginTop: 18,
           }}
         >
-          Current location: {selectedLocationName ?? "-"}
-        </span>
-
-        <span
-          style={{
-            background: "white",
-            border: "1px solid #e5e7eb",
-            borderRadius: 999,
-            padding: "5px 9px",
-            fontSize: 12,
-            fontWeight: 800,
-          }}
-        >
-          Range: {startDate} → {endDate}
-        </span>
-
-        <span
-          style={{
-            background: "white",
-            border: "1px solid #e5e7eb",
-            borderRadius: 999,
-            padding: "5px 9px",
-            fontSize: 12,
-            fontWeight: 800,
-          }}
-        >
-          {selectedDays} {selectedDays > 1 ? "days" : "day"}
-        </span>
-
-        <span
-          style={{
-            background: "white",
-            border: "1px solid #e5e7eb",
-            borderRadius: 999,
-            padding: "5px 9px",
-            fontSize: 12,
-            fontWeight: 800,
-          }}
-        >
-          Data updated:{" "}
-          {lastSuccessfulSync
-            ? formatStoreDateTime(lastSuccessfulSync)
-            : "unavailable"}
-        </span>
-      </div>
-    </header>
+          {[
+            `Current location: ${selectedLocationName ?? "-"}`,
+            `Range: ${startDate} → ${endDate}`,
+            `${selectedDays} ${selectedDays > 1 ? "days" : "day"}`,
+            `Data updated: ${
+              lastSuccessfulSync
+                ? formatStoreDateTime(lastSuccessfulSync)
+                : "unavailable"
+            }`,
+          ].map((label) => (
+            <span
+              key={label}
+              style={{
+                background: "var(--shopops-surface-subdued)",
+                border: "1px solid var(--shopops-border)",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 800,
+                padding: "5px 9px",
+              }}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      </ContentCard>
+    </>
   );
 }

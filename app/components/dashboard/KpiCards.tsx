@@ -30,11 +30,13 @@ function KpiCard({
   value,
   subtitle,
   explanation,
+  accent,
 }: {
   title: string;
   value: string;
   subtitle: ReactNode;
   explanation: string;
+  accent?: "sales" | "orders";
 }) {
   return (
     <section
@@ -42,7 +44,10 @@ function KpiCard({
       style={{
         background: "white",
         border: "1px solid #e5e7eb",
-        borderRadius: 18,
+        borderRadius: 16,
+        borderTop: accent
+          ? `3px solid ${accent === "sales" ? "var(--shopops-accent, #2563eb)" : "var(--shopops-teal, #0f766e)"}`
+          : undefined,
         padding: 20,
         boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
         minHeight: 132,
@@ -152,6 +157,7 @@ export function KpiCards({
         }}
       >
         <KpiCard
+          accent="sales"
           title={isFinancialMetricsV2 ? "Net Sales" : "Revenue"}
           value={formatCurrency(kpis.revenue)}
           subtitle={
@@ -201,6 +207,7 @@ export function KpiCards({
           </>
         ) : null}
         <KpiCard
+          accent="orders"
           title="Orders"
           value={formatNumber(kpis.ordersCount)}
           subtitle="Unique orders for this location"

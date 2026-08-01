@@ -1233,16 +1233,13 @@ test("Product-cost controls use selection cards and hide preview in Shopify-only
     "utf8",
   );
 
-  assert.match(component, /className="cost-method-options"/);
-  assert.match(
-    component,
-    /gridTemplateColumns: "repeat\(2, minmax\(0, 1fr\)\)"/,
-  );
+  assert.match(component, /className="shopops-selectable-grid"/);
+  assert.match(component, /<SelectableCard/);
   assert.match(component, /title: "Shopify costs only"/);
   assert.match(component, /title: "Estimate missing costs"/);
   assert.match(
     component,
-    /\{enabled \? \([\s\S]*?<h2 style=\{\{ marginTop: 0 \}\}>Estimated impact preview/,
+    /\{enabled \? \([\s\S]*?<ContentCard title="Estimated impact preview">/,
   );
   assert.match(component, /!settingsChanged/);
   assert.match(
@@ -2729,7 +2726,7 @@ test("People separates sales attribution from active dashboard membership", () =
   assert.match(people, /label: "Sales attribution"/);
   assert.match(people, /label: "Dashboard access"/);
   assert.match(people, /tab === "attribution" && data\.pending\.length/);
-  assert.match(people, /tab === "access" \? <span>/);
+  assert.match(people, /tab === "access" \? "Role" : "POS sales"/);
   assert.match(
     people,
     /if \(!membership \|\| membership\.status !== "active"\) return "No access"/,
@@ -2747,6 +2744,10 @@ test("Dashboard onboarding is compact, admin-only, and disappears when complete"
     new URL("../app/components/ui/SectionTabs.tsx", import.meta.url),
     "utf8",
   );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
 
   for (const label of [
     "Select reporting locations",
@@ -2762,8 +2763,12 @@ test("Dashboard onboarding is compact, admin-only, and disappears when complete"
   );
   assert.match(dashboard, /\{showOnboarding \? \(/);
   assert.match(dashboard, /<details[\s\S]*?open/);
-  assert.match(tabs, /overflowX: "auto"/);
-  assert.match(tabs, /whiteSpace: "nowrap"/);
+  assert.match(tabs, /className="shopops-section-tabs"/);
+  assert.match(presentation, /\.shopops-section-tabs \{[^}]*overflow-x: auto/);
+  assert.match(
+    presentation,
+    /\.shopops-section-tabs \{[^}]*white-space: nowrap/,
+  );
 });
 
 test("Plan and billing is summary-only, owner-priced, contextual, and uses a one-time flash", () => {
@@ -2790,8 +2795,8 @@ test("Plan and billing is summary-only, owner-priced, contextual, and uses a one
 
   assert.doesNotMatch(appShell, />\s*Plan\s*<\/a>/);
   assert.match(plan, /data\.canManagePlan && data\.managePlanUrl/);
-  assert.match(plan, /Owner \(always active and locked\)/);
-  assert.match(plan, /`\$\{usage\} of \$\{limit\}/);
+  assert.match(plan, /Owner · Active · Always has access · Locked/);
+  assert.equal((plan.match(/<UsageSummary/g) ?? []).length, 2);
   assert.match(plan, /<strong>Action required\.<\/strong>/);
   assert.match(plan, /to="\/app\/locations\?tab=reporting"/);
   assert.match(plan, /to="\/app\/people\?tab=access"/);
@@ -2809,6 +2814,97 @@ test("Plan and billing is summary-only, owner-priced, contextual, and uses a one
   assert.doesNotMatch(callback, /billing", "activated/);
   assert.match(flash, /session\.flash\("planConfirmed", "Plan confirmed\."\)/);
   assert.match(flash, /session\.get\("planConfirmed"\)/);
+});
+
+test("merchant pages share the ShopOps presentation layer without editable owner controls", () => {
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const dashboardHeader = readFileSync(
+    new URL("../app/components/dashboard/DashboardHeader.tsx", import.meta.url),
+    "utf8",
+  );
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+  const costs = readFileSync(
+    new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
+    "utf8",
+  );
+  const productCosts = readFileSync(
+    new URL("../app/components/setup/ProductCostsSetup.tsx", import.meta.url),
+    "utf8",
+  );
+  const people = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const settings = readFileSync(
+    new URL("../app/routes/app.settings.tsx", import.meta.url),
+    "utf8",
+  );
+  const sync = readFileSync(
+    new URL("../app/routes/app.admin.sync.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const component of [
+    "PageHeader",
+    "ContentCard",
+    "SummaryCard",
+    "UsageSummary",
+    "SelectableCard",
+    "FormActions",
+    "InlineNotice",
+    "EmptyState",
+  ]) {
+    assert.match(presentation, new RegExp(`export function ${component}`));
+  }
+  assert.equal((dashboardHeader.match(/<PageHeader/g) ?? []).length, 1);
+  assert.equal((costs.match(/<PageHeader/g) ?? []).length, 1);
+  assert.equal((people.match(/<PageHeader/g) ?? []).length, 1);
+  assert.equal((settings.match(/<PageHeader/g) ?? []).length, 1);
+  assert.equal((locations.match(/<PageHeader/g) ?? []).length, 2);
+
+  for (const tabbedPage of [locations, costs, people, settings]) {
+    assert.match(tabbedPage, /<SectionTabs/);
+  }
+  assert.match(settings, /<DataSyncPage embedded/);
+  assert.doesNotMatch(settings, /<h1|<h2/);
+  assert.match(sync, /\{!embedded \? \([\s\S]*?<h1>Data sync<\/h1>/);
+
+  assert.match(locations, /className="shopops-selectable-grid"/);
+  assert.match(locations, /<SelectableCard/);
+  assert.match(locations, /<FormActions>/);
+  assert.match(
+    presentation,
+    /\.shopops-selectable-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-form-actions\[data-equal="true"\] > \* \{[^}]*width: 50%/,
+  );
+
+  const ownerRowStart = people.indexOf(
+    'tab === "access" && profile.membership?.is_owner',
+  );
+  const ownerRowEnd = people.indexOf(") : (", ownerRowStart);
+  const ownerRow = people.slice(ownerRowStart, ownerRowEnd);
+  assert.ok(ownerRowStart > -1 && ownerRowEnd > ownerRowStart);
+  assert.match(ownerRow, /Owner/);
+  assert.match(ownerRow, /Always has access/);
+  assert.match(ownerRow, /PersonLockIcon/);
+  assert.doesNotMatch(ownerRow, /<button|<select/);
+  assert.match(people, /open\("access", profile\)/);
+  assert.match(people, /replace_dashboard_membership_access/);
+
+  assert.match(costs, /title="Costs"/);
+  assert.match(costs, /label="Configured monthly amount"/);
+  assert.match(productCosts, /label="Cost coverage"/);
+  assert.match(productCosts, /label="Products missing costs"/);
+  assert.doesNotMatch(costs, /<h1[^>]*>Setup<\/h1>/);
 });
 
 test("Location Net Sales trend reconciles to the headline after order-level cash refunds", () => {
@@ -3281,7 +3377,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
     (mirrorChart.match(/isAnimationActive=\{false\}/g) ?? []).length >= 3,
   );
 
-  assert.match(sectionCard, /borderRadius: 18/);
+  assert.match(sectionCard, /borderRadius: 16/);
   assert.equal(sectionCard.includes("minHeight: 420"), false);
   assert.match(sectionCard, /shopops-recharts/);
   assert.match(sectionCard, /shopops-mirror-sales-chart:focus-visible/);
