@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
+import { resolveOwnerMaterializationIdentifiers } from "./owner-bootstrap";
 
 type ShopifySessionLike = {
   shop: string;
@@ -71,6 +72,19 @@ type PermissionRow = {
   can_manage: boolean | null;
 };
 
+export class OwnerBootstrapError extends Error {
+  readonly reason:
+    | "identity_conflict"
+    | "identity_missing"
+    | "storage_unavailable";
+
+  constructor(reason: OwnerBootstrapError["reason"]) {
+    super("Owner access setup is temporarily unavailable.");
+    this.name = "OwnerBootstrapError";
+    this.reason = reason;
+  }
+}
+
 function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() || null;
 }
@@ -91,6 +105,49 @@ function toMembership(row: MembershipRow): DashboardMembership {
     status: row.status,
     isOwner: row.is_owner,
   };
+}
+
+async function loadMembershipRows({
+  shop,
+  supabase,
+  label,
+}: {
+  shop: string;
+  supabase: SupabaseClient;
+  label: string;
+}) {
+  return fetchAllSupabasePages<MembershipRow>({
+    label,
+    getRowKey: (row) => row.id,
+    fetchPage: (from, to) =>
+      supabase
+        .from("dashboard_memberships")
+        .select(
+          "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
+        )
+        .eq("shop_domain", shop)
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: MembershipRow[] | null;
+        error: { message: string } | null;
+      }>,
+  });
+}
+
+function logOwnerBootstrapFailure({
+  route,
+  shop,
+  reason,
+}: {
+  route: string;
+  shop: string;
+  reason: OwnerBootstrapError["reason"];
+}) {
+  console.error("[owner-bootstrap] controlled failure", {
+    route,
+    shop,
+    reason,
+  });
 }
 
 /**
@@ -127,58 +184,94 @@ export function getCurrentUserIdentity({
   };
 }
 
-async function materializeVerifiedOwner({
+export async function materializeVerifiedOwner({
   identity,
   supabase,
+  route = "permission-context",
 }: {
   identity: CurrentUserIdentity;
   supabase: SupabaseClient;
+  route?: string;
 }) {
-  if (!identity.isShopifyAccountOwner) return;
+  if (!identity.isShopifyAccountOwner) return null;
   if (!identity.shopifyUserId && !identity.email) {
-    throw new Response(
-      "Shopify did not provide the account owner's identity.",
-      {
-        status: 403,
-      },
-    );
+    logOwnerBootstrapFailure({
+      route,
+      shop: identity.shop,
+      reason: "identity_missing",
+    });
+    throw new OwnerBootstrapError("identity_missing");
   }
 
-  const { error } = await supabase.rpc("materialize_dashboard_owner", {
-    p_shop_domain: identity.shop,
-    p_shopify_user_id: identity.shopifyUserId,
-    p_normalized_email: identity.email,
-    p_display_name: identity.displayName,
-  });
-  if (error) throw new Response(error.message, { status: 500 });
+  try {
+    // A retry handles another request winning the owner insert between the
+    // read and the transactionally locked RPC.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const rows = await loadMembershipRows({
+        shop: identity.shop,
+        supabase,
+        label: "Owner bootstrap memberships",
+      });
+      const identifiers = resolveOwnerMaterializationIdentifiers({
+        identity,
+        memberships: rows.map(toMembership),
+      });
+      if (!identifiers) {
+        throw new OwnerBootstrapError("identity_conflict");
+      }
+
+      const { data, error } = await supabase.rpc(
+        "materialize_dashboard_owner",
+        {
+          p_shop_domain: identity.shop,
+          p_shopify_user_id: identifiers.shopifyUserId,
+          p_normalized_email: identifiers.normalizedEmail,
+          p_display_name: identity.displayName,
+        },
+      );
+      if (!error) return typeof data === "string" ? data : null;
+      if (attempt === 1) {
+        const reason =
+          error.code === "23505" ||
+          error.message.includes("owner_identity_conflict")
+            ? "identity_conflict"
+            : "storage_unavailable";
+        throw new OwnerBootstrapError(reason);
+      }
+    }
+  } catch (error) {
+    const bootstrapError =
+      error instanceof OwnerBootstrapError
+        ? error
+        : new OwnerBootstrapError("storage_unavailable");
+    logOwnerBootstrapFailure({
+      route,
+      shop: identity.shop,
+      reason: bootstrapError.reason,
+    });
+    throw bootstrapError;
+  }
+
+  throw new OwnerBootstrapError("storage_unavailable");
 }
 
 export async function getPermissionContext({
   session,
   supabase,
+  route,
 }: {
   request?: Request;
   session: ShopifySessionLike;
   supabase: SupabaseClient;
+  route?: string;
 }): Promise<PermissionContext> {
   const identity = getCurrentUserIdentity({ session });
-  await materializeVerifiedOwner({ identity, supabase });
+  await materializeVerifiedOwner({ identity, supabase, route });
 
-  const membershipRows = await fetchAllSupabasePages<MembershipRow>({
+  const membershipRows = await loadMembershipRows({
+    shop: session.shop,
+    supabase,
     label: "Dashboard memberships",
-    getRowKey: (row) => row.id,
-    fetchPage: (from, to) =>
-      supabase
-        .from("dashboard_memberships")
-        .select(
-          "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
-        )
-        .eq("shop_domain", session.shop)
-        .order("id", { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{
-        data: MembershipRow[] | null;
-        error: { message: string } | null;
-      }>,
   });
 
   const memberships = membershipRows.map(toMembership);
@@ -193,6 +286,7 @@ export async function getPermissionContext({
       Boolean(identity.email) && candidate.userEmail === identity.email,
   );
   if (
+    !identity.isShopifyAccountOwner &&
     userIdMembership &&
     emailMembership &&
     userIdMembership.id !== emailMembership.id
@@ -202,7 +296,9 @@ export async function getPermissionContext({
       { status: 403 },
     );
   }
-  const membership = userIdMembership ?? emailMembership ?? null;
+  const membership = identity.isShopifyAccountOwner
+    ? owner
+    : (userIdMembership ?? emailMembership ?? null);
   const activeMembership = membership?.status === "active" ? membership : null;
 
   const allowedLocationIds = new Set<string>();
@@ -260,6 +356,7 @@ export async function assertDashboardAccess(args: {
   request?: Request;
   session: ShopifySessionLike;
   supabase: SupabaseClient;
+  route?: string;
 }) {
   const permissions = await getPermissionContext(args);
   if (!permissions.hasOwner) {
@@ -281,6 +378,7 @@ export async function assertAdminAccess(args: {
   request?: Request;
   session: ShopifySessionLike;
   supabase: SupabaseClient;
+  route?: string;
 }) {
   const permissions = await assertDashboardAccess(args);
   if (!permissions.isAdmin) {
@@ -293,7 +391,14 @@ export async function assertOwnerAccess(args: {
   request?: Request;
   session: ShopifySessionLike;
   supabase: SupabaseClient;
+  route?: string;
 }) {
+  const identity = getCurrentUserIdentity({ session: args.session });
+  if (!identity.isShopifyAccountOwner) {
+    throw new Response("Forbidden: Shopify store owner access required", {
+      status: 403,
+    });
+  }
   const permissions = await assertDashboardAccess(args);
   if (!permissions.isOwner) {
     throw new Response("Forbidden: store owner access required", {

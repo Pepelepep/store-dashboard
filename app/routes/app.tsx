@@ -14,7 +14,10 @@ import {
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-import { getPermissionContext } from "../lib/auth/permissions.server";
+import {
+  getPermissionContext,
+  OwnerBootstrapError,
+} from "../lib/auth/permissions.server";
 import { requireBillingAccess } from "../lib/billing.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
@@ -47,6 +50,21 @@ export const middleware: MiddlewareFunction[] = [
     }
 
     const { admin, session } = await authenticate.admin(request);
+    const supabase = getSupabaseAdminClient();
+    try {
+      await getPermissionContext({
+        request,
+        session,
+        supabase,
+        route: "app.billing-middleware",
+      });
+    } catch (error) {
+      if (!(error instanceof OwnerBootstrapError)) throw error;
+      url.pathname = "/app/billing-required";
+      url.searchParams.set("billing_state", "unavailable");
+      throw redirect(`${url.pathname}${url.search}`);
+    }
+
     const access = await requireBillingAccess({
       admin,
       shop: session.shop,
@@ -90,6 +108,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     request,
     session,
     supabase,
+    route: "app.loader",
   });
   const accessState = !permissions.hasOwner
     ? ("owner_setup_required" as const)

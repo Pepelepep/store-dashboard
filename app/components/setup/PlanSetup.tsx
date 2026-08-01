@@ -1,9 +1,11 @@
 import { Form, Link, useActionData, useNavigation } from "react-router";
 
 import type {
+  EntitlementLimits,
   EntitlementLocation,
   EntitlementMembership,
 } from "../../lib/entitlement-model";
+import { getCapacityState } from "../../lib/entitlement-model";
 
 export type PlanSetupData = {
   currentPlanName: string;
@@ -11,6 +13,7 @@ export type PlanSetupData = {
   trialEndsAt: string | null;
   cycleEndsAt: string | null;
   pendingPlanName: string | null;
+  planHandle: EntitlementLimits["planHandle"];
   activeLocations: { usage: number; limit: number | null };
   dashboardUsers: { usage: number; limit: number | null };
   managePlanUrl: string | null;
@@ -77,6 +80,9 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
   const activeMemberships = data.memberships.filter(
     (membership) => membership.status === "active",
   );
+  const dashboardCapacity = getCapacityState(data.dashboardUsers);
+  const soloCapacityMessage =
+    "Solo includes dashboard access for the store owner. Upgrade to Growth to add another dashboard user.";
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -276,11 +282,17 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
           access automatically. POS sellers and Staff profiles without dashboard
           access do not count.
         </p>
-        {data.dashboardUsers.limit !== null &&
-        data.dashboardUsers.usage >= data.dashboardUsers.limit ? (
-          <p style={{ color: "#9a3412", fontWeight: 700 }}>
-            Your plan limit has been reached. Upgrade your plan or remove an
-            existing dashboard user&apos;s access.
+        {dashboardCapacity === "over_limit" ? (
+          <p style={{ color: "#b42318", fontWeight: 700 }}>
+            {data.planHandle === "solo"
+              ? soloCapacityMessage
+              : "Your plan limit has been exceeded. Upgrade your plan or remove an existing dashboard user's access."}
+          </p>
+        ) : dashboardCapacity === "at_limit" ? (
+          <p style={{ color: "#616161" }}>
+            {data.planHandle === "solo"
+              ? soloCapacityMessage
+              : "All available capacity is currently in use."}
           </p>
         ) : null}
         {data.userLimitExceeded ? (

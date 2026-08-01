@@ -36,6 +36,25 @@ export type EntitlementSnapshot = {
   resolutionRequired: boolean;
 };
 
+export type CapacityState =
+  | "unlimited"
+  | "available"
+  | "at_limit"
+  | "over_limit";
+
+export function getCapacityState({
+  usage,
+  limit,
+}: {
+  usage: number;
+  limit: number | null;
+}): CapacityState {
+  if (limit === null) return "unlimited";
+  if (usage > limit) return "over_limit";
+  if (usage === limit) return "at_limit";
+  return "available";
+}
+
 export function summarizeEntitlements({
   memberships,
   locations,

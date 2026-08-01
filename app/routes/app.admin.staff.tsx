@@ -400,7 +400,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   } satisfies LoaderData;
 }
 
-function friendlyAccessError(message?: string) {
+function friendlyAccessError(message?: string, planHandle?: string | null) {
   if (message?.includes("invalid_access_locations"))
     return "Select at least one valid location.";
   if (
@@ -408,6 +408,8 @@ function friendlyAccessError(message?: string) {
     message?.includes("dashboard_identity_in_use")
   )
     return "That login email is already used by another staff member.";
+  if (message?.includes("dashboard_plan_capacity") && planHandle === "solo")
+    return "Solo includes dashboard access for the store owner. Upgrade to Growth to add another dashboard user.";
   if (message?.includes("dashboard_plan_capacity"))
     return "Your plan limit has been reached. Upgrade your plan or remove an existing dashboard user's access.";
   if (message?.includes("owner_membership_locked"))
@@ -758,7 +760,10 @@ export async function action({ request }: ActionFunctionArgs) {
       p_dashboard_user_limit: limits.dashboardUsers,
     });
     return result.error
-      ? { ok: false, message: friendlyAccessError(result.error.message) }
+      ? {
+          ok: false,
+          message: friendlyAccessError(result.error.message, limits.planHandle),
+        }
       : { ok: true, message: "Dashboard access saved." };
   }
   return { ok: false, message: "Unknown staff action." };

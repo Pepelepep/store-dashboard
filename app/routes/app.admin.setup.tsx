@@ -188,6 +188,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     isAccessibleBillingState(billing) && entitlementSnapshot
       ? {
           currentPlanName: billing.plan.displayName,
+          planHandle: entitlementSnapshot.limits.planHandle,
           state: billing.state,
           trialEndsAt: billing.trialEndsAt,
           cycleEndsAt: billing.currentBillingCycle?.endTime ?? null,
@@ -200,10 +201,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
             usage: entitlementSnapshot.activeDashboardUsers,
             limit: entitlementSnapshot.limits.dashboardUsers,
           },
-          managePlanUrl: permissions.isOwner
-            ? buildHostedPricingUrl({ shop: session.shop })
-            : null,
-          canManagePlan: permissions.isOwner,
+          managePlanUrl:
+            permissions.isOwner && permissions.identity.isShopifyAccountOwner
+              ? buildHostedPricingUrl({ shop: session.shop })
+              : null,
+          canManagePlan:
+            permissions.isOwner && permissions.identity.isShopifyAccountOwner,
           owner: entitlementSnapshot.owner,
           memberships: entitlementSnapshot.memberships,
           reportingLocations: entitlementSnapshot.locations,
