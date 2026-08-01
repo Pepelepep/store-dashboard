@@ -395,18 +395,19 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-kpi-grid { display: grid; gap: 14px; grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 14px; }
   .shopops-kpi-grid[data-item-count="8"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .shopops-kpi-grid[data-item-count="9"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .shopops-kpi-grid[data-item-count="11"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .shopops-kpi-card { background: var(--shopops-surface); border: 1px solid var(--shopops-border); border-radius: 16px; border-top: 3px solid #cbd5e1; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05); min-height: 132px; padding: 18px; }
+  .shopops-kpi-grid[data-item-count="11"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .shopops-kpi-grid[data-item-count="11"] > .shopops-kpi-card { min-width: 0; }
+  .shopops-kpi-card { background: var(--shopops-surface); border: 1px solid var(--shopops-border); border-radius: 16px; border-top: 3px solid #cbd5e1; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05); display: flex; flex-direction: column; min-height: 128px; padding: 16px; }
   .shopops-kpi-card[data-category="commercial"] { border-top-color: var(--shopops-accent); }
   .shopops-kpi-card[data-category="activity"] { border-top-color: var(--shopops-teal); }
-  .shopops-kpi-label { color: var(--shopops-muted); font-size: 14px; font-weight: 750; margin-bottom: 9px; }
-  .shopops-kpi-value { color: var(--p-color-text, #202223); font-size: clamp(20px, 2.2vw, 28px); font-variant-numeric: tabular-nums; font-weight: 800; line-height: 1.15; margin-bottom: 8px; overflow-wrap: anywhere; }
-  .shopops-kpi-detail { color: var(--shopops-muted); font-size: 13px; line-height: 1.4; }
-  .shopops-kpi-notice { border: 1px solid var(--shopops-border); border-radius: 9px; padding: 8px 9px; }
+  .shopops-kpi-label { color: var(--shopops-muted); font-size: 14px; font-weight: 750; line-height: 1.3; margin-bottom: 7px; }
+  .shopops-kpi-value { color: var(--p-color-text, #202223); font-size: clamp(20px, 2vw, 27px); font-variant-numeric: tabular-nums; font-weight: 800; line-height: 1.15; margin-bottom: 6px; overflow-wrap: anywhere; }
+  .shopops-kpi-detail { color: var(--shopops-muted); font-size: 12px; line-height: 1.35; }
+  .shopops-kpi-notice { border: 1px solid var(--shopops-border); border-radius: 9px; padding: 6px 7px; }
   .shopops-kpi-notice[data-tone="info"] { background: var(--shopops-accent-soft); border-color: #bfdbfe; color: #1e3a5f; }
   .shopops-kpi-notice[data-tone="neutral"] { background: #f8fafc; border-color: #d9dee5; color: #4b5563; }
   .shopops-kpi-notice[data-tone="warning"] { background: #fff8e5; border-color: #e5c07b; color: #5c4813; }
-  .shopops-kpi-notice__action { color: #1d4ed8; display: inline-block; margin-top: 5px; }
+  .shopops-kpi-notice__action { color: #1d4ed8; display: inline-block; margin-top: 3px; }
   .shopops-metric-definitions { color: var(--shopops-muted); font-size: 13px; line-height: 1.5; margin: -2px 0 20px; }
   .shopops-metric-definitions summary { cursor: pointer; font-weight: 800; }
   .shopops-metric-definitions > div { margin-top: 8px; }
@@ -424,9 +425,21 @@ const SHOPOPS_PRESENTATION_CSS = `
     .shopops-report-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .shopops-report-filter-field[data-wide="true"] { grid-column: auto; }
   }
+  @media (min-width: 1024px) {
+    .shopops-kpi-grid[data-item-count="11"] { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+    .shopops-kpi-grid[data-item-count="11"] > .shopops-kpi-card { grid-column: span 2; }
+    .shopops-kpi-grid[data-item-count="11"] > .shopops-kpi-card:nth-child(7) { grid-column: 2 / span 2; }
+  }
+  @media (max-width: 1023px) {
+    .shopops-kpi-grid[data-item-count="11"] > .shopops-kpi-card { grid-column: auto; }
+  }
   @media (max-width: 900px) {
     .shopops-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .shopops-kpi-grid[data-item-count="9"], .shopops-kpi-grid[data-item-count="11"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .shopops-kpi-grid[data-item-count="9"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .shopops-kpi-grid[data-item-count="11"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 767px) {
+    .shopops-kpi-grid[data-item-count="11"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 768px) {
     .shopops-page { padding: 20px; }

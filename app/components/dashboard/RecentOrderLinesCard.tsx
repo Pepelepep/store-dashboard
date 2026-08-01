@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 
 import {
   formatCurrency,
+  formatNumber,
   formatStoreDateTime,
-  STORE_TIME_ZONE,
 } from "../../lib/dashboard/dashboard-metrics";
 import type {
   FinancialMetricsVersion,
@@ -107,25 +107,6 @@ function Table({
   );
 }
 
-function formatRecentOrderDate(value: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: STORE_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(value));
-  const values = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-
-  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
-}
-
 function getChipStyles(label: string) {
   if (
     label === "Returned" ||
@@ -188,9 +169,7 @@ export function RecentOrderLinesCard({
   financialMetricsVersion: FinancialMetricsVersion;
 }) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
-  const formatDate = isFinancialMetricsV2
-    ? formatRecentOrderDate
-    : formatStoreDateTime;
+  const formatDate = formatStoreDateTime;
   const exportHeaders = isFinancialMetricsV2
     ? [
         "Order",
@@ -290,7 +269,7 @@ export function RecentOrderLinesCard({
           formatDate(row.date),
           row.product,
           row.sku,
-          row.quantity,
+          formatNumber(row.quantity),
           row.grossSales === null || row.grossSales === undefined
             ? "-"
             : formatCurrency(row.grossSales),
@@ -306,7 +285,9 @@ export function RecentOrderLinesCard({
           row.refundedAmount === null || row.refundedAmount === undefined
             ? "-"
             : formatCurrency(row.refundedAmount),
-          row.returnedQuantity ?? "-",
+          row.returnedQuantity === null || row.returnedQuantity === undefined
+            ? "-"
+            : formatNumber(row.returnedQuantity),
           row.costAtSale === null || row.costAtSale === undefined
             ? "-"
             : formatCurrency(row.costAtSale),
@@ -327,7 +308,7 @@ export function RecentOrderLinesCard({
           formatDate(row.date),
           row.product,
           row.sku,
-          row.quantity,
+          formatNumber(row.quantity),
           formatCurrency(row.revenue),
           row.cogs === null ? "-" : formatCurrency(row.cogs),
           row.grossProfit === null ? "-" : formatCurrency(row.grossProfit),

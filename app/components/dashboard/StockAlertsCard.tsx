@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
 
+import {
+  formatDecimal,
+  formatNumber,
+} from "../../lib/dashboard/dashboard-metrics";
 import type { StockAlertRow } from "../../lib/dashboard/dashboard-types";
 import { SectionCard } from "./SectionCard";
 
@@ -134,9 +138,9 @@ export function StockAlertsCard({
         rows={stockAlerts.map((row) => [
           row.product,
           row.sku,
-          row.available,
-          row.unitsSold,
-          row.daysLeft === null ? "-" : row.daysLeft.toFixed(1),
+          formatNumber(row.available),
+          formatNumber(row.unitsSold),
+          row.daysLeft === null ? "-" : formatDecimal(row.daysLeft),
           <StatusBadge key={`${row.sku}-${row.status}`} status={row.status} />,
         ])}
       />

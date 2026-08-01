@@ -1,6 +1,9 @@
 import { useState } from "react";
 
-import { formatCurrency } from "../../lib/dashboard/dashboard-metrics";
+import {
+  formatCurrency,
+  formatNumber,
+} from "../../lib/dashboard/dashboard-metrics";
 import type {
   FinancialMetricsVersion,
   VendorRow,
@@ -160,7 +163,11 @@ export function SalesByVendorCard({
         rows={salesByVendor.map((row) => ({
           key: row.vendor,
           source: row,
-          values: [row.vendor, row.units, formatCurrency(row.revenue)],
+          values: [
+            row.vendor,
+            formatNumber(row.units),
+            formatCurrency(row.revenue),
+          ],
         }))}
       />
     </SectionCard>

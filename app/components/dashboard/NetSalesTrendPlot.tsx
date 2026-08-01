@@ -22,7 +22,7 @@ export function NetSalesTrendPlot({
   const chartPoints = rows.map((row) => ({
     key: row.period,
     axisLabel: row.label,
-    tooltipLabel: row.period,
+    tooltipLabel: row.label,
     sales: row.revenue,
     orders: row.ordersCount,
     unitsSold: row.unitsSold,
