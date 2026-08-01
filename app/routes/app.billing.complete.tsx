@@ -25,7 +25,7 @@ function buildVerifiedRedirect(url: URL) {
   searchParams.delete("billing");
   searchParams.set("tab", "plan");
   const search = searchParams.toString();
-  return `/app/admin/setup${search ? `?${search}` : ""}`;
+  return `/app/settings${search ? `?${search}` : ""}`;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {

@@ -1,9 +1,10 @@
-import type { LoaderFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   Form,
   Link,
+  useActionData,
   useLoaderData,
   useLocation,
   useNavigation,
@@ -14,8 +15,19 @@ import { NetSalesTrendPlot } from "../components/dashboard/NetSalesTrendPlot";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SectionTabs } from "../components/ui/SectionTabs";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
-import { assertReportingEntitlements } from "../lib/entitlements.server";
+import {
+  assertReportingEntitlements,
+  getEntitlementSnapshot,
+  getFreshPlanLimits,
+  type EntitlementLocation,
+} from "../lib/entitlements.server";
+import { assertAdminAccess } from "../lib/auth/permissions.server";
+import {
+  getBillingState,
+  isAccessibleBillingState,
+} from "../lib/billing.server";
 import {
   getAccessibleLocationRows,
   hasNoAssignedLocationAccess,
@@ -163,6 +175,8 @@ type SortKey =
   | "aov";
 
 type LoaderData = {
+  view: "performance";
+  canManageReportingLocations: boolean;
   locations: LocationRow[];
   selectedLocationIds: string[];
   selectedStaff: string;
@@ -185,6 +199,19 @@ type LoaderData = {
   salesRows: LocationsSalesRow[];
   refundTransactions: OrderTransactionDbRow[];
   debugInfo?: Record<string, string | number | boolean | null | string[]>;
+};
+
+type ReportingLoaderData = {
+  view: "reporting";
+  canManageReportingLocations: true;
+  locations: EntitlementLocation[];
+  usage: number;
+  limit: number | null;
+};
+
+type ReportingActionData = {
+  ok: boolean;
+  message: string;
 };
 
 const ORDER_LINES_PAGE_SIZE = 1000;
@@ -1035,13 +1062,35 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
+  const url = new URL(request.url);
+  if (url.searchParams.get("tab") === "reporting") {
+    await assertAdminAccess({ request, session, supabase });
+    const billing = await getBillingState({ admin, shop: session.shop });
+    if (!isAccessibleBillingState(billing)) {
+      throw new Response("An active ShopOps Studio plan is required.", {
+        status: 402,
+      });
+    }
+    const entitlements = await getEntitlementSnapshot({
+      supabase,
+      shop: session.shop,
+      billing,
+    });
+    return {
+      view: "reporting",
+      canManageReportingLocations: true,
+      locations: entitlements.locations,
+      usage: entitlements.activeReportingLocations,
+      limit: entitlements.limits.activeLocations,
+    } satisfies ReportingLoaderData;
+  }
+
   const { permissions } = await assertReportingEntitlements({
     request,
     session,
     supabase,
     admin,
   });
-  const url = new URL(request.url);
   const shouldShowDebugInfo =
     url.searchParams.get("debug") === "1" && permissions.isAdmin;
   const preservedSearchParams = Array.from(url.searchParams.entries())
@@ -1374,6 +1423,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       : undefined;
 
   return {
+    view: "performance",
+    canManageReportingLocations: permissions.isAdmin,
     locations: accessibleLocations,
     selectedLocationIds,
     selectedStaff,
@@ -1399,6 +1450,55 @@ export async function loader({ request }: LoaderFunctionArgs) {
   } satisfies LoaderData;
 }
 
+export async function action({ request }: ActionFunctionArgs) {
+  const { admin, session } = await authenticate.admin(request);
+  const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "app.locations.reporting.action",
+    shop: session.shop,
+    supabase,
+  });
+  const permissions = await assertAdminAccess({ request, session, supabase });
+  if (!permissions.membership) {
+    throw new Response("Dashboard membership is required.", { status: 403 });
+  }
+  const formData = await request.formData();
+  if (String(formData.get("intent") ?? "") !== "save-reporting-locations") {
+    return {
+      ok: false,
+      message: "Unknown location action.",
+    } satisfies ReportingActionData;
+  }
+  const { limits } = await getFreshPlanLimits({
+    admin,
+    shop: session.shop,
+  });
+  const result = await supabase.rpc("select_reporting_locations", {
+    p_shop_domain: session.shop,
+    p_actor_membership_id: permissions.membership.id,
+    p_location_ids: formData
+      .getAll("location_ids")
+      .map((value) => String(value)),
+    p_location_limit: limits.activeLocations,
+  });
+  if (result.error) {
+    const messages: Record<string, string> = {
+      invalid_location_selection:
+        "Select only active Shopify locations for this store.",
+      location_plan_capacity: "Select fewer locations or manage your plan.",
+      reporting_location_required: "Select at least one reporting location.",
+    };
+    return {
+      ok: false,
+      message: messages[result.error.message] ?? result.error.message,
+    } satisfies ReportingActionData;
+  }
+  return {
+    ok: true,
+    message: "Reporting locations saved.",
+  } satisfies ReportingActionData;
+}
+
 export function ErrorBoundary() {
   return <RouteErrorNotice />;
 }
@@ -1415,11 +1515,11 @@ function KpiGrid({
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const location = useLocation();
   const setupSearch = new URLSearchParams(location.search);
-  setupSearch.set("tab", "product-costs");
-  const productCostsPath = `/app/admin/setup?${setupSearch.toString()}`;
+  setupSearch.set("tab", "products");
+  const productCostsPath = `/app/costs?${setupSearch.toString()}`;
   const expensesSearch = new URLSearchParams(location.search);
   expensesSearch.set("tab", "expenses");
-  const expensesPath = `/app/admin/setup?${expensesSearch.toString()}`;
+  const expensesPath = `/app/costs?${expensesSearch.toString()}`;
   const grossProfitNotice = kpis.cogsIncomplete ? (
     <div
       role="status"
@@ -2840,7 +2940,125 @@ function ActiveLocationsDrilldownChips({
   );
 }
 
+function ReportingLocationsPage({ data }: { data: ReportingLoaderData }) {
+  const actionData = useActionData<ReportingActionData>();
+  const navigation = useNavigation();
+  const isSaving =
+    navigation.state !== "idle" &&
+    navigation.formData?.get("intent") === "save-reporting-locations";
+  const usage =
+    data.limit === null
+      ? `${data.usage} reporting ${data.usage === 1 ? "location" : "locations"}`
+      : `${data.usage} of ${data.limit} reporting locations`;
+
+  return (
+    <main
+      style={{
+        background: "#f6f6f7",
+        fontFamily:
+          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+        minHeight: "100vh",
+        padding: 28,
+      }}
+    >
+      <div style={{ margin: "0 auto", maxWidth: 960 }}>
+        <header style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 32, margin: "0 0 18px" }}>Locations</h1>
+          <SectionTabs
+            activeTab="reporting"
+            ariaLabel="Locations sections"
+            tabs={[
+              { value: "performance", label: "Performance" },
+              { value: "reporting", label: "Reporting locations" },
+            ]}
+          />
+        </header>
+        <section
+          style={{
+            background: "white",
+            border: "1px solid #e3e3e3",
+            borderRadius: 16,
+            padding: 20,
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Reporting locations</h2>
+          <p style={{ color: "#616161" }}>
+            Shopify locations remain detected and synchronized. Select which
+            locations appear in ShopOps reporting. Historical data is retained
+            when a location is disabled.
+          </p>
+          <p style={{ fontWeight: 800 }}>{usage}</p>
+          {actionData ? (
+            <div
+              role={actionData.ok ? "status" : "alert"}
+              style={{
+                color: actionData.ok ? "#166534" : "#b42318",
+                fontWeight: 700,
+                marginBottom: 14,
+              }}
+            >
+              {actionData.message}
+            </div>
+          ) : null}
+          <Form method="post" style={{ display: "grid", gap: 12 }}>
+            <input
+              name="intent"
+              type="hidden"
+              value="save-reporting-locations"
+            />
+            {data.locations.map((reportingLocation) => (
+              <label
+                key={reportingLocation.id}
+                style={{ alignItems: "center", display: "flex", gap: 10 }}
+              >
+                <input
+                  defaultChecked={
+                    reportingLocation.shopifyIsActive &&
+                    reportingLocation.reportingEnabled
+                  }
+                  disabled={!reportingLocation.shopifyIsActive}
+                  name="location_ids"
+                  type="checkbox"
+                  value={reportingLocation.shopifyLocationId}
+                />
+                <span>
+                  {reportingLocation.name}
+                  {!reportingLocation.shopifyIsActive
+                    ? " (inactive in Shopify)"
+                    : ""}
+                </span>
+              </label>
+            ))}
+            {data.locations.length === 0 ? (
+              <p style={{ color: "#616161" }}>
+                No Shopify locations detected yet.
+              </p>
+            ) : null}
+            <div>
+              <button disabled={isSaving} type="submit">
+                {isSaving ? "Saving..." : "Save reporting locations"}
+              </button>
+            </div>
+          </Form>
+          <p style={{ marginBottom: 0, marginTop: 18 }}>
+            <Link to="/app/settings?tab=plan">Review plan &amp; billing</Link>
+          </p>
+        </section>
+      </div>
+    </main>
+  );
+}
+
 export default function LocationsPage() {
+  const data = useLoaderData<LoaderData | ReportingLoaderData>();
+  return data.view === "reporting" ? (
+    <ReportingLocationsPage data={data} />
+  ) : (
+    <LocationPerformancePage data={data} />
+  );
+}
+
+function LocationPerformancePage({ data }: { data: LoaderData }) {
   const location = useLocation();
   const navigation = useNavigation();
   const dataSyncPath = getDataSyncPath(location.search);
@@ -2863,7 +3081,7 @@ export default function LocationsPage() {
     refundTransactions,
     period,
     debugInfo,
-  } = useLoaderData<LoaderData>();
+  } = data;
   const [draftLocationIds, setDraftLocationIds] = useState(selectedLocationIds);
   const [isDirty, setIsDirty] = useState(false);
   const isApplyingFilters =
@@ -3137,6 +3355,24 @@ export default function LocationsPage() {
         }
       `}</style>
       <div style={{ margin: "0 auto", maxWidth: 1360 }}>
+        <header style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 32, margin: "0 0 18px" }}>Locations</h1>
+          <SectionTabs
+            activeTab="performance"
+            ariaLabel="Locations sections"
+            tabs={[
+              { value: "performance", label: "Performance" },
+              ...(data.canManageReportingLocations
+                ? [
+                    {
+                      value: "reporting" as const,
+                      label: "Reporting locations",
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </header>
         <section
           style={{
             background: "white",
@@ -3148,9 +3384,9 @@ export default function LocationsPage() {
         >
           <div style={{ marginBottom: 18 }}>
             <div>
-              <h1 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
-                Location Performance
-              </h1>
+              <h2 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
+                Performance
+              </h2>
               <p style={{ color: "#616161", margin: "6px 0 0" }}>
                 Compare stores by net sales, margin, expenses, discounts,
                 refunds, and inventory health.

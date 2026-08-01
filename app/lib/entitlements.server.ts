@@ -167,7 +167,7 @@ function buildPlanResolutionPath(request: Request) {
   const search = new URLSearchParams(url.search);
   search.set("tab", "plan");
   search.set("resolution", "required");
-  return `/app/admin/setup?${search.toString()}`;
+  return `/app/settings?${search.toString()}`;
 }
 
 export async function assertReportingEntitlements({

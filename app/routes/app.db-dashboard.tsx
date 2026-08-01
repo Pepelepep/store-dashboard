@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useEffect, useMemo, useState } from "react";
-import { useLoaderData, useLocation } from "react-router";
+import { Link, useLoaderData, useLocation } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -230,7 +230,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const { permissions } = await assertReportingEntitlements({
+  const { permissions, entitlements } = await assertReportingEntitlements({
     request,
     session,
     supabase,
@@ -719,6 +719,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       inventoryRowsCount: inventoryRows.length,
       syncFailureBanner,
       noAssignedLocations,
+      onboarding: {
+        selectReportingLocations: entitlements.activeReportingLocations > 0,
+        addProductCosts: variants.some((variant) => variant.unit_cost !== null),
+        addOperatingExpenses: expenses.some((expense) => expense.is_active),
+        reviewDashboardAccess: entitlements.owner?.status === "active",
+      },
     },
     selectedDays,
     financialMetricsVersion,
@@ -897,6 +903,30 @@ export default function DbDashboardPage() {
     !isFirstRunPreparing &&
     readiness.accessibleLocationsCount > 0 &&
     readiness.orderLinesForSelectedPeriod === 0;
+  const onboardingItems = [
+    {
+      complete: readiness.onboarding.selectReportingLocations,
+      label: "Select reporting locations",
+      to: "/app/locations?tab=reporting",
+    },
+    {
+      complete: readiness.onboarding.addProductCosts,
+      label: "Add product costs",
+      to: "/app/costs?tab=products",
+    },
+    {
+      complete: readiness.onboarding.addOperatingExpenses,
+      label: "Add operating expenses",
+      to: "/app/costs?tab=expenses",
+    },
+    {
+      complete: readiness.onboarding.reviewDashboardAccess,
+      label: "Review dashboard access",
+      to: "/app/people?tab=access",
+    },
+  ];
+  const showOnboarding =
+    readiness.canAdmin && onboardingItems.some((item) => !item.complete);
 
   return (
     <main
@@ -909,6 +939,41 @@ export default function DbDashboardPage() {
       }}
     >
       <div style={{ maxWidth: 1360, margin: "0 auto" }}>
+        {showOnboarding ? (
+          <details
+            open
+            style={{
+              background: "white",
+              border: "1px solid #d1d5db",
+              borderRadius: 12,
+              marginBottom: 18,
+              padding: "12px 16px",
+            }}
+          >
+            <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+              Finish setting up ShopOps
+            </summary>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "8px 18px",
+                marginTop: 12,
+              }}
+            >
+              {onboardingItems.map((item) => (
+                <span key={item.label}>
+                  {item.complete ? "✓ " : "○ "}
+                  {item.complete ? (
+                    item.label
+                  ) : (
+                    <Link to={item.to}>{item.label}</Link>
+                  )}
+                </span>
+              ))}
+            </div>
+          </details>
+        ) : null}
         {readiness.noAssignedLocations ? (
           <PageNotice
             title="You do not have access to any locations yet."

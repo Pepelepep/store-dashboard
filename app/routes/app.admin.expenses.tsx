@@ -6,7 +6,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const searchParams = new URLSearchParams(url.searchParams);
   searchParams.set("tab", "expenses");
 
-  throw redirect(`/app/admin/setup?${searchParams.toString()}`);
+  throw redirect(`/app/costs?${searchParams.toString()}`);
 }
 
 export default function AdminExpensesRedirect() {

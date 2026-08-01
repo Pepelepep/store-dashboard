@@ -1,14 +1,17 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
+  redirect,
   useActionData,
   useLoaderData,
+  useLocation,
   useNavigation,
 } from "react-router";
 import { useMemo, useState } from "react";
 
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { SectionTabs } from "../components/ui/SectionTabs";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
@@ -190,6 +193,14 @@ function accessStatus(membership: MembershipRow | null) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+  if (url.pathname === "/app/admin/staff") {
+    url.searchParams.set(
+      "tab",
+      url.searchParams.get("tab") === "access" ? "access" : "attribution",
+    );
+    throw redirect(`/app/people?${url.searchParams.toString()}`);
+  }
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
@@ -422,6 +433,14 @@ function friendlyAccessError(message?: string, planHandle?: string | null) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  const url = new URL(request.url);
+  if (url.pathname === "/app/admin/staff") {
+    url.searchParams.set(
+      "tab",
+      url.searchParams.get("tab") === "access" ? "access" : "attribution",
+    );
+    throw redirect(`/app/people?${url.searchParams.toString()}`);
+  }
   const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
@@ -1389,6 +1408,11 @@ export default function StaffPage() {
   const data = useLoaderData<LoaderData>();
   const result = useActionData<ActionData>();
   const navigation = useNavigation();
+  const location = useLocation();
+  const tab =
+    new URLSearchParams(location.search).get("tab") === "access"
+      ? "access"
+      : "attribution";
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -1405,7 +1429,8 @@ export default function StaffPage() {
         if (filter === "archived") return !profile.is_active;
         if (!profile.is_active) return false;
         if (filter === "access") return profile.dashboardAccess !== "No access";
-        if (filter === "pos") return profile.posMetrics.orderCount > 0;
+        if (tab === "attribution" && filter === "pos")
+          return profile.posMetrics.orderCount > 0;
         if (filter === "attention")
           return (
             !profile.is_active ||
@@ -1413,7 +1438,7 @@ export default function StaffPage() {
           );
         return true;
       }),
-    [data.profiles, filter, search],
+    [data.profiles, filter, search, tab],
   );
   const open = (next: Overlay, profile?: StaffProfile) => {
     setSelectedId(profile?.id ?? null);
@@ -1437,19 +1462,33 @@ export default function StaffPage() {
       <div className="staff-shell">
         <header className="page-header">
           <div>
-            <h1>Staff</h1>
-            <p>Manage staff, dashboard access, and POS sales attribution.</p>
+            <h1>People</h1>
+            <p>
+              {tab === "access"
+                ? "Manage active ShopOps memberships, roles, and location assignments."
+                : "Manage Staff profiles, POS sellers, and sales attribution."}
+            </p>
           </div>
-          <Button primary onClick={() => open("add")}>
-            + Add staff
-          </Button>
+          {tab === "attribution" ? (
+            <Button primary onClick={() => open("add")}>
+              + Add staff
+            </Button>
+          ) : null}
         </header>
+        <SectionTabs
+          activeTab={tab}
+          ariaLabel="People sections"
+          tabs={[
+            { value: "attribution", label: "Sales attribution" },
+            { value: "access", label: "Dashboard access" },
+          ]}
+        />
         {result ? (
           <div className={`notice ${result.ok ? "success" : "error"}`}>
             {result.message}
           </div>
         ) : null}
-        {data.posSetup.status !== "active" ? (
+        {tab === "attribution" && data.posSetup.status !== "active" ? (
           <div className="pending-notice setup-notice">
             <span>
               <b>Finish POS sales tracking</b>
@@ -1461,13 +1500,13 @@ export default function StaffPage() {
             </span>
             <Button onClick={() => open("setup")}>Set up</Button>
           </div>
-        ) : (
+        ) : tab === "attribution" ? (
           <p className="tracking-active">
             Sales by Staff tracking active since{" "}
             {date(data.posSetup.firstTrackedAt)}.
           </p>
-        )}
-        {data.pending.length ? (
+        ) : null}
+        {tab === "attribution" && data.pending.length ? (
           <div className="pending-notice">
             <span>
               <b>
@@ -1491,13 +1530,20 @@ export default function StaffPage() {
               />
             </label>
             <div className="filters">
-              {[
-                ["all", "All"],
-                ["access", "Dashboard access"],
-                ["pos", "POS sellers"],
-                ["attention", "Needs attention"],
-                ["archived", "Archived"],
-              ].map(([value, label]) => (
+              {(tab === "access"
+                ? [
+                    ["all", "All"],
+                    ["access", "Active memberships"],
+                    ["attention", "Needs attention"],
+                    ["archived", "Archived"],
+                  ]
+                : [
+                    ["all", "All"],
+                    ["pos", "POS sellers"],
+                    ["attention", "Needs attention"],
+                    ["archived", "Archived"],
+                  ]
+              ).map(([value, label]) => (
                 <button
                   type="button"
                   aria-pressed={filter === value}
@@ -1509,11 +1555,11 @@ export default function StaffPage() {
               ))}
             </div>
           </div>
-          <div className="staff-table">
+          <div className={`staff-table ${tab}`}>
             <div className="table-head">
-              <span>Staff</span>
-              <span>Dashboard access</span>
-              <span>POS sales</span>
+              <span>{tab === "access" ? "Person" : "Staff profile"}</span>
+              {tab === "access" ? <span>Dashboard access</span> : null}
+              {tab === "attribution" ? <span>POS sales</span> : null}
               <span>Locations</span>
               <span>Status</span>
               <span>Actions</span>
@@ -1524,37 +1570,55 @@ export default function StaffPage() {
                 key={profile.id}
                 onClick={(event) => {
                   if (!(event.target as HTMLElement).closest(".actions")) {
-                    open("details", profile);
+                    open(
+                      tab === "access" && !profile.membership?.is_owner
+                        ? "access"
+                        : "details",
+                      profile,
+                    );
                   }
                 }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") open("details", profile);
+                  if (event.key === "Enter") {
+                    open(
+                      tab === "access" && !profile.membership?.is_owner
+                        ? "access"
+                        : "details",
+                      profile,
+                    );
+                  }
                 }}
               >
                 <span className="identity">
                   <b>{profile.display_name}</b>
                   <small>{profile.email ?? "No email"}</small>
                 </span>
-                <span>
-                  <StatusBadge
-                    variant={
-                      profile.dashboardAccess === "No access"
-                        ? "neutral"
-                        : "success"
-                    }
-                  >
-                    {profile.dashboardAccess}
-                  </StatusBadge>
-                </span>
-                <span>
-                  <StatusBadge
-                    variant={profile.posMetrics.orderCount ? "info" : "neutral"}
-                  >
-                    {profile.posMetrics.orderCount ? "Linked" : "Not linked"}
-                  </StatusBadge>
-                </span>
+                {tab === "access" ? (
+                  <span>
+                    <StatusBadge
+                      variant={
+                        profile.dashboardAccess === "No access"
+                          ? "neutral"
+                          : "success"
+                      }
+                    >
+                      {profile.dashboardAccess}
+                    </StatusBadge>
+                  </span>
+                ) : null}
+                {tab === "attribution" ? (
+                  <span>
+                    <StatusBadge
+                      variant={
+                        profile.posMetrics.orderCount ? "info" : "neutral"
+                      }
+                    >
+                      {profile.posMetrics.orderCount ? "Linked" : "Not linked"}
+                    </StatusBadge>
+                  </span>
+                ) : null}
                 <span>{locationLabel(profile)}</span>
                 <span>
                   <StatusBadge
@@ -1578,11 +1642,18 @@ export default function StaffPage() {
                     <div className="menu">
                       <button
                         type="button"
-                        onClick={() => open("details", profile)}
+                        onClick={() =>
+                          open(
+                            tab === "access" && !profile.membership?.is_owner
+                              ? "access"
+                              : "details",
+                            profile,
+                          )
+                        }
                       >
                         View
                       </button>
-                      {!profile.membership?.is_owner ? (
+                      {tab === "access" && !profile.membership?.is_owner ? (
                         <button
                           type="button"
                           onClick={() => open("access", profile)}
@@ -1592,7 +1663,7 @@ export default function StaffPage() {
                             : "Edit access"}
                         </button>
                       ) : null}
-                      {profile.is_active ? (
+                      {tab === "attribution" && profile.is_active ? (
                         !profile.membership?.is_owner ? (
                           <button
                             type="button"
@@ -1601,7 +1672,7 @@ export default function StaffPage() {
                             Remove staff
                           </button>
                         ) : null
-                      ) : (
+                      ) : tab === "attribution" ? (
                         <Form method="post">
                           <input
                             type="hidden"
@@ -1615,7 +1686,7 @@ export default function StaffPage() {
                           />
                           <button type="submit">Restore</button>
                         </Form>
-                      )}
+                      ) : null}
                     </div>
                   ) : null}
                 </span>
@@ -1629,10 +1700,12 @@ export default function StaffPage() {
             <span>
               {filtered.length} of {data.profiles.length} staff
             </span>
-            <button type="button" onClick={() => open("import")}>
-              Import staff names from Shopify
-            </button>
-            {data.deferred.length ? (
+            {tab === "attribution" ? (
+              <button type="button" onClick={() => open("import")}>
+                Import staff names from Shopify
+              </button>
+            ) : null}
+            {tab === "attribution" && data.deferred.length ? (
               <button type="button" onClick={() => open("pending")}>
                 {data.deferred.length} saved for later
               </button>
@@ -2028,6 +2101,6 @@ const STAFF_LIFECYCLE_CSS = `
 `;
 
 const STAFF_CSS = `
-*{box-sizing:border-box}.staff-page{min-height:100vh;background:#f4f5f4;color:#202223;padding:28px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.staff-shell{max-width:1240px;margin:auto}.page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.page-header h1{font-size:30px;letter-spacing:-.5px;margin:0}.page-header p{color:#616161;margin:6px 0 0}.staff-button{background:#fff;border:1px solid #c9cccf;border-radius:8px;color:#202223;cursor:pointer;font-weight:650;padding:8px 12px}.staff-button:hover{background:#f6f6f7}.staff-button.primary{background:#303030;border-color:#303030;color:#fff}.staff-button.danger{color:#b42318}.notice,.pending-notice{border-radius:10px;margin-bottom:14px;padding:12px 14px}.notice.success{background:#eaf7ef;color:#166534}.notice.error{background:#fff0f0;color:#b42318}.pending-notice{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;display:flex;justify-content:space-between}.pending-notice span{display:grid;gap:2px}.pending-notice small{color:#4b5563}.roster{background:#fff;border:1px solid #dedede;border-radius:14px;box-shadow:0 1px 3px #0000000a;overflow:visible}.toolbar{align-items:center;border-bottom:1px solid #e8e8e8;display:flex;gap:14px;padding:14px}.search{align-items:center;border:1px solid #c9cccf;border-radius:8px;display:flex;min-width:260px;padding:0 10px}.search:focus-within{border-color:#2563eb;box-shadow:0 0 0 3px #bfdbfe}.search input{border:0;outline:0;padding:9px;width:100%}.filters{display:flex;gap:4px;overflow:auto}.filters button,.segmented button{background:transparent;border:0;border-radius:7px;cursor:pointer;padding:8px 11px;white-space:nowrap}.filters button[aria-pressed=true],.segmented button[aria-pressed=true]{background:#e8e8e8;font-weight:700}.table-head,.staff-row{align-items:center;display:grid;gap:16px;grid-template-columns:minmax(210px,1.5fr) 1fr .8fr 1fr .65fr 52px;padding:0 16px}.table-head{background:#f7f7f7;color:#616161;font-size:12px;font-weight:700;min-height:38px;text-transform:uppercase}.staff-row{border-top:1px solid #ededed;cursor:pointer;min-height:62px}.staff-row:hover{background:#fafafa}.identity{display:grid;min-width:0}.identity b,.identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity small{color:#6d7175;margin-top:3px}.actions{position:relative}.icon-button{background:transparent;border:0;border-radius:7px;cursor:pointer;font-size:18px;padding:6px 8px}.icon-button:hover{background:#e8e8e8}.menu{background:#fff;border:1px solid #d8d8d8;border-radius:9px;box-shadow:0 8px 22px #0002;display:grid;min-width:160px;padding:5px;position:absolute;right:0;top:36px;z-index:4}.menu button{background:transparent;border:0;border-radius:6px;cursor:pointer;padding:8px;text-align:left;width:100%}.menu button:hover{background:#f1f1f1}.compact-empty{text-align:center;color:#6d7175;padding:30px}.roster-footer{align-items:center;border-top:1px solid #ededed;color:#6d7175;display:flex;gap:18px;padding:12px 16px}.roster-footer button{background:transparent;border:0;color:#255aa8;cursor:pointer;margin-left:auto}.roster-footer button+button{margin-left:0}.staff-overlay{align-items:stretch;background:#0006;display:flex;inset:0;justify-content:flex-end;position:fixed;z-index:50}.staff-panel{background:#fff;box-shadow:-8px 0 32px #0002;max-width:92vw;overflow:auto;width:460px}.staff-panel.wide{width:760px}.staff-panel>header{align-items:center;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 22px;position:sticky;top:0;background:#fff;z-index:2}.staff-panel h2{font-size:20px;margin:0}.panel-body{padding:22px}.form-stack{display:grid;gap:16px}.form-stack label{display:grid;font-size:13px;font-weight:650;gap:6px}.form-stack input,.form-stack select,.upload input{border:1px solid #b7b9bb;border-radius:8px;font:inherit;padding:10px}.form-stack fieldset{border:0;margin:0;padding:0}.form-stack legend{font-size:13px;font-weight:650;margin-bottom:8px}.form-stack .check,.check{align-items:center;display:flex;font-weight:400;gap:8px;margin:8px 0}.form-stack .check input,.check input{margin:0}.hint{color:#6d7175;font-size:13px}.detail-sections{display:grid}.detail-sections>section{align-items:flex-start;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 0}.detail-sections h3{font-size:14px;margin:0 0 5px}.detail-sections p{color:#454545;margin:0}.detail-sections small{color:#6d7175;display:block;margin-top:5px}.detail-sections details{padding:18px 0}.detail-sections summary{cursor:pointer;font-weight:650}.advanced{display:grid;gap:8px;margin-top:12px}.advanced code{background:#f6f6f7;border-radius:7px;font-size:11px;overflow-wrap:anywhere;padding:9px}.seller-row{border-bottom:1px solid #e5e5e5;padding:18px 0}.seller-row:first-child{padding-top:0}.seller-facts{display:grid;gap:12px;grid-template-columns:repeat(3,1fr)}.seller-facts span{display:grid;font-size:14px}.seller-facts b{color:#6d7175;font-size:11px;margin-bottom:4px;text-transform:uppercase}.row-actions{display:flex;gap:8px;margin-top:15px}.assign-box{background:#f7f7f7;border-radius:10px;margin-top:15px;padding:15px}.assign-box h3{margin:0 0 10px}.segmented{background:#ededed;border-radius:9px;display:flex;margin-bottom:14px;padding:3px}.segmented button{flex:1}.query{background:#202223;border-radius:10px;color:#fff;margin:16px 0;overflow:auto;padding:14px}.query pre{font-size:12px;white-space:pre-wrap}.query .staff-button{float:right}.upload{display:grid;font-weight:650;gap:8px}.preview{border-top:1px solid #e5e5e5;margin-top:20px;padding-top:20px}.preview-counts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.preview-counts span{background:#f6f6f7;border-radius:8px;display:grid;font-size:12px;padding:10px}.preview-counts b{font-size:18px}.preview-row{align-items:center;border-bottom:1px solid #e5e5e5;display:grid;gap:10px;grid-template-columns:1fr auto;padding:14px 0}.preview-row>div{display:grid}.preview-row span,.preview-row small{color:#6d7175;font-size:13px}.preview-row select{border:1px solid #b7b9bb;border-radius:7px;padding:7px}.preview-row.warning{background:#fff8e6;padding-left:10px}.preview-row.muted{opacity:.7}.confirm{background:#eef5ff;border-radius:10px;margin-top:16px;padding:14px}.bulk-forms{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.remove-access{border-top:1px solid #e5e5e5;margin-top:22px;padding-top:18px}.pos-summary{text-align:center;padding:20px 0}.saving{background:#303030;border-radius:20px;bottom:18px;color:white;padding:9px 15px;position:fixed;right:18px}.error{color:#b42318}
+*{box-sizing:border-box}.staff-page{min-height:100vh;background:#f4f5f4;color:#202223;padding:28px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.staff-shell{max-width:1240px;margin:auto}.page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.page-header h1{font-size:30px;letter-spacing:-.5px;margin:0}.page-header p{color:#616161;margin:6px 0 0}.staff-button{background:#fff;border:1px solid #c9cccf;border-radius:8px;color:#202223;cursor:pointer;font-weight:650;padding:8px 12px}.staff-button:hover{background:#f6f6f7}.staff-button.primary{background:#303030;border-color:#303030;color:#fff}.staff-button.danger{color:#b42318}.notice,.pending-notice{border-radius:10px;margin-bottom:14px;padding:12px 14px}.notice.success{background:#eaf7ef;color:#166534}.notice.error{background:#fff0f0;color:#b42318}.pending-notice{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;display:flex;justify-content:space-between}.pending-notice span{display:grid;gap:2px}.pending-notice small{color:#4b5563}.roster{background:#fff;border:1px solid #dedede;border-radius:14px;box-shadow:0 1px 3px #0000000a;overflow:visible}.toolbar{align-items:center;border-bottom:1px solid #e8e8e8;display:flex;gap:14px;padding:14px}.search{align-items:center;border:1px solid #c9cccf;border-radius:8px;display:flex;min-width:260px;padding:0 10px}.search:focus-within{border-color:#2563eb;box-shadow:0 0 0 3px #bfdbfe}.search input{border:0;outline:0;padding:9px;width:100%}.filters{display:flex;gap:4px;overflow:auto}.filters button,.segmented button{background:transparent;border:0;border-radius:7px;cursor:pointer;padding:8px 11px;white-space:nowrap}.filters button[aria-pressed=true],.segmented button[aria-pressed=true]{background:#e8e8e8;font-weight:700}.table-head,.staff-row{align-items:center;display:grid;gap:16px;grid-template-columns:minmax(210px,1.5fr) 1fr .8fr 1fr .65fr 52px;padding:0 16px}.staff-table.attribution .table-head,.staff-table.attribution .staff-row,.staff-table.access .table-head,.staff-table.access .staff-row{grid-template-columns:minmax(210px,1.5fr) 1fr 1fr .65fr 52px}.table-head{background:#f7f7f7;color:#616161;font-size:12px;font-weight:700;min-height:38px;text-transform:uppercase}.staff-row{border-top:1px solid #ededed;cursor:pointer;min-height:62px}.staff-row:hover{background:#fafafa}.identity{display:grid;min-width:0}.identity b,.identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity small{color:#6d7175;margin-top:3px}.actions{position:relative}.icon-button{background:transparent;border:0;border-radius:7px;cursor:pointer;font-size:18px;padding:6px 8px}.icon-button:hover{background:#e8e8e8}.menu{background:#fff;border:1px solid #d8d8d8;border-radius:9px;box-shadow:0 8px 22px #0002;display:grid;min-width:160px;padding:5px;position:absolute;right:0;top:36px;z-index:4}.menu button{background:transparent;border:0;border-radius:6px;cursor:pointer;padding:8px;text-align:left;width:100%}.menu button:hover{background:#f1f1f1}.compact-empty{text-align:center;color:#6d7175;padding:30px}.roster-footer{align-items:center;border-top:1px solid #ededed;color:#6d7175;display:flex;gap:18px;padding:12px 16px}.roster-footer button{background:transparent;border:0;color:#255aa8;cursor:pointer;margin-left:auto}.roster-footer button+button{margin-left:0}.staff-overlay{align-items:stretch;background:#0006;display:flex;inset:0;justify-content:flex-end;position:fixed;z-index:50}.staff-panel{background:#fff;box-shadow:-8px 0 32px #0002;max-width:92vw;overflow:auto;width:460px}.staff-panel.wide{width:760px}.staff-panel>header{align-items:center;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 22px;position:sticky;top:0;background:#fff;z-index:2}.staff-panel h2{font-size:20px;margin:0}.panel-body{padding:22px}.form-stack{display:grid;gap:16px}.form-stack label{display:grid;font-size:13px;font-weight:650;gap:6px}.form-stack input,.form-stack select,.upload input{border:1px solid #b7b9bb;border-radius:8px;font:inherit;padding:10px}.form-stack fieldset{border:0;margin:0;padding:0}.form-stack legend{font-size:13px;font-weight:650;margin-bottom:8px}.form-stack .check,.check{align-items:center;display:flex;font-weight:400;gap:8px;margin:8px 0}.form-stack .check input,.check input{margin:0}.hint{color:#6d7175;font-size:13px}.detail-sections{display:grid}.detail-sections>section{align-items:flex-start;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 0}.detail-sections h3{font-size:14px;margin:0 0 5px}.detail-sections p{color:#454545;margin:0}.detail-sections small{color:#6d7175;display:block;margin-top:5px}.detail-sections details{padding:18px 0}.detail-sections summary{cursor:pointer;font-weight:650}.advanced{display:grid;gap:8px;margin-top:12px}.advanced code{background:#f6f6f7;border-radius:7px;font-size:11px;overflow-wrap:anywhere;padding:9px}.seller-row{border-bottom:1px solid #e5e5e5;padding:18px 0}.seller-row:first-child{padding-top:0}.seller-facts{display:grid;gap:12px;grid-template-columns:repeat(3,1fr)}.seller-facts span{display:grid;font-size:14px}.seller-facts b{color:#6d7175;font-size:11px;margin-bottom:4px;text-transform:uppercase}.row-actions{display:flex;gap:8px;margin-top:15px}.assign-box{background:#f7f7f7;border-radius:10px;margin-top:15px;padding:15px}.assign-box h3{margin:0 0 10px}.segmented{background:#ededed;border-radius:9px;display:flex;margin-bottom:14px;padding:3px}.segmented button{flex:1}.query{background:#202223;border-radius:10px;color:#fff;margin:16px 0;overflow:auto;padding:14px}.query pre{font-size:12px;white-space:pre-wrap}.query .staff-button{float:right}.upload{display:grid;font-weight:650;gap:8px}.preview{border-top:1px solid #e5e5e5;margin-top:20px;padding-top:20px}.preview-counts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.preview-counts span{background:#f6f6f7;border-radius:8px;display:grid;font-size:12px;padding:10px}.preview-counts b{font-size:18px}.preview-row{align-items:center;border-bottom:1px solid #e5e5e5;display:grid;gap:10px;grid-template-columns:1fr auto;padding:14px 0}.preview-row>div{display:grid}.preview-row span,.preview-row small{color:#6d7175;font-size:13px}.preview-row select{border:1px solid #b7b9bb;border-radius:7px;padding:7px}.preview-row.warning{background:#fff8e6;padding-left:10px}.preview-row.muted{opacity:.7}.confirm{background:#eef5ff;border-radius:10px;margin-top:16px;padding:14px}.bulk-forms{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.remove-access{border-top:1px solid #e5e5e5;margin-top:22px;padding-top:18px}.pos-summary{text-align:center;padding:20px 0}.saving{background:#303030;border-radius:20px;bottom:18px;color:white;padding:9px 15px;position:fixed;right:18px}.error{color:#b42318}
 @media(max-width:800px){.staff-page{padding:16px}.page-header{align-items:flex-start}.toolbar{align-items:stretch;flex-direction:column}.search{min-width:0}.table-head{display:none}.staff-row{grid-template-columns:1fr auto;gap:8px;padding:12px}.staff-row>span:not(.identity):not(.actions){font-size:12px}.actions{grid-column:2;grid-row:1}.roster-footer{align-items:flex-start;flex-direction:column}.roster-footer button{margin-left:0}.seller-facts,.preview-counts{grid-template-columns:repeat(2,1fr)}.preview-row{grid-template-columns:1fr}.staff-panel,.staff-panel.wide{max-width:100vw;width:100%}}
 `;

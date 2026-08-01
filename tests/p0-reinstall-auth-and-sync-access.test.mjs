@@ -230,10 +230,13 @@ test("sync warning CTA retains Shopify embedded-app navigation context", () => {
   const search =
     "?shop=shopops-fresh-qa.myshopify.com&host=encoded-host&id_token=encoded-token";
 
-  assert.equal(getDataSyncPath(search), `/app/admin/sync${search}`);
+  assert.equal(
+    getDataSyncPath(search),
+    "/app/settings?shop=shopops-fresh-qa.myshopify.com&host=encoded-host&id_token=encoded-token&tab=sync",
+  );
   assert.equal(
     getDataSyncPath("host=encoded-host"),
-    "/app/admin/sync?host=encoded-host",
+    "/app/settings?host=encoded-host&tab=sync",
   );
 });
 
@@ -1008,8 +1011,8 @@ test("estimate preview changes without persistence", () => {
   });
 });
 
-test("Setup remains admin-only and navigation order is stable", () => {
-  const setupRoute = readFileSync(
+test("merchant navigation is the exact role-aware five-section information architecture", () => {
+  const costsRoute = readFileSync(
     new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
     "utf8",
   );
@@ -1018,16 +1021,40 @@ test("Setup remains admin-only and navigation order is stable", () => {
     "utf8",
   );
 
-  assert.match(setupRoute, /assertAdminAccess/);
-  assert.ok(
-    appRoute.indexOf("Profit Dashboard") <
-      appRoute.indexOf("Location Performance"),
+  assert.match(costsRoute, /assertAdminAccess/);
+  const menu = appRoute.slice(
+    appRoute.indexOf("<ui-nav-menu>"),
+    appRoute.indexOf("</ui-nav-menu>"),
   );
-  assert.ok(
-    appRoute.indexOf("Location Performance") < appRoute.indexOf(">Setup<"),
+  const labels = [...menu.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/g)].map((match) =>
+    match[1].trim(),
   );
-  assert.ok(appRoute.indexOf(">Setup<") < appRoute.indexOf(">Staff<"));
-  assert.ok(appRoute.indexOf(">Staff<") < appRoute.indexOf(">Data sync<"));
+  assert.deepEqual(labels, [
+    "Dashboard",
+    "Locations",
+    "Costs",
+    "People",
+    "Settings",
+  ]);
+  for (const removedLabel of [
+    ">Setup<",
+    ">Staff<",
+    ">Data sync<",
+    ">Plan<",
+    ">Location Performance<",
+  ]) {
+    assert.equal(appRoute.includes(removedLabel), false);
+  }
+  assert.match(
+    appRoute,
+    /<a href=\{`\/app\/locations\$\{navigationSearch\}`\}>/,
+  );
+  for (const path of ["costs", "people", "settings"]) {
+    assert.match(
+      appRoute,
+      new RegExp(`\\{canAdmin \\? \\([\\s\\S]*?\\/app\\/${path}`),
+    );
+  }
 });
 
 test("COGS recompute functions and settings update are service-role-only", () => {
@@ -1081,30 +1108,27 @@ test("product-cost save disables and reports pending recalculation", () => {
   assert.match(component, /Saving and recalculating\.\.\./);
 });
 
-test("Setup defaults to Expenses with equal-width segmented navigation", () => {
+test("Costs defaults to Product costs and keeps the two operations separate", () => {
   const setupRoute = readFileSync(
     new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
     "utf8",
   );
-  const expensesIndex = setupRoute.indexOf(
-    '{ value: "expenses" as const, label: "Expenses" }',
-  );
   const productCostsIndex = setupRoute.indexOf(
-    '{ value: "product-costs" as const, label: "Product costs" }',
+    '{ value: "products", label: "Product costs" }',
+  );
+  const expensesIndex = setupRoute.indexOf(
+    '{ value: "expenses", label: "Operating expenses" }',
   );
 
-  assert.ok(expensesIndex >= 0);
-  assert.ok(expensesIndex < productCostsIndex);
+  assert.ok(productCostsIndex >= 0);
+  assert.ok(productCostsIndex < expensesIndex);
   assert.match(
     setupRoute,
-    /requestedTab === "product-costs"[\s\S]*?\? "product-costs"[\s\S]*?: "expenses"/,
+    /requestedTab === "expenses" \? "expenses" : "products"/,
   );
-  assert.match(
-    setupRoute,
-    /gridTemplateColumns: `repeat\(\$\{showPlan \? 3 : 2\}, minmax\(0, 1fr\)\)`/,
-  );
-  assert.match(setupRoute, /\{ value: "plan" as const, label: "Plan" \}/);
-  assert.match(setupRoute, /className="setup-segmented-control"/);
+  assert.match(setupRoute, /<ProductCostsSetup/);
+  assert.match(setupRoute, /expense_name/);
+  assert.doesNotMatch(setupRoute, /<PlanSetup/);
 });
 
 test("tab-only Setup navigation does not revalidate the route loader", () => {
@@ -1284,7 +1308,7 @@ test("dashboard notices live only in their relevant profit KPI cards", () => {
   assert.match(netProfitSection, /Add expenses/);
 });
 
-test("old expense route redirects to the Setup expenses tab with context", () => {
+test("old expense route redirects to Costs operating expenses with context", () => {
   const oldExpenseRoute = readFileSync(
     new URL("../app/routes/app.admin.expenses.tsx", import.meta.url),
     "utf8",
@@ -1294,7 +1318,7 @@ test("old expense route redirects to the Setup expenses tab with context", () =>
   assert.match(oldExpenseRoute, /searchParams\.set\("tab", "expenses"\)/);
   assert.match(
     oldExpenseRoute,
-    /redirect\(`\/app\/admin\/setup\?\$\{searchParams\.toString\(\)\}`\)/,
+    /redirect\(`\/app\/costs\?\$\{searchParams\.toString\(\)\}`\)/,
   );
 });
 
@@ -2404,7 +2428,7 @@ test("POS merchant modal has automatic attribution state and no diagnostics", ()
   assert.match(locale, /Staff attribution is active/);
 });
 
-test("Location Performance applies dashboard membership access for admin, manager, viewer, and no-location users", () => {
+test("Locations performance remains role-filtered while reporting management is admin-only", () => {
   const locations = [
     { shopify_location_id: "location-a", name: "A" },
     { shopify_location_id: "location-b", name: "B" },
@@ -2460,16 +2484,25 @@ test("Location Performance applies dashboard membership access for admin, manage
     "utf8",
   );
   assert.match(locationRoute, /assertReportingEntitlements/);
-  assert.equal(locationRoute.includes("assertAdminAccess"), false);
+  assert.match(locationRoute, /assertAdminAccess/);
+  assert.match(
+    locationRoute,
+    /url\.searchParams\.get\("tab"\) === "reporting"[\s\S]*?assertAdminAccess/,
+  );
+  assert.match(locationRoute, /value: "performance", label: "Performance"/);
+  assert.match(
+    locationRoute,
+    /value: "reporting"[\s\S]*?label: "Reporting locations"/,
+  );
+  assert.match(locationRoute, /select_reporting_locations/);
+  assert.match(locationRoute, /getFreshPlanLimits/);
   assert.match(
     appShell,
-    /<a href=\{`\/app\/locations\$\{search\}`\}>Location Performance<\/a>/,
+    /<a href=\{`\/app\/locations\$\{navigationSearch\}`\}>Locations<\/a>/,
   );
-  assert.doesNotMatch(
-    appShell,
-    /\{canAdmin \? \([\s\n]*<a href=\{`\/app\/locations/,
+  assert.ok(
+    appShell.indexOf("/app/locations") < appShell.indexOf("{canAdmin ? ("),
   );
-  assert.match(appShell, /\{canAdmin \? <a href=\{setupPath\}>Setup<\/a>/);
 });
 
 test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-decoding bypass", () => {
@@ -2588,7 +2621,8 @@ test("membership RPCs lock each shop and enforce owner, last-admin, archived-sta
   );
   assert.match(staffRoute, /Dashboard access was not changed\./);
   assert.doesNotMatch(staffRoute, /replace_staff_dashboard_access/);
-  assert.match(legacyRoute, /\/app\/admin\/staff/);
+  assert.match(legacyRoute, /\/app\/people/);
+  assert.match(legacyRoute, /url\.searchParams\.set\("tab", "access"\)/);
   assert.doesNotMatch(legacyRoute, /\.rpc\(/);
 });
 
@@ -2650,7 +2684,89 @@ test("Shopify location state, reporting selection, report filters, and full sync
   assert.doesNotMatch(sync, /applyActiveLocationLimit|PlanCapacityError/);
 });
 
-test("Plan is Setup-only, owner-only pricing uses a one-time server flash, and over-limit copy is present", () => {
+test("legacy merchant URLs redirect to the final section tabs without duplicating editors", () => {
+  const setup = readFileSync(
+    new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
+    "utf8",
+  );
+  const staff = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const sync = readFileSync(
+    new URL("../app/routes/app.admin.sync.tsx", import.meta.url),
+    "utf8",
+  );
+  const costs = readFileSync(
+    new URL("../app/routes/app.costs.tsx", import.meta.url),
+    "utf8",
+  );
+  const people = readFileSync(
+    new URL("../app/routes/app.people.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(setup, /legacyTab === "plan"[\s\S]*?\/app\/settings/);
+  assert.match(setup, /legacyTab === "product-costs"[\s\S]*?\/app\/costs/);
+  assert.match(
+    setup,
+    /legacyTab === "reporting-locations"[\s\S]*?\/app\/locations/,
+  );
+  assert.match(staff, /url\.pathname === "\/app\/admin\/staff"/);
+  assert.match(staff, /\/app\/people/);
+  assert.match(sync, /url\.pathname === "\/app\/admin\/sync"/);
+  assert.match(sync, /\/app\/settings/);
+  assert.match(costs, /from "\.\/app\.admin\.setup"/);
+  assert.match(people, /from "\.\/app\.admin\.staff"/);
+});
+
+test("People separates sales attribution from active dashboard membership", () => {
+  const people = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(people, /label: "Sales attribution"/);
+  assert.match(people, /label: "Dashboard access"/);
+  assert.match(people, /tab === "attribution" && data\.pending\.length/);
+  assert.match(people, /tab === "access" \? <span>/);
+  assert.match(
+    people,
+    /if \(!membership \|\| membership\.status !== "active"\) return "No access"/,
+  );
+  assert.match(people, /getFreshPlanLimits/);
+  assert.match(people, /replace_dashboard_membership_access/);
+});
+
+test("Dashboard onboarding is compact, admin-only, and disappears when complete", () => {
+  const dashboard = readFileSync(
+    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+    "utf8",
+  );
+  const tabs = readFileSync(
+    new URL("../app/components/ui/SectionTabs.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const label of [
+    "Select reporting locations",
+    "Add product costs",
+    "Add operating expenses",
+    "Review dashboard access",
+  ]) {
+    assert.match(dashboard, new RegExp(label));
+  }
+  assert.match(
+    dashboard,
+    /readiness\.canAdmin && onboardingItems\.some\(\(item\) => !item\.complete\)/,
+  );
+  assert.match(dashboard, /\{showOnboarding \? \(/);
+  assert.match(dashboard, /<details[\s\S]*?open/);
+  assert.match(tabs, /overflowX: "auto"/);
+  assert.match(tabs, /whiteSpace: "nowrap"/);
+});
+
+test("Plan and billing is summary-only, owner-priced, contextual, and uses a one-time flash", () => {
   const appShell = readFileSync(
     new URL("../app/routes/app.tsx", import.meta.url),
     "utf8",
@@ -2663,30 +2779,33 @@ test("Plan is Setup-only, owner-only pricing uses a one-time server flash, and o
     new URL("../app/routes/app.billing.complete.tsx", import.meta.url),
     "utf8",
   );
+  const settings = readFileSync(
+    new URL("../app/routes/app.settings.tsx", import.meta.url),
+    "utf8",
+  );
   const flash = readFileSync(
     new URL("../app/lib/flash.server.ts", import.meta.url),
     "utf8",
   );
 
   assert.doesNotMatch(appShell, />\s*Plan\s*<\/a>/);
-  assert.match(plan, /data\.canManagePlan \? \(/);
-  assert.match(plan, /Owner \(always active\)/);
+  assert.match(plan, /data\.canManagePlan && data\.managePlanUrl/);
+  assert.match(plan, /Owner \(always active and locked\)/);
   assert.match(plan, /`\$\{usage\} of \$\{limit\}/);
+  assert.match(plan, /<strong>Action required\.<\/strong>/);
+  assert.match(plan, /to="\/app\/locations\?tab=reporting"/);
+  assert.match(plan, /to="\/app\/people\?tab=access"/);
+  assert.doesNotMatch(plan, /save-reporting-locations/);
+  assert.doesNotMatch(plan, /save-dashboard-memberships/);
   assert.match(
-    plan,
-    /Solo includes dashboard access for the store owner\. Upgrade to Growth to add another dashboard user\./,
+    settings,
+    /permissions\.isOwner && permissions\.identity\.isShopifyAccountOwner/,
   );
-  assert.match(plan, /dashboardCapacity === "over_limit"/);
-  assert.match(plan, /dashboardCapacity === "at_limit"/);
-  assert.match(plan, /All available capacity is currently in use\./);
-  assert.doesNotMatch(plan, /usage\s*>=\s*data\.dashboardUsers\.limit/);
-  assert.doesNotMatch(
-    plan,
-    /Solo[\s\S]{0,200}remove an existing dashboard user/,
-  );
+  assert.match(settings, /label: "Data sync"/);
+  assert.match(settings, /label: "Plan & billing"/);
   assert.match(callback, /assertOwnerAccess/);
   assert.match(callback, /setPlanConfirmedFlash/);
-  assert.match(callback, /\/app\/admin\/setup/);
+  assert.match(callback, /\/app\/settings/);
   assert.doesNotMatch(callback, /billing", "activated/);
   assert.match(flash, /session\.flash\("planConfirmed", "Plan confirmed\."\)/);
   assert.match(flash, /session\.get\("planConfirmed"\)/);

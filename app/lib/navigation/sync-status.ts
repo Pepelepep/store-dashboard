@@ -1,9 +1,9 @@
-export const DATA_SYNC_PATH = "/app/admin/sync";
+export const DATA_SYNC_PATH = "/app/settings";
 
 export function getDataSyncPath(search = "") {
-  if (!search) {
-    return DATA_SYNC_PATH;
-  }
-
-  return `${DATA_SYNC_PATH}${search.startsWith("?") ? search : `?${search}`}`;
+  const searchParams = new URLSearchParams(
+    search.startsWith("?") ? search.slice(1) : search,
+  );
+  searchParams.set("tab", "sync");
+  return `${DATA_SYNC_PATH}?${searchParams.toString()}`;
 }

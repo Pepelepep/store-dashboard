@@ -20,7 +20,6 @@ import {
 } from "../lib/auth/permissions.server";
 import { requireBillingAccess } from "../lib/billing.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
-import { getDataSyncPath } from "../lib/navigation/sync-status";
 
 import { authenticate } from "../shopify.server";
 
@@ -132,11 +131,10 @@ export default function App() {
   const { apiKey, canAdmin, accessState, accessIdentity } =
     useLoaderData<typeof loader>();
   const location = useLocation();
-  const search = location.search;
-  const setupSearchParams = new URLSearchParams(search);
-  setupSearchParams.delete("tab");
-  const setupQuery = setupSearchParams.toString();
-  const setupPath = `/app/admin/setup${setupQuery ? `?${setupQuery}` : ""}`;
+  const navigationSearchParams = new URLSearchParams(location.search);
+  navigationSearchParams.delete("tab");
+  const navigationQuery = navigationSearchParams.toString();
+  const navigationSearch = navigationQuery ? `?${navigationQuery}` : "";
   const isBillingRoute = isBillingRoutePath(location.pathname);
 
   return (
@@ -195,13 +193,19 @@ export default function App() {
       ) : (
         <>
           <ui-nav-menu>
-            <a href={`/app/db-dashboard${search}`} rel="home">
-              Profit Dashboard
+            <a href={`/app/db-dashboard${navigationSearch}`} rel="home">
+              Dashboard
             </a>
-            <a href={`/app/locations${search}`}>Location Performance</a>
-            {canAdmin ? <a href={setupPath}>Setup</a> : null}
-            {canAdmin ? <a href={`/app/admin/staff${search}`}>Staff</a> : null}
-            {canAdmin ? <a href={getDataSyncPath(search)}>Data sync</a> : null}
+            <a href={`/app/locations${navigationSearch}`}>Locations</a>
+            {canAdmin ? (
+              <a href={`/app/costs${navigationSearch}`}>Costs</a>
+            ) : null}
+            {canAdmin ? (
+              <a href={`/app/people${navigationSearch}`}>People</a>
+            ) : null}
+            {canAdmin ? (
+              <a href={`/app/settings${navigationSearch}`}>Settings</a>
+            ) : null}
           </ui-nav-menu>
 
           <Outlet />

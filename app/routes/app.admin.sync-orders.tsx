@@ -19,7 +19,8 @@ async function redirectToSyncCenter(request: Request) {
 
   const url = new URL(request.url);
 
-  return redirect(`/app/admin/sync${url.search}`);
+  url.searchParams.set("tab", "sync");
+  return redirect(`/app/settings?${url.searchParams.toString()}`);
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
