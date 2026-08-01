@@ -5,7 +5,7 @@ import { useLoaderData, useLocation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { fetchAllSupabasePages } from "../lib/db/supabase-pagination.server";
-import { getPermissionContext } from "../lib/auth/permissions.server";
+import { assertReportingEntitlements } from "../lib/entitlements.server";
 import {
   ensureShopInitialized,
   logEmptyDataState,
@@ -223,17 +223,18 @@ async function fetchRefundTransactionsForOrders({
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.db-dashboard",
     shop: session.shop,
     supabase,
   });
-  const permissions = await getPermissionContext({
+  const { permissions } = await assertReportingEntitlements({
     request,
     session,
     supabase,
+    admin,
   });
   const url = new URL(request.url);
   const preservedSearchParams = Array.from(url.searchParams.entries())
@@ -279,7 +280,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
         .from("locations")
         .select("id, shopify_location_id, name, is_active")
         .eq("shop_domain", session.shop)
-        .eq("is_active", true)
+        .eq("shopify_is_active", true)
+        .eq("reporting_enabled", true)
         .order("name", { ascending: true })
         .order("id", { ascending: true })
         .range(from, to) as unknown as PromiseLike<{

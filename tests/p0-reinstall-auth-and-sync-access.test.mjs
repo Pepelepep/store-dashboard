@@ -52,19 +52,16 @@ import {
 import { computeHourlySalesRows } from "../app/lib/dashboard/hourly-sales.ts";
 import {
   PLAN_DEFINITIONS,
-  PlanCapacityError,
-  applyActiveLocationLimit,
   buildHostedPricingUrl,
   clearBillingCache,
-  countActiveDashboardUsers,
   getActiveSubscription,
   getBillingEnvironment,
   getBillingState,
   requireBillingAccess,
-  requirePlanCapacity,
   resolveCurrentPlan,
   verifyBillingCallbackPlan,
 } from "../app/lib/billing.server.ts";
+import { summarizeEntitlements } from "../app/lib/entitlement-model.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -1628,6 +1625,7 @@ test("shop redaction inventory covers every current merchant-scoped table", () =
     "order_transactions",
     "fixed_expenses",
     "user_location_access",
+    "dashboard_memberships",
     "staff_identity_aliases",
     "staff_people",
     "order_lines",
@@ -1865,7 +1863,7 @@ test("marketplace identity and Shopify App Pricing configuration are exact", () 
   });
 });
 
-test("billing-disabled mode requires no Partner configuration, lookup, redirect, or limit enforcement", async () => {
+test("billing-disabled mode requires no Partner configuration or lookup", async () => {
   let adminCalls = 0;
   let partnerCalls = 0;
   const environment = getBillingEnvironment({ BILLING_ENABLED: "false" });
@@ -1889,18 +1887,8 @@ test("billing-disabled mode requires no Partner configuration, lookup, redirect,
     environment,
     fetchImpl,
   });
-  const capacity = await requirePlanCapacity({
-    admin,
-    shop: "billing-disabled.myshopify.com",
-    resource: "active_locations",
-    currentUsage: 100,
-    environment,
-    fetchImpl,
-  });
-
   assert.deepEqual(state, { state: "disabled", billingEnabled: false });
   assert.equal(access.access, "allowed");
-  assert.equal(capacity.enforced, false);
   assert.equal(adminCalls, 0);
   assert.equal(partnerCalls, 0);
 });
@@ -2145,13 +2133,12 @@ test("billing cache reuses reads and explicit refresh paths bypass it", async ()
     environment: enabledBillingEnvironment,
     fetchImpl,
   });
-  await requirePlanCapacity({
+  await getBillingState({
     admin: billingAdmin(),
     shop: shopDomain,
-    resource: "dashboard_users",
-    currentUsage: 0,
     environment: enabledBillingEnvironment,
     fetchImpl,
+    bypassCache: true,
   });
 
   assert.equal(partnerCalls, 2);
@@ -2197,132 +2184,107 @@ test("billing callback matching rejects forged and mismatched plan handles", () 
   );
 });
 
-test("location capacity permits plan limits, blocks only additions, and preserves downgrade history", () => {
-  const plans = [
-    { handle: "solo", limit: 1 },
-    { handle: "growth", limit: 5 },
-    { handle: "multi-location", limit: 10 },
-    { handle: "qa-pilot", limit: null },
-  ];
+function membership(id, role, overrides = {}) {
+  return {
+    id,
+    personId: id,
+    displayName: id,
+    userEmail: `${id}@example.com`,
+    role,
+    status: "active",
+    isOwner: role === "owner",
+    ...overrides,
+  };
+}
 
-  for (const { handle, limit } of plans) {
-    const count = limit ?? 25;
-    const allowed = applyActiveLocationLimit({
-      incoming: Array.from({ length: count }, (_, index) => ({
-        id: `${handle}-${index}`,
-        isActive: true,
-      })),
-      existingActiveIds: [],
-      limit,
-    });
-    assert.equal(allowed.blockedIds.length, 0);
+function reportingLocation(id, overrides = {}) {
+  return {
+    id,
+    shopifyLocationId: id,
+    name: id,
+    shopifyIsActive: true,
+    reportingEnabled: true,
+    ...overrides,
+  };
+}
 
-    const oneMore = applyActiveLocationLimit({
-      incoming: Array.from({ length: count + 1 }, (_, index) => ({
-        id: `${handle}-${index}`,
-        isActive: true,
-      })),
-      existingActiveIds: [],
-      limit,
-    });
-    assert.equal(oneMore.blockedIds.length, limit === null ? 0 : 1);
-  }
-
-  const downgraded = applyActiveLocationLimit({
-    incoming: ["a", "b", "c", "d"].map((id) => ({ id, isActive: true })),
-    existingActiveIds: ["a", "b", "c"],
-    limit: 1,
+test("canonical memberships count every dashboard role exactly once and exclude Staff/POS-only profiles", () => {
+  const limits = {
+    planHandle: "qa-pilot",
+    planName: "QA Pilot",
+    activeLocations: null,
+    dashboardUsers: null,
+  };
+  const summary = summarizeEntitlements({
+    memberships: [
+      membership("owner", "owner"),
+      membership("admin", "admin"),
+      membership("manager", "manager"),
+      membership("viewer", "viewer"),
+      membership("disabled", "viewer", { status: "disabled" }),
+    ],
+    locations: [reportingLocation("a")],
+    limits,
   });
-  assert.deepEqual([...downgraded.activeIds].sort(), ["a", "b", "c"]);
-  assert.deepEqual(downgraded.blockedIds, ["d"]);
+
+  assert.equal(summary.activeDashboardUsers, 4);
+  assert.equal(summary.activeReportingLocations, 1);
+  assert.equal(summary.resolutionRequired, false);
+  assert.equal([{ id: "pos-only" }, { id: "staff-only" }].length, 2);
 });
 
-test("dashboard-user capacity uses only Team access identities and permits over-limit edits", async () => {
-  const dashboardRows = [
-    {
-      id: "1",
-      access_label: "Owner",
-      user_email: "owner@example.com",
-      shopify_user_id: "100",
-    },
-    {
-      id: "2",
-      access_label: "Owner",
-      user_email: "OWNER@example.com",
-      shopify_user_id: "100",
-    },
-  ];
-  const detectedPosSellers = [{ id: "pos-1" }, { id: "pos-2" }];
-  const staffProfilesWithoutDashboardAccess = [{ id: "staff-1" }];
-  assert.equal(countActiveDashboardUsers(dashboardRows), 1);
-  assert.equal(detectedPosSellers.length, 2);
-  assert.equal(staffProfilesWithoutDashboardAccess.length, 1);
-
-  let calls = 0;
-  const editResult = await requirePlanCapacity({
-    admin: billingAdmin("gid://shopify/Shop/edit", () => {
-      calls += 1;
-    }),
-    shop: "billing-over-limit-edit.myshopify.com",
-    resource: "dashboard_users",
-    currentUsage: 20,
-    requestedIncrease: 0,
-    environment: enabledBillingEnvironment,
-    fetchImpl: async () => {
-      calls += 1;
-      throw new Error("must not fetch for an edit");
-    },
+test("Solo owner consumes its only seat and explicit location selection resolves access", () => {
+  const limits = {
+    planHandle: "solo",
+    planName: "Solo",
+    activeLocations: 1,
+    dashboardUsers: 1,
+  };
+  const compliant = summarizeEntitlements({
+    memberships: [membership("owner", "owner")],
+    locations: [
+      reportingLocation("selected"),
+      reportingLocation("stored", { reportingEnabled: false }),
+    ],
+    limits,
   });
-  assert.equal(editResult.enforced, false);
-  assert.equal(calls, 0);
+  assert.equal(compliant.activeDashboardUsers, 1);
+  assert.equal(compliant.activeReportingLocations, 1);
+  assert.equal(compliant.resolutionRequired, false);
+
+  const extraUser = summarizeEntitlements({
+    memberships: [
+      membership("owner", "owner"),
+      membership("shopify-admin", "admin"),
+    ],
+    locations: [reportingLocation("selected")],
+    limits,
+  });
+  assert.equal(extraUser.userLimitExceeded, true);
+  assert.equal(extraUser.resolutionRequired, true);
 });
 
-test("dashboard-user enforcement allows each finite boundary and blocks the next user", async () => {
-  for (const [index, { handle, limit }] of [
-    { handle: "solo", limit: 1 },
-    { handle: "growth", limit: 5 },
-  ].entries()) {
-    const allowedShop = `user-limit-allowed-${index}.myshopify.com`;
-    await requirePlanCapacity({
-      admin: billingAdmin(),
-      shop: allowedShop,
-      resource: "dashboard_users",
-      currentUsage: limit - 1,
-      environment: enabledBillingEnvironment,
-      fetchImpl: subscriptionFetch(
-        activeSubscriptionPayload({ shopDomain: allowedShop, handle }),
-      ),
-    });
-
-    const blockedShop = `user-limit-blocked-${index}.myshopify.com`;
-    await assert.rejects(
-      requirePlanCapacity({
-        admin: billingAdmin(),
-        shop: blockedShop,
-        resource: "dashboard_users",
-        currentUsage: limit,
-        environment: enabledBillingEnvironment,
-        fetchImpl: subscriptionFetch(
-          activeSubscriptionPayload({ shopDomain: blockedShop, handle }),
-        ),
-      }),
-      PlanCapacityError,
+test("finite reporting-location limits block over-limit states without changing detected locations", () => {
+  for (const { planHandle, limit } of [
+    { planHandle: "solo", limit: 1 },
+    { planHandle: "growth", limit: 5 },
+    { planHandle: "multi-location", limit: 10 },
+  ]) {
+    const locations = Array.from({ length: limit + 1 }, (_, index) =>
+      reportingLocation(`${planHandle}-${index}`),
     );
-  }
-
-  for (const [index, handle] of ["multi-location", "qa-pilot"].entries()) {
-    const shopDomain = `user-limit-unlimited-${index}.myshopify.com`;
-    const result = await requirePlanCapacity({
-      admin: billingAdmin(),
-      shop: shopDomain,
-      resource: "dashboard_users",
-      currentUsage: 10_000,
-      environment: enabledBillingEnvironment,
-      fetchImpl: subscriptionFetch(
-        activeSubscriptionPayload({ shopDomain, handle }),
-      ),
+    const summary = summarizeEntitlements({
+      memberships: [membership("owner", "owner")],
+      locations,
+      limits: {
+        planHandle,
+        planName: planHandle,
+        activeLocations: limit,
+        dashboardUsers: null,
+      },
     });
-    assert.equal(result.limit, null);
+    assert.equal(summary.locationLimitExceeded, true);
+    assert.equal(locations.length, limit + 1);
   }
 });
 
@@ -2355,7 +2317,7 @@ test("billing route safety excludes OAuth, webhooks, charge creation, and client
   assert.match(appRoute, /isBillingRoute \? \(/);
   assert.match(
     appRoute,
-    /if \(isBillingRoutePath\(url\.pathname\)\)[\s\S]*?billingEnabled: false/,
+    /if \(isBillingRoutePath\(url\.pathname\)\)[\s\S]*?accessState: "allowed"/,
   );
   assert.match(callbackRoute, /authenticate\.admin\(request\)/);
   assert.match(callbackRoute, /refreshBillingState/);
@@ -2393,7 +2355,7 @@ test("POS merchant modal has automatic attribution state and no diagnostics", ()
   assert.match(locale, /Staff attribution is active/);
 });
 
-test("Location Performance applies Team Access for admin, manager, viewer, and no-location users", () => {
+test("Location Performance applies dashboard membership access for admin, manager, viewer, and no-location users", () => {
   const locations = [
     { shopify_location_id: "location-a", name: "A" },
     { shopify_location_id: "location-b", name: "B" },
@@ -2448,7 +2410,7 @@ test("Location Performance applies Team Access for admin, manager, viewer, and n
     new URL("../app/routes/app.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(locationRoute, /getPermissionContext/);
+  assert.match(locationRoute, /assertReportingEntitlements/);
   assert.equal(locationRoute.includes("assertAdminAccess"), false);
   assert.match(
     appShell,
@@ -2459,6 +2421,158 @@ test("Location Performance applies Team Access for admin, manager, viewer, and n
     /\{canAdmin \? \([\s\n]*<a href=\{`\/app\/locations/,
   );
   assert.match(appShell, /\{canAdmin \? <a href=\{setupPath\}>Setup<\/a>/);
+});
+
+test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-decoding bypass", () => {
+  const shopifyServer = readFileSync(
+    new URL("../app/shopify.server.ts", import.meta.url),
+    "utf8",
+  );
+  const permissions = readFileSync(
+    new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(shopifyServer, /useOnlineTokens:\s*true/);
+  assert.match(permissions, /associatedUser\?\.account_owner/);
+  assert.match(permissions, /materialize_dashboard_owner/);
+  assert.match(permissions, /owner_setup_required/);
+  assert.match(
+    permissions,
+    /You don't have access to ShopOps Studio\. Contact the store owner\./,
+  );
+  assert.doesNotMatch(permissions, /decodeJwtPayload|id_token/);
+  assert.doesNotMatch(
+    permissions,
+    /ADMIN_EMAILS|ADMIN_SHOPIFY_USER_IDS|fresh_install/,
+  );
+});
+
+test("membership RPCs lock each shop and enforce owner, last-admin, archived-staff, and concurrent capacity rules", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const staffRoute = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const legacyRoute = readFileSync(
+    new URL("../app/routes/app.admin.permissions.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    migration,
+    /CREATE TABLE IF NOT EXISTS public\.dashboard_memberships/,
+  );
+  assert.match(migration, /dashboard_memberships_one_owner_per_shop_uidx/);
+  assert.match(migration, /dashboard_memberships_shop_person_uidx/);
+  assert.match(migration, /pg_advisory_xact_lock/g);
+  assert.match(migration, /dashboard_plan_capacity/);
+  assert.match(migration, /owner_membership_locked/);
+  assert.match(migration, /last_admin_required/);
+  assert.match(migration, /people\.is_active = true/);
+  assert.match(migration, /expand migration can be applied safely/);
+  assert.match(staffRoute, /getFreshPlanLimits/);
+  assert.match(staffRoute, /replace_dashboard_membership_access/);
+  assert.match(staffRoute, /disable_dashboard_membership/);
+  assert.match(staffRoute, /archive_staff_with_dashboard_protection/);
+  assert.doesNotMatch(staffRoute, /replace_staff_dashboard_access/);
+  assert.match(legacyRoute, /\/app\/admin\/staff/);
+  assert.doesNotMatch(legacyRoute, /\.rpc\(/);
+});
+
+test("Shopify location state, reporting selection, report filters, and full sync remain separate", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const dashboard = readFileSync(
+    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+    "utf8",
+  );
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+  const dataQuality = readFileSync(
+    new URL("../app/routes/app.data-quality.tsx", import.meta.url),
+    "utf8",
+  );
+  const financialQa = readFileSync(
+    new URL("../app/routes/app.admin.financial-qa.tsx", import.meta.url),
+    "utf8",
+  );
+  const sync = readFileSync(
+    new URL("../app/lib/sync/shopify-sync.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /shopify_is_active boolean/);
+  assert.match(migration, /reporting_enabled boolean/);
+  assert.match(
+    migration,
+    /CREATE OR REPLACE FUNCTION public\.select_reporting_locations/,
+  );
+  assert.match(
+    migration,
+    /reporting_enabled = shopify_is_active AND shopify_location_id = ANY\(v_ids\)/,
+  );
+  for (const source of [dashboard, locations, dataQuality, financialQa]) {
+    assert.match(source, /\.eq\("shopify_is_active", true\)/);
+    assert.match(source, /\.eq\("reporting_enabled", true\)/);
+    assert.match(source, /assertReportingEntitlements/);
+  }
+  assert.match(locations, /const shouldFilterOrderLinesByLocation = true/);
+  assert.match(
+    financialQa,
+    /\.in\("retail_location_id", selectedLocationIds\)/,
+  );
+  assert.match(sync, /shopify_is_active: location\.isActive/);
+  assert.match(sync, /!billingEnabled[\s\S]*reporting_enabled: location\.isActive/);
+  assert.match(sync, /reporting_enabled: false/);
+  assert.doesNotMatch(sync, /applyActiveLocationLimit|PlanCapacityError/);
+});
+
+test("Plan is Setup-only, owner-only pricing uses a one-time server flash, and over-limit copy is present", () => {
+  const appShell = readFileSync(
+    new URL("../app/routes/app.tsx", import.meta.url),
+    "utf8",
+  );
+  const plan = readFileSync(
+    new URL("../app/components/setup/PlanSetup.tsx", import.meta.url),
+    "utf8",
+  );
+  const callback = readFileSync(
+    new URL("../app/routes/app.billing.complete.tsx", import.meta.url),
+    "utf8",
+  );
+  const flash = readFileSync(
+    new URL("../app/lib/flash.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(appShell, />\s*Plan\s*<\/a>/);
+  assert.match(plan, /data\.canManagePlan \? \(/);
+  assert.match(plan, /Owner \(always active\)/);
+  assert.match(plan, /`\$\{usage\} of \$\{limit\}/);
+  assert.match(
+    plan,
+    /Your plan limit has been reached\. Upgrade your plan or remove an[\s\S]*existing dashboard user/,
+  );
+  assert.match(callback, /assertOwnerAccess/);
+  assert.match(callback, /setPlanConfirmedFlash/);
+  assert.match(callback, /\/app\/admin\/setup/);
+  assert.doesNotMatch(callback, /billing", "activated/);
+  assert.match(flash, /session\.flash\("planConfirmed", "Plan confirmed\."\)/);
+  assert.match(flash, /session\.get\("planConfirmed"\)/);
 });
 
 test("Location Net Sales trend reconciles to the headline after order-level cash refunds", () => {

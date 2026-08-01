@@ -6,7 +6,7 @@ import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertReportingEntitlements } from "../lib/entitlements.server";
 import {
   daysBetween,
   formatStoreDateTime,
@@ -266,32 +266,30 @@ async function fetchOrderLines({
   shop,
   startDateUtc,
   endExclusiveUtc,
-  selectedLocationId,
+  selectedLocationIds,
 }: {
   supabase: SupabaseAdminClient;
   shop: string;
   startDateUtc: string;
   endExclusiveUtc: string;
-  selectedLocationId: string;
+  selectedLocationIds: string[];
 }) {
   const rows: OrderLineDbRow[] = [];
   const errors: string[] = [];
+  if (selectedLocationIds.length === 0) return { rows, errors };
   let from = 0;
 
   for (;;) {
     const to = from + PAGE_SIZE - 1;
-    let query = supabase
+    const query = supabase
       .from("order_lines")
       .select("*")
       .eq("shop_domain", shop)
+      .in("retail_location_id", selectedLocationIds)
       .gte("created_at_shopify", startDateUtc)
       .lt("created_at_shopify", endExclusiveUtc)
       .order("created_at_shopify", { ascending: false })
       .range(from, to);
-
-    if (selectedLocationId !== ALL_LOCATIONS_VALUE) {
-      query = query.eq("retail_location_id", selectedLocationId);
-    }
 
     const { data, error } = await query;
 
@@ -400,14 +398,22 @@ function formatDateTime(value: string) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.financial-qa",
     shop: session.shop,
     supabase,
   });
-  await assertAdminAccess({ request, session, supabase });
+  const { permissions } = await assertReportingEntitlements({
+    request,
+    session,
+    supabase,
+    admin,
+  });
+  if (!permissions.isAdmin) {
+    throw new Response("Forbidden: admin access required", { status: 403 });
+  }
 
   const url = new URL(request.url);
   const defaults = getDefaultDateRange();
@@ -428,7 +434,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     .from("locations")
     .select("shopify_location_id, name, is_active")
     .eq("shop_domain", session.shop)
-    .eq("is_active", true)
+    .eq("shopify_is_active", true)
+    .eq("reporting_enabled", true)
     .order("name", { ascending: true });
 
   if (locationsError) errors.push(locationsError.message);
@@ -457,7 +464,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     startDateUtc,
     endExclusiveUtc,
-    selectedLocationId,
+    selectedLocationIds:
+      selectedLocationId === ALL_LOCATIONS_VALUE
+        ? locations.map((location) => location.shopify_location_id)
+        : [selectedLocationId],
   });
   errors.push(...orderLinesResult.errors);
   if (ordersResult.rows.length === 0 && orderLinesResult.rows.length === 0) {
@@ -474,12 +484,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   const lineSummariesByOrder = getLineSummariesByOrder(orderLinesResult.rows);
-  const orderRows =
-    selectedLocationId === ALL_LOCATIONS_VALUE
-      ? ordersResult.rows
-      : ordersResult.rows.filter((order) =>
-          lineSummariesByOrder.has(order.shopify_order_id),
-        );
+  const orderRows = ordersResult.rows.filter((order) =>
+    lineSummariesByOrder.has(order.shopify_order_id),
+  );
 
   const qaRows = orderRows.map((order) => {
     const lineSummary = lineSummariesByOrder.get(order.shopify_order_id) ?? {

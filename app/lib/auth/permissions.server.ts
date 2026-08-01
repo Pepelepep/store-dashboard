@@ -4,100 +4,114 @@ import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
 
 type ShopifySessionLike = {
   shop: string;
+  userId?: string | null;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  accountOwner?: boolean | null;
   onlineAccessInfo?: {
     associated_user?: {
       id?: number | string | null;
       email?: string | null;
       first_name?: string | null;
       last_name?: string | null;
+      account_owner?: boolean | null;
     } | null;
   } | null;
 };
+
+export type DashboardRole = "owner" | "admin" | "manager" | "viewer";
 
 export type CurrentUserIdentity = {
   shop: string;
   email: string | null;
   shopifyUserId: string | null;
   displayName: string;
+  isShopifyAccountOwner: boolean;
+};
+
+export type DashboardMembership = {
+  id: string;
+  personId: string | null;
+  shopifyUserId: string | null;
+  userEmail: string | null;
+  displayName: string;
+  role: DashboardRole;
+  status: "active" | "disabled";
+  isOwner: boolean;
 };
 
 export type PermissionContext = {
   identity: CurrentUserIdentity;
+  membership: DashboardMembership | null;
+  hasOwner: boolean;
+  isActiveMember: boolean;
+  isOwner: boolean;
   isAdmin: boolean;
-  role: string | null;
-  accessSource: "env_user_id" | "env_email" | "db_rule" | "fresh_install" | "none";
+  role: DashboardRole | null;
+  accessSource: "owner" | "membership" | "owner_setup_required" | "none";
   allowedLocationIds: Set<string>;
 };
 
-type PermissionRow = {
-  id?: string;
-  user_email: string | null;
+type MembershipRow = {
+  id: string;
+  person_id: string | null;
   shopify_user_id: string | null;
+  normalized_email: string | null;
+  display_name: string;
+  role: DashboardRole;
+  status: "active" | "disabled";
+  is_owner: boolean;
+};
+
+type PermissionRow = {
+  id: string;
   shopify_location_id: string | null;
-  role: string | null;
   can_view: boolean | null;
   can_manage: boolean | null;
 };
-
-function parseCsvEnv(value: string | undefined) {
-  return new Set(
-    (value ?? "")
-      .split(",")
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean),
-  );
-}
-
-function decodeJwtPayload(token: string | null) {
-  if (!token) return null;
-
-  try {
-    const [, payload] = token.split(".");
-    if (!payload) return null;
-
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(
-      normalized.length + ((4 - (normalized.length % 4)) % 4),
-      "=",
-    );
-
-    return JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as {
-      sub?: string | number;
-    };
-  } catch {
-    return null;
-  }
-}
 
 function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() || null;
 }
 
-function normalizeShopifyUserId(userId: string | null | undefined) {
-  return userId?.trim() || null;
+function normalizeShopifyUserId(userId: string | number | null | undefined) {
+  if (userId === undefined || userId === null) return null;
+  return String(userId).trim() || null;
 }
 
+function toMembership(row: MembershipRow): DashboardMembership {
+  return {
+    id: row.id,
+    personId: row.person_id,
+    shopifyUserId: normalizeShopifyUserId(row.shopify_user_id),
+    userEmail: normalizeEmail(row.normalized_email),
+    displayName: row.display_name,
+    role: row.role,
+    status: row.status,
+    isOwner: row.is_owner,
+  };
+}
+
+/**
+ * Identity comes only from the server-verified Shopify session. Request query
+ * parameters are deliberately ignored because Shopify authentication has
+ * already verified and persisted these fields before this code runs.
+ */
 export function getCurrentUserIdentity({
-  request,
   session,
 }: {
-  request: Request;
+  request?: Request;
   session: ShopifySessionLike;
 }): CurrentUserIdentity {
-  const url = new URL(request.url);
-  const idTokenPayload = decodeJwtPayload(url.searchParams.get("id_token"));
   const associatedUser = session.onlineAccessInfo?.associated_user;
-
-  const email = normalizeEmail(associatedUser?.email);
+  const email = normalizeEmail(associatedUser?.email ?? session.email);
   const shopifyUserId = normalizeShopifyUserId(
-    associatedUser?.id !== undefined && associatedUser?.id !== null
-      ? String(associatedUser.id)
-      : idTokenPayload?.sub !== undefined && idTokenPayload?.sub !== null
-        ? String(idTokenPayload.sub)
-        : null,
+    associatedUser?.id ?? session.userId,
   );
-
-  const nameParts = [associatedUser?.first_name, associatedUser?.last_name]
+  const firstName = associatedUser?.first_name ?? session.firstName;
+  const lastName = associatedUser?.last_name ?? session.lastName;
+  const nameParts = [firstName, lastName]
     .map((part) => part?.trim())
     .filter(Boolean);
 
@@ -107,148 +121,184 @@ export function getCurrentUserIdentity({
     shopifyUserId,
     displayName:
       nameParts.join(" ") || email || shopifyUserId || "Unknown user",
+    isShopifyAccountOwner: Boolean(
+      associatedUser?.account_owner ?? session.accountOwner,
+    ),
   };
 }
 
+async function materializeVerifiedOwner({
+  identity,
+  supabase,
+}: {
+  identity: CurrentUserIdentity;
+  supabase: SupabaseClient;
+}) {
+  if (!identity.isShopifyAccountOwner) return;
+  if (!identity.shopifyUserId && !identity.email) {
+    throw new Response(
+      "Shopify did not provide the account owner's identity.",
+      {
+        status: 403,
+      },
+    );
+  }
+
+  const { error } = await supabase.rpc("materialize_dashboard_owner", {
+    p_shop_domain: identity.shop,
+    p_shopify_user_id: identity.shopifyUserId,
+    p_normalized_email: identity.email,
+    p_display_name: identity.displayName,
+  });
+  if (error) throw new Response(error.message, { status: 500 });
+}
+
 export async function getPermissionContext({
-  request,
   session,
   supabase,
 }: {
-  request: Request;
+  request?: Request;
   session: ShopifySessionLike;
   supabase: SupabaseClient;
 }): Promise<PermissionContext> {
-  const identity = getCurrentUserIdentity({ request, session });
-  const adminEmails = parseCsvEnv(process.env.ADMIN_EMAILS);
-  const adminShopifyUserIds = parseCsvEnv(process.env.ADMIN_SHOPIFY_USER_IDS);
+  const identity = getCurrentUserIdentity({ session });
+  await materializeVerifiedOwner({ identity, supabase });
 
-  let rows: PermissionRow[] = [];
-  let shopPermissionRuleCount = 0;
+  const membershipRows = await fetchAllSupabasePages<MembershipRow>({
+    label: "Dashboard memberships",
+    getRowKey: (row) => row.id,
+    fetchPage: (from, to) =>
+      supabase
+        .from("dashboard_memberships")
+        .select(
+          "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
+        )
+        .eq("shop_domain", session.shop)
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: MembershipRow[] | null;
+        error: { message: string } | null;
+      }>,
+  });
 
-  if (identity.email || identity.shopifyUserId) {
-    const { count, error: countError } = await supabase
-      .from("user_location_access")
-      .select("*", { count: "exact", head: true })
-      .eq("shop_domain", session.shop);
+  const memberships = membershipRows.map(toMembership);
+  const owner = memberships.find((membership) => membership.isOwner) ?? null;
+  const userIdMembership = memberships.find(
+    (candidate) =>
+      Boolean(identity.shopifyUserId) &&
+      candidate.shopifyUserId === identity.shopifyUserId,
+  );
+  const emailMembership = memberships.find(
+    (candidate) =>
+      Boolean(identity.email) && candidate.userEmail === identity.email,
+  );
+  if (
+    userIdMembership &&
+    emailMembership &&
+    userIdMembership.id !== emailMembership.id
+  ) {
+    throw new Response(
+      "You don't have access to ShopOps Studio. Contact the store owner.",
+      { status: 403 },
+    );
+  }
+  const membership = userIdMembership ?? emailMembership ?? null;
+  const activeMembership = membership?.status === "active" ? membership : null;
 
-    if (countError) throw new Response(countError.message, { status: 500 });
-    shopPermissionRuleCount = count ?? 0;
-
-    const permissionRows = await fetchAllSupabasePages<
-      PermissionRow & { id: string }
-    >({
-      label: "Team Access rules",
+  const allowedLocationIds = new Set<string>();
+  if (activeMembership && !activeMembership.isOwner) {
+    const accessRows = await fetchAllSupabasePages<PermissionRow>({
+      label: "Dashboard location access",
       getRowKey: (row) => row.id,
       fetchPage: (from, to) =>
         supabase
           .from("user_location_access")
-          .select(
-            "id, user_email, shopify_user_id, shopify_location_id, role, can_view, can_manage",
-          )
+          .select("id, shopify_location_id, can_view, can_manage")
           .eq("shop_domain", session.shop)
+          .eq("membership_id", activeMembership.id)
           .order("id", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
-          data: Array<PermissionRow & { id: string }> | null;
+          data: PermissionRow[] | null;
           error: { message: string } | null;
         }>,
     });
-    rows = permissionRows.filter((row) => {
-      const rowEmail = normalizeEmail(row.user_email);
-      const rowShopifyUserId = normalizeShopifyUserId(row.shopify_user_id);
 
-      return (
-        (identity.email && rowEmail === identity.email) ||
-        (identity.shopifyUserId && rowShopifyUserId === identity.shopifyUserId)
-      );
-    });
-  }
-
-  const isEnvUserIdAdmin = identity.shopifyUserId
-    ? adminShopifyUserIds.has(identity.shopifyUserId.toLowerCase())
-    : false;
-  const isEnvEmailAdmin = identity.email ? adminEmails.has(identity.email) : false;
-  const isBootstrapAdmin = isEnvUserIdAdmin || isEnvEmailAdmin;
-  const isFreshInstallSetupAdmin =
-    shopPermissionRuleCount === 0 &&
-    Boolean(identity.email || identity.shopifyUserId);
-  if (isFreshInstallSetupAdmin) {
-    console.info("[fresh-install:permissions] setup admin enabled", {
-      route: "permissions",
-      shop: session.shop,
-      emptyPermissionRules: true,
-    });
-  }
-
-  const isDbAdmin = rows.some((row) => row.role === "admin");
-  const hasDbRule = rows.length > 0;
-  const isAdmin = isBootstrapAdmin || isDbAdmin || isFreshInstallSetupAdmin;
-  const accessSource: PermissionContext["accessSource"] = isEnvUserIdAdmin
-    ? "env_user_id"
-    : isEnvEmailAdmin
-      ? "env_email"
-      : isDbAdmin
-        ? "db_rule"
-        : isFreshInstallSetupAdmin
-          ? "fresh_install"
-          : hasDbRule
-            ? "db_rule"
-            : "none";
-
-  console.info("[permissions] access evaluated", {
-    shop: session.shop,
-    shopify_user_id_present: Boolean(identity.shopifyUserId),
-    email_present: Boolean(identity.email),
-    admin_source: accessSource,
-  });
-
-  const allowedLocationIds = new Set<string>();
-  for (const row of rows) {
-    if (!row.shopify_location_id || row.shopify_location_id === "*") continue;
-    if (
-      row.can_view ||
-      row.can_manage ||
-      row.role === "manager" ||
-      row.role === "viewer"
-    ) {
-      allowedLocationIds.add(row.shopify_location_id);
+    for (const row of accessRows) {
+      if (!row.shopify_location_id || row.shopify_location_id === "*") continue;
+      if (row.can_view || row.can_manage) {
+        allowedLocationIds.add(row.shopify_location_id);
+      }
     }
   }
 
-  const role = isAdmin
-    ? "admin"
-    : rows.some((row) => row.role === "manager")
-      ? "manager"
-      : rows.some((row) => row.role === "viewer")
-        ? "viewer"
-        : null;
+  const isActiveMember = Boolean(activeMembership);
+  const isOwner = Boolean(activeMembership?.isOwner);
+  const isAdmin =
+    isActiveMember && (isOwner || activeMembership?.role === "admin");
+  const accessSource: PermissionContext["accessSource"] = isOwner
+    ? "owner"
+    : isActiveMember
+      ? "membership"
+      : owner
+        ? "none"
+        : "owner_setup_required";
 
   return {
     identity,
+    membership: activeMembership,
+    hasOwner: Boolean(owner),
+    isActiveMember,
+    isOwner,
     isAdmin,
-    role,
+    role: activeMembership?.role ?? null,
     accessSource,
     allowedLocationIds,
   };
 }
 
-export async function assertAdminAccess(args: {
-  request: Request;
+export async function assertDashboardAccess(args: {
+  request?: Request;
   session: ShopifySessionLike;
   supabase: SupabaseClient;
 }) {
   const permissions = await getPermissionContext(args);
-
-  if (!permissions.identity.email && !permissions.identity.shopifyUserId) {
+  if (!permissions.hasOwner) {
     throw new Response(
-      "Forbidden: ShopOps Studio could not detect your Shopify session identity. Reopen the app from Shopify admin and ask an app admin to confirm your access.",
+      "ShopOps Studio setup must be completed by the Shopify store owner.",
       { status: 403 },
     );
   }
+  if (!permissions.isActiveMember) {
+    throw new Response(
+      "You don't have access to ShopOps Studio. Contact the store owner.",
+      { status: 403 },
+    );
+  }
+  return permissions;
+}
 
+export async function assertAdminAccess(args: {
+  request?: Request;
+  session: ShopifySessionLike;
+  supabase: SupabaseClient;
+}) {
+  const permissions = await assertDashboardAccess(args);
   if (!permissions.isAdmin) {
     throw new Response("Forbidden: admin access required", { status: 403 });
   }
+  return permissions;
+}
 
+export async function assertOwnerAccess(args: {
+  request?: Request;
+  session: ShopifySessionLike;
+  supabase: SupabaseClient;
+}) {
+  const permissions = await assertDashboardAccess(args);
+  if (!permissions.isOwner) {
+    throw new Response("Forbidden: store owner access required", {
+      status: 403,
+    });
+  }
   return permissions;
 }

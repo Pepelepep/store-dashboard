@@ -15,7 +15,7 @@ import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
-import { getPermissionContext } from "../lib/auth/permissions.server";
+import { assertReportingEntitlements } from "../lib/entitlements.server";
 import {
   getAccessibleLocationRows,
   hasNoAssignedLocationAccess,
@@ -1028,17 +1028,18 @@ function computeRevenueBreakdown({
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.locations",
     shop: session.shop,
     supabase,
   });
-  const permissions = await getPermissionContext({
+  const { permissions } = await assertReportingEntitlements({
     request,
     session,
     supabase,
+    admin,
   });
   const url = new URL(request.url);
   const shouldShowDebugInfo =
@@ -1094,7 +1095,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
         .from("locations")
         .select("id, shopify_location_id, name, is_active")
         .eq("shop_domain", session.shop)
-        .eq("is_active", true)
+        .eq("shopify_is_active", true)
+        .eq("reporting_enabled", true)
         .order("name", { ascending: true })
         .order("id", { ascending: true })
         .range(from, to) as unknown as PromiseLike<{
@@ -1137,8 +1139,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     accessibleLocations.every((location) =>
       selectedLocationIdSet.has(location.shopify_location_id),
     );
-  const shouldFilterOrderLinesByLocation =
-    !permissions.isAdmin || !isAllAccessibleLocationsSelected;
+  const shouldFilterOrderLinesByLocation = true;
 
   const [orderLinesResult, expenses] = await Promise.all([
     selectedLocationIds.length > 0
@@ -2446,10 +2447,7 @@ function StaffLeaderboard({
                 scope="col"
                 style={{
                   borderBottom: "1px solid #dfe3e8",
-                  borderLeft:
-                    index === 0
-                      ? "3px solid transparent"
-                      : undefined,
+                  borderLeft: index === 0 ? "3px solid transparent" : undefined,
                   color: "#6b7280",
                   fontSize: 11,
                   fontWeight: 800,

@@ -8,6 +8,10 @@ import {
   refreshBillingState,
   verifyBillingCallbackPlan,
 } from "../lib/billing.server";
+import { assertOwnerAccess } from "../lib/auth/permissions.server";
+import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { setPlanConfirmedFlash } from "../lib/flash.server";
+import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
 
 function buildVerifiedRedirect(url: URL) {
@@ -15,13 +19,21 @@ function buildVerifiedRedirect(url: URL) {
   searchParams.delete("plan_handle");
   searchParams.delete("billing_state");
   searchParams.delete("retry");
-  searchParams.set("billing", "activated");
+  searchParams.delete("billing");
+  searchParams.set("tab", "plan");
   const search = searchParams.toString();
-  return `/app/db-dashboard${search ? `?${search}` : ""}`;
+  return `/app/admin/setup${search ? `?${search}` : ""}`;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
+  const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "billing-complete",
+    shop: session.shop,
+    supabase,
+  });
+  await assertOwnerAccess({ request, session, supabase });
   const url = new URL(request.url);
   const returnedPlanHandle = url.searchParams.get("plan_handle");
 
@@ -72,7 +84,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
-  throw redirect(buildVerifiedRedirect(url));
+  throw redirect(buildVerifiedRedirect(url), {
+    headers: { "Set-Cookie": await setPlanConfirmedFlash(request) },
+  });
 }
 
 export default function BillingComplete() {

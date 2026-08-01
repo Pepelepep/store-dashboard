@@ -6,6 +6,9 @@ import {
   getBillingState,
   refreshBillingState,
 } from "../lib/billing.server";
+import { assertOwnerAccess } from "../lib/auth/permissions.server";
+import { getSupabaseAdminClient } from "../lib/db/supabase.server";
+import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
 
 function buildEmbeddedPath(
@@ -24,6 +27,13 @@ function buildEmbeddedPath(
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { admin, session } = await authenticate.admin(request);
+  const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "billing-required",
+    shop: session.shop,
+    supabase,
+  });
+  await assertOwnerAccess({ request, session, supabase });
   const url = new URL(request.url);
   const billing =
     url.searchParams.get("retry") === "1"
