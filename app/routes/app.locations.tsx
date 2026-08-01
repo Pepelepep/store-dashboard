@@ -1550,7 +1550,9 @@ function KpiGrid({
   const grossSales = kpis.grossSales ?? kpis.revenue;
   const discounts = kpis.discounts ?? 0;
   const discountPercent =
-    grossSales > 0 ? `${((discounts / grossSales) * 100).toFixed(1)}%` : "0.0%";
+    grossSales > 0
+      ? formatPercent((discounts / grossSales) * 100)
+      : formatPercent(0);
   const grossProfitNotice = kpis.cogsIncomplete ? (
     <ReportKpiNotice tone="warning">
       <div>
@@ -2305,7 +2307,7 @@ function RankedBreakdownBars({
             title={[
               `${itemLabel}: ${row.label}`,
               `${revenueLabel}: ${formatCurrency(row.revenue)}`,
-              `Percent: ${row.percent.toFixed(1)}%`,
+              `Percent: ${formatPercent(row.percent)}`,
               `Orders: ${formatNumber(row.ordersCount)}`,
               `Units: ${formatNumber(row.unitsSold)}`,
             ].join("\n")}
@@ -2396,7 +2398,7 @@ function RankedBreakdownBars({
                 whiteSpace: "nowrap",
               }}
             >
-              {formatCurrency(row.revenue)} · {row.percent.toFixed(1)}%
+              {formatCurrency(row.revenue)} · {formatPercent(row.percent)}
             </span>
           </div>
         );

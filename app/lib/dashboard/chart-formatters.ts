@@ -1,7 +1,9 @@
+const SHOP_OPS_DISPLAY_LOCALE = "fr-CA";
+
 export function formatCurrencyAxis(value: number) {
   const absoluteValue = Math.abs(Number(value));
 
-  return new Intl.NumberFormat("en-CA", {
+  return new Intl.NumberFormat(SHOP_OPS_DISPLAY_LOCALE, {
     style: "currency",
     currency: "CAD",
     notation: "compact",
@@ -15,7 +17,7 @@ export function formatCurrencyAxis(value: number) {
 }
 
 export function formatIntegerAxis(value: number) {
-  return new Intl.NumberFormat("en-CA", {
+  return new Intl.NumberFormat(SHOP_OPS_DISPLAY_LOCALE, {
     maximumFractionDigits: 0,
   }).format(Number(value));
 }
@@ -36,10 +38,7 @@ export function hasMirrorChartActivity(
 
 export type TrendPeriod = "day" | "week" | "month" | "year";
 
-export function formatTrendPeriodLabel(
-  periodKey: string,
-  period: TrendPeriod,
-) {
+export function formatTrendPeriodLabel(periodKey: string, period: TrendPeriod) {
   if (period === "year") return periodKey;
 
   if (period === "week") {
@@ -56,7 +55,7 @@ export function formatTrendPeriodLabel(
     Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3] ?? 1)),
   );
 
-  return new Intl.DateTimeFormat("en-CA", {
+  return new Intl.DateTimeFormat(SHOP_OPS_DISPLAY_LOCALE, {
     day: period === "day" ? "numeric" : undefined,
     month: "short",
     timeZone: "UTC",

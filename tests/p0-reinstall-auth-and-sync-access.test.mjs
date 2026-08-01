@@ -3008,6 +3008,18 @@ test("shared report KPI order, labels, formatting, and categories are canonical"
   assert.match(renderer, /data-item-count=\{items\.length\}/);
   assert.match(
     presentation,
+    /\.shopops-kpi-grid\[data-item-count="11"\] \{ grid-template-columns: repeat\(12, minmax\(0, 1fr\)\); \}/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-kpi-grid\[data-item-count="11"\] > \.shopops-kpi-card \{ grid-column: span 2; \}/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-kpi-grid\[data-item-count="11"\] > \.shopops-kpi-card:nth-child\(7\) \{ grid-column: 2 \/ span 2; \}/,
+  );
+  assert.match(
+    presentation,
     /\.shopops-kpi-card\[data-category="commercial"\] \{[^}]*border-top-color: var\(--shopops-accent\)/,
   );
   assert.match(
@@ -3032,14 +3044,14 @@ test("Settings separates data freshness from scheduler state at the shared width
     "Current data status",
     "Last successful update",
     "Automatic synchronization",
-    "Next automatic check",
+    "Automatic check timing",
     "Delayed automatic check",
   ]) {
     assert.match(sync, new RegExp(label));
   }
   assert.match(
     sync,
-    /Current data can still be up to date; the background scheduler[\s\n]+has not completed a successful check on schedule\./,
+    /Current data can still be up to date; the background scheduler has not completed a successful check on schedule\./,
   );
   assert.match(
     sync,
@@ -3051,7 +3063,17 @@ test("Settings separates data freshness from scheduler state at the shared width
   );
   assert.match(
     sync,
-    /<ContentCard className="overall-row" title="Synchronization status">/,
+    /className="sync-status-card"[\s\S]*?title="Synchronization status"/,
+  );
+  assert.match(sync, /className="sync-section-intro"/);
+  assert.match(
+    sync,
+    /\.sync-status-grid\{[^}]*grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/,
+  );
+  assert.doesNotMatch(sync, /background:#f4f5f4/);
+  assert.match(
+    sync,
+    /\.sync-page \.primary:disabled\{background:#e5e7eb;border-color:#d1d5db;color:#6b7280;/,
   );
   assert.match(
     sync,
@@ -3466,13 +3488,16 @@ test("chart display helpers separate currency, integer, period, and zero states"
     true,
   );
   assert.equal(hasMirrorChartActivity([{ sales: 100, orders: 0 }]), true);
-  assert.equal(formatNonZeroCurrencyLabel(367), "$367");
+  assert.equal(
+    formatNonZeroCurrencyLabel(367).replaceAll("\u00a0", " "),
+    "367 $",
+  );
   assert.equal(formatNonZeroCurrencyLabel(0), "");
   assert.equal(formatNonZeroIntegerLabel(7), "7");
   assert.equal(formatNonZeroIntegerLabel(0), "");
-  assert.equal(formatTrendPeriodLabel("2026-07-01", "day"), "Jul 1");
+  assert.equal(formatTrendPeriodLabel("2026-07-01", "day"), "1 juill.");
   assert.equal(formatTrendPeriodLabel("2026-W27", "week"), "W27");
-  assert.equal(formatTrendPeriodLabel("2026-07", "month"), "Jul 2026");
+  assert.equal(formatTrendPeriodLabel("2026-07", "month"), "juill. 2026");
   assert.equal(formatTrendPeriodLabel("2026", "year"), "2026");
 });
 
@@ -3687,7 +3712,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(sharedChart, /ShopOpsChartEmptyState/);
   assert.match(sharedChart, /SHOP_OPS_CHART_MARGIN/);
   assert.match(sharedChart, /SHOP_OPS_GRID_PROPS/);
-  assert.match(formatCurrencyAxis(12500), /\$13K|\$12\.5K/);
+  assert.match(formatCurrencyAxis(12500), /12,5.*k.*\$/);
   assert.equal(formatIntegerAxis(12.4), "12");
   assert.equal(packageJson.dependencies.recharts, "^3.10.1");
   assert.match(packageLock, /"node_modules\/recharts"/);

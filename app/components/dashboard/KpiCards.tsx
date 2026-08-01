@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router";
 import {
   formatCurrency,
   formatNumber,
+  formatPercent,
 } from "../../lib/dashboard/dashboard-metrics";
 import {
   buildSharedReportKpiItems,
@@ -40,7 +41,9 @@ export function KpiCards({
   const grossSales = kpis.grossSales ?? kpis.revenue;
   const discounts = kpis.discounts ?? 0;
   const discountPercent =
-    grossSales > 0 ? `${((discounts / grossSales) * 100).toFixed(1)}%` : "0.0%";
+    grossSales > 0
+      ? formatPercent((discounts / grossSales) * 100)
+      : formatPercent(0);
 
   const grossProfitDetail = kpis.cogsIncomplete ? (
     <ReportKpiNotice tone="warning">

@@ -17,6 +17,7 @@ import { allocateExpensesByLocation } from "../financial/expense-allocation";
 import { computeHourlySalesRows, getHourInTimeZone } from "./hourly-sales";
 
 export const STORE_TIME_ZONE = "America/Toronto";
+export const SHOP_OPS_DISPLAY_LOCALE = "fr-CA";
 export const UNKNOWN_STAFF_FILTER_VALUE = "__unknown_staff__";
 
 export function normalizeFinancialMetricsVersion(
@@ -193,14 +194,21 @@ export function storeDateToUtcIso(date: string) {
 }
 
 export function formatCurrency(value: number) {
-  return new Intl.NumberFormat("fr-CA", {
+  return new Intl.NumberFormat(SHOP_OPS_DISPLAY_LOCALE, {
     style: "currency",
     currency: "CAD",
   }).format(value);
 }
 
 export function formatNumber(value: number) {
-  return new Intl.NumberFormat("fr-CA").format(value);
+  return new Intl.NumberFormat(SHOP_OPS_DISPLAY_LOCALE).format(value);
+}
+
+export function formatDecimal(value: number, fractionDigits = 1) {
+  return new Intl.NumberFormat(SHOP_OPS_DISPLAY_LOCALE, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(value);
 }
 
 export function formatPercent(value: number | null) {
@@ -208,18 +216,40 @@ export function formatPercent(value: number | null) {
     return "-";
   }
 
-  return `${value.toFixed(1)}%`;
+  return new Intl.NumberFormat(SHOP_OPS_DISPLAY_LOCALE, {
+    style: "percent",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value / 100);
+}
+
+export function formatStoreDate(value: string) {
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const date = new Date(dateOnly ? `${value}T00:00:00.000Z` : value);
+
+  return new Intl.DateTimeFormat(SHOP_OPS_DISPLAY_LOCALE, {
+    timeZone: dateOnly ? "UTC" : STORE_TIME_ZONE,
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(date);
 }
 
 export function formatStoreDateTime(value: string) {
-  return new Intl.DateTimeFormat("fr-CA", {
+  const date = new Date(value);
+  const displayDate = new Intl.DateTimeFormat(SHOP_OPS_DISPLAY_LOCALE, {
     timeZone: STORE_TIME_ZONE,
     year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+  const displayTime = new Intl.DateTimeFormat(SHOP_OPS_DISPLAY_LOCALE, {
+    timeZone: STORE_TIME_ZONE,
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+  }).format(date);
+
+  return `${displayDate}, ${displayTime}`;
 }
 
 type SalesMetricOrderLine = DashboardSalesOrderLineRow & {

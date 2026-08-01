@@ -1,4 +1,8 @@
-import { formatStoreDateTime } from "../../lib/dashboard/dashboard-metrics";
+import {
+  formatNumber,
+  formatStoreDate,
+  formatStoreDateTime,
+} from "../../lib/dashboard/dashboard-metrics";
 import type {
   DashboardFilterOption,
   LocationRow,
@@ -61,8 +65,8 @@ export function DashboardHeader({
         <ReportFilterMeta
           items={[
             `Current location: ${selectedLocationName ?? "-"}`,
-            `Range: ${startDate} → ${endDate}`,
-            `${selectedDays} ${selectedDays > 1 ? "days" : "day"}`,
+            `Range: ${formatStoreDate(startDate)} → ${formatStoreDate(endDate)}`,
+            `${formatNumber(selectedDays)} ${selectedDays > 1 ? "days" : "day"}`,
             `Data updated: ${
               lastSuccessfulSync
                 ? formatStoreDateTime(lastSuccessfulSync)

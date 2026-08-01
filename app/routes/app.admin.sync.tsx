@@ -14,6 +14,7 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { ContentCard } from "../components/ui/ShopOpsPage";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { formatStoreDateTime } from "../lib/dashboard/dashboard-metrics";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
   getOfflineAdminClient,
@@ -65,12 +66,7 @@ const RESOURCES = [
 ] as const;
 
 function formatDate(value?: string | null) {
-  return value
-    ? new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(new Date(value))
-    : "Never";
+  return value ? formatStoreDateTime(value) : "Never";
 }
 
 function duration(job: SyncJobRow) {
@@ -447,12 +443,32 @@ export default function DataSyncPage({
             </div>
           </header>
         ) : null}
+        {embedded ? (
+          <div className="sync-section-intro">
+            <h2>Data sync</h2>
+            <p>
+              ShopOps keeps your Shopify reporting data current automatically.
+            </p>
+          </div>
+        ) : null}
         {result ? (
           <div className={`result ${result.ok ? "ok" : "bad"}`}>
             {result.message}
           </div>
         ) : null}
-        <ContentCard className="overall-row" title="Synchronization status">
+        <ContentCard
+          action={
+            <Form className="sync-status-action" method="post">
+              <input type="hidden" name="intent" value="sync_now" />
+              <button className="primary" disabled={isSubmitting} type="submit">
+                Sync now
+              </button>
+            </Form>
+          }
+          className="sync-status-card"
+          description="Updates orders, products, inventory, and locations without rebuilding your complete order history."
+          title="Synchronization status"
+        >
           <div className="sync-status-grid">
             <div className="sync-status-item">
               <span>Current data status</span>
@@ -482,11 +498,16 @@ export default function DataSyncPage({
                 {automatic}
               </StatusBadge>
             </div>
-            <div className="sync-status-item">
+          </div>
+          <div
+            className="sync-check-row"
+            data-tone={automatic === "Delayed" ? "warning" : "neutral"}
+          >
+            <div className="sync-check-row__timing">
               <span>
                 {automatic === "Delayed"
                   ? "Delayed automatic check"
-                  : "Next automatic check"}
+                  : "Automatic check timing"}
               </span>
               <strong>
                 {automatic === "Delayed"
@@ -495,28 +516,13 @@ export default function DataSyncPage({
                     ? "Scheduled automatically"
                     : "Waiting for first check"}
               </strong>
-              {automatic === "Delayed" ? (
-                <small>
-                  Current data can still be up to date; the background scheduler
-                  has not completed a successful check on schedule.
-                </small>
-              ) : automatic === "Active" ? (
-                <small>Last completed {formatDate(lastMaintenanceAt)}.</small>
-              ) : automatic === "Not configured" ? (
-                <small>No successful automatic check yet.</small>
-              ) : null}
             </div>
-          </div>
-          <div className="sync-action">
-            <Form method="post">
-              <input type="hidden" name="intent" value="sync_now" />
-              <button className="primary" disabled={isSubmitting} type="submit">
-                Sync now
-              </button>
-            </Form>
             <small>
-              Updates orders, products, inventory, and locations without
-              rebuilding your complete order history.
+              {automatic === "Delayed"
+                ? "Current data can still be up to date; the background scheduler has not completed a successful check on schedule."
+                : automatic === "Active"
+                  ? `Last completed ${formatDate(lastMaintenanceAt)}.`
+                  : "No successful automatic check yet."}
             </small>
           </div>
         </ContentCard>
@@ -751,24 +757,35 @@ export function ErrorBoundary() {
 
 const COMPACT_CSS = `
 .sync-shell>header{margin-bottom:16px}
-.overall-row{align-items:center;display:flex;gap:20px;justify-content:space-between;margin-bottom:16px}
-.sync-status-grid{display:grid;flex:1;gap:14px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));min-width:0}
+.sync-section-intro{margin:0 0 16px}
+.sync-section-intro h2{font-size:20px;line-height:1.25;margin:0}
+.sync-section-intro p{color:var(--shopops-muted,#616161);font-size:13px;line-height:1.45;margin:5px 0 0}
+.sync-status-card{margin-bottom:16px}
+.sync-status-card .shopops-content-card__header{align-items:center}
+.sync-status-action{margin:0}
+.sync-status-grid{display:grid;gap:16px;grid-template-columns:repeat(3,minmax(0,1fr));min-width:0}
 .sync-status-item{align-content:start;display:grid;gap:7px;min-width:0}
 .sync-status-item>span{color:var(--shopops-muted,#616161);font-size:12px;font-weight:700;line-height:1.35}
 .sync-status-item>strong{font-size:14px;font-variant-numeric:tabular-nums;line-height:1.4}
-.sync-status-item>small{color:var(--shopops-muted,#616161);font-size:11px;line-height:1.4}
-.sync-action{align-items:flex-end;display:flex;flex-direction:column;gap:5px;max-width:360px;text-align:right}
-.sync-action small{color:#6d7175;font-size:11px;line-height:1.35}
+.sync-check-row{align-items:center;background:#f8fafc;border:1px solid #d9dee5;border-radius:10px;display:grid;gap:14px;grid-template-columns:minmax(180px,.7fr) minmax(0,1.3fr);margin-top:16px;padding:9px 11px}
+.sync-check-row[data-tone="warning"]{background:#fff8e5;border-color:#e5c07b;color:#5c4813}
+.sync-check-row__timing{display:grid;gap:3px;min-width:0}
+.sync-check-row__timing>span{color:var(--shopops-muted,#616161);font-size:11px;font-weight:750;line-height:1.35}
+.sync-check-row[data-tone="warning"] .sync-check-row__timing>span{color:#725b19}
+.sync-check-row__timing>strong{font-size:13px;font-variant-numeric:tabular-nums;line-height:1.35}
+.sync-check-row>small{color:var(--shopops-muted,#616161);font-size:11px;line-height:1.4}
+.sync-check-row[data-tone="warning"]>small{color:#725b19}
 .resource-row{min-height:48px}
 .section-title a{color:#255aa8;font-size:13px;text-decoration:none}
 .activity-head.compact,.activity-compact-row{align-items:center;display:grid;gap:12px;grid-template-columns:180px 1fr 110px}
 .activity-compact-row{border-bottom:1px solid #ededed;min-height:52px;padding:8px}
 .activity-compact-row.failed{background:#fff8f7}
-@media(max-width:760px){.overall-row{align-items:stretch;flex-direction:column}.sync-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sync-action{align-items:stretch;max-width:none;text-align:left}.activity-head.compact{display:none}.activity-compact-row{grid-template-columns:1fr auto}.activity-compact-row>b{grid-column:1/-1;grid-row:1}.activity-compact-row>span:first-child{grid-column:1;grid-row:2}.activity-compact-row>span:last-child{grid-column:2;grid-row:2}}
-@media(max-width:480px){.sync-status-grid{grid-template-columns:1fr}}
+@media(max-width:760px){.sync-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sync-status-item:last-child{grid-column:1/-1}.sync-check-row{align-items:start;grid-template-columns:1fr}.activity-head.compact{display:none}.activity-compact-row{grid-template-columns:1fr auto}.activity-compact-row>b{grid-column:1/-1;grid-row:1}.activity-compact-row>span:first-child{grid-column:1;grid-row:2}.activity-compact-row>span:last-child{grid-column:2;grid-row:2}}
+@media(max-width:640px){.sync-status-card .shopops-content-card__header{align-items:stretch}.sync-status-action,.sync-status-action button{width:100%}}
+@media(max-width:520px){.sync-status-grid{grid-template-columns:1fr}.sync-status-item:last-child{grid-column:auto}}
 `;
 
 const CSS = `
-*{box-sizing:border-box}.sync-page{min-height:100vh;background:#f4f5f4;color:#202223;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:28px}.sync-page--embedded{background:transparent;min-height:0;padding:0}.sync-shell{max-width:1100px;margin:auto}.sync-page--embedded .sync-shell{margin:0;max-width:none;width:100%}.sync-shell>header{align-items:center;display:flex;justify-content:space-between;margin-bottom:20px}.sync-shell h1{font-size:30px;margin:0}.sync-shell header p{color:#616161;margin:6px 0 0}.sync-page button,.sync-page .primary{background:#fff;border:1px solid #b7b9bb;border-radius:10px;cursor:pointer;font-weight:650;padding:9px 13px}.sync-page .primary{background:var(--shopops-accent,#2563eb);border-color:var(--shopops-accent,#2563eb);color:#fff}.sync-page button:disabled{cursor:not-allowed;opacity:.6}.sync-page .primary:disabled{background:#e5e7eb;border-color:#d1d5db;color:#6b7280;opacity:1}.result{border-radius:12px;margin-bottom:14px;padding:11px 14px}.result.ok{background:#eaf7ef;color:#166534}.result.bad{background:#fff0f0;color:#b42318}.overview{background:#fff;border:1px solid var(--shopops-border,#dedede);border-radius:16px;display:grid;grid-template-columns:repeat(3,1fr);margin-bottom:14px;padding:20px}.overview>div{display:grid;gap:8px}.overview small{color:#6d7175;font-weight:650}.progress{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;border-radius:12px;display:flex;justify-content:space-between;margin-bottom:14px;padding:12px 14px}.progress span{display:grid;gap:3px}.progress small{color:#516072}.resource-card,.activity,.advanced{background:#fff;border:1px solid var(--shopops-border,#dedede);border-radius:16px;margin-bottom:16px;padding:20px}.activity h2{font-size:17px;margin:0 0 12px}.resource-row{align-items:center;border-top:1px solid #ededed;display:grid;gap:14px;grid-template-columns:1fr 130px 180px 1.4fr;min-height:54px}.resource-row small{color:#b42318}.section-title{align-items:center;display:flex;justify-content:space-between}.section-title span{color:#6d7175;font-size:13px}.activity-head,.activity-row summary{align-items:center;display:grid;gap:12px;grid-template-columns:180px 1fr 110px 110px 90px}.activity-head{background:#f7f7f7;color:#616161;font-size:11px;font-weight:700;padding:9px;text-transform:uppercase}.activity-row{border-bottom:1px solid #ededed}.activity-row summary{cursor:pointer;list-style:none;min-height:56px;padding:8px}.activity-row summary::-webkit-details-marker{display:none}.activity-detail{background:#fafafa;color:#616161;font-size:13px;padding:10px 14px}.pagination{display:flex;justify-content:space-between;padding-top:14px}.pagination a{color:#255aa8;text-decoration:none}.advanced>summary{cursor:pointer;font-weight:700}.advanced-body{display:grid;gap:20px;margin-top:18px}.advanced-body>section{border-top:1px solid #e5e5e5;padding-top:16px}.advanced-body h3{font-size:15px;margin:0 0 5px}.advanced-body p{color:#616161;margin:5px 0 12px}.advanced-body form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.raw{align-items:center;border-top:1px solid #ededed;display:grid;gap:10px;grid-template-columns:1fr 180px auto;padding:9px 0}.raw code{font-size:11px;overflow-wrap:anywhere}.empty{color:#6d7175;text-align:center;padding:20px}
+*{box-sizing:border-box}.sync-page{min-height:100vh;background:transparent;color:#202223;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:28px}.sync-page--embedded{min-height:0;padding:0}.sync-shell{max-width:1100px;margin:auto}.sync-page--embedded .sync-shell{margin:0;max-width:none;width:100%}.sync-shell>header{align-items:center;display:flex;justify-content:space-between;margin-bottom:20px}.sync-shell h1{font-size:30px;margin:0}.sync-shell header p{color:#616161;margin:6px 0 0}.sync-page button,.sync-page .primary{background:#fff;border:1px solid #b7b9bb;border-radius:10px;cursor:pointer;font-weight:650;padding:9px 13px}.sync-page .primary{background:var(--shopops-accent,#2563eb);border-color:var(--shopops-accent,#2563eb);color:#fff}.sync-page button:disabled{cursor:not-allowed;opacity:.6}.sync-page .primary:disabled{background:#e5e7eb;border-color:#d1d5db;color:#6b7280;opacity:1}.result{border-radius:12px;margin-bottom:14px;padding:11px 14px}.result.ok{background:#eaf7ef;color:#166534}.result.bad{background:#fff0f0;color:#b42318}.overview{background:#fff;border:1px solid var(--shopops-border,#dedede);border-radius:16px;display:grid;grid-template-columns:repeat(3,1fr);margin-bottom:14px;padding:20px}.overview>div{display:grid;gap:8px}.overview small{color:#6d7175;font-weight:650}.progress{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;border-radius:12px;display:flex;justify-content:space-between;margin-bottom:14px;padding:12px 14px}.progress span{display:grid;gap:3px}.progress small{color:#516072}.resource-card,.activity,.advanced{background:#fff;border:1px solid var(--shopops-border,#dedede);border-radius:16px;margin-bottom:16px;padding:20px}.activity h2{font-size:17px;margin:0 0 12px}.resource-row{align-items:center;border-top:1px solid #ededed;display:grid;gap:14px;grid-template-columns:1fr 130px 180px 1.4fr;min-height:54px}.resource-row small{color:#b42318}.section-title{align-items:center;display:flex;justify-content:space-between}.section-title span{color:#6d7175;font-size:13px}.activity-head,.activity-row summary{align-items:center;display:grid;gap:12px;grid-template-columns:180px 1fr 110px 110px 90px}.activity-head{background:#f7f7f7;color:#616161;font-size:11px;font-weight:700;padding:9px;text-transform:uppercase}.activity-row{border-bottom:1px solid #ededed}.activity-row summary{cursor:pointer;list-style:none;min-height:56px;padding:8px}.activity-row summary::-webkit-details-marker{display:none}.activity-detail{background:#fafafa;color:#616161;font-size:13px;padding:10px 14px}.pagination{display:flex;justify-content:space-between;padding-top:14px}.pagination a{color:#255aa8;text-decoration:none}.advanced>summary{cursor:pointer;font-weight:700}.advanced-body{display:grid;gap:20px;margin-top:18px}.advanced-body>section{border-top:1px solid #e5e5e5;padding-top:16px}.advanced-body h3{font-size:15px;margin:0 0 5px}.advanced-body p{color:#616161;margin:5px 0 12px}.advanced-body form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.raw{align-items:center;border-top:1px solid #ededed;display:grid;gap:10px;grid-template-columns:1fr 180px auto;padding:9px 0}.raw code{font-size:11px;overflow-wrap:anywhere}.empty{color:#6d7175;text-align:center;padding:20px}
 @media(max-width:760px){.sync-page:not(.sync-page--embedded){padding:16px}.sync-page--embedded{padding:0}.overview{grid-template-columns:1fr;gap:18px}.resource-row{grid-template-columns:1fr auto}.resource-row>span,.resource-row>small{grid-column:1/-1}.activity-head{display:none}.activity-row summary{grid-template-columns:1fr auto}.activity-row summary>span:nth-child(3),.activity-row summary>span:nth-child(5){font-size:12px}.raw{grid-template-columns:1fr}.sync-shell>header{align-items:flex-start;gap:12px}}
 `;

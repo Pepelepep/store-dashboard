@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import {
   formatCurrency,
+  formatNumber,
   getBestSellerDrilldownValue,
 } from "../../lib/dashboard/dashboard-metrics";
 import type {
@@ -169,7 +170,7 @@ export function BestSellersCard({
             row.product,
             row.sku,
             row.vendor,
-            row.units,
+            formatNumber(row.units),
             formatCurrency(row.revenue),
           ],
         }))}

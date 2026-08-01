@@ -1,6 +1,9 @@
 import { useState } from "react";
 
-import { formatCurrency } from "../../lib/dashboard/dashboard-metrics";
+import {
+  formatCurrency,
+  formatNumber,
+} from "../../lib/dashboard/dashboard-metrics";
 import type {
   FinancialMetricsVersion,
   StaffSalesRow,
@@ -180,7 +183,11 @@ export function SalesByStaffCard({
           rows={salesByStaff.map((row) => ({
             key: row.staffKey,
             source: row,
-            values: [row.staff, row.units, formatCurrency(row.revenue)],
+            values: [
+              row.staff,
+              formatNumber(row.units),
+              formatCurrency(row.revenue),
+            ],
           }))}
         />
       ) : (
