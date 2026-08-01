@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Form, useFetcher, useLocation, useNavigation } from "react-router";
 
@@ -38,6 +39,25 @@ function formatCurrency(value: number) {
 function formatNumber(value: number) {
   return new Intl.NumberFormat("fr-CA").format(value);
 }
+
+const previewCellStyle: CSSProperties = {
+  alignContent: "start",
+  background: "var(--shopops-surface-subdued)",
+  border: "1px solid var(--shopops-border)",
+  borderRadius: 12,
+  display: "grid",
+  gap: 8,
+  minHeight: 88,
+  padding: 14,
+};
+
+const previewValueStyle: CSSProperties = {
+  display: "block",
+  fontSize: 19,
+  fontVariantNumeric: "tabular-nums",
+  fontWeight: 800,
+  lineHeight: 1.25,
+};
 
 function formatTimestamp(value: string | null) {
   if (!value) return "Timestamp unavailable";
@@ -334,67 +354,90 @@ export function ProductCostsSetup({
               </InlineNotice>
             </div>
           ) : null}
-        </ContentCard>
 
-        {enabled ? (
-          <ContentCard title="Estimated impact preview">
-            <div
+          {enabled ? (
+            <section
+              aria-labelledby="estimated-impact-preview-title"
               style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                borderTop: "1px solid var(--shopops-border)",
+                marginTop: 20,
+                paddingTop: 18,
               }}
             >
-              <div>
-                <HelperText>Affected sales lines</HelperText>
-                <strong>{formatNumber(preview.affectedLineCount)}</strong>
+              <h3
+                id="estimated-impact-preview-title"
+                style={{ fontSize: 16, margin: 0 }}
+              >
+                Estimated impact preview
+              </h3>
+              <div
+                className="product-cost-preview-grid"
+                style={{
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  marginTop: 12,
+                }}
+              >
+                <div style={previewCellStyle}>
+                  <HelperText>Affected sales lines</HelperText>
+                  <strong style={previewValueStyle}>
+                    {formatNumber(preview.affectedLineCount)}
+                  </strong>
+                </div>
+                <div style={previewCellStyle}>
+                  <HelperText>Estimated COGS</HelperText>
+                  <strong style={previewValueStyle}>
+                    {formatCurrency(preview.estimatedCogs)}
+                  </strong>
+                </div>
+                <div style={previewCellStyle}>
+                  <HelperText>Estimated profit</HelperText>
+                  <strong style={previewValueStyle}>
+                    {preview.estimatedProfit === null
+                      ? "Not calculable"
+                      : formatCurrency(preview.estimatedProfit)}
+                  </strong>
+                </div>
               </div>
-              <div>
-                <HelperText>Estimated COGS</HelperText>
-                <strong>{formatCurrency(preview.estimatedCogs)}</strong>
+              <div style={{ marginTop: 10 }}>
+                <HelperText>
+                  This preview is not saved until you confirm.
+                </HelperText>
               </div>
-              <div>
-                <HelperText>Estimated profit</HelperText>
-                <strong>
-                  {preview.estimatedProfit === null
-                    ? "Not calculable"
-                    : formatCurrency(preview.estimatedProfit)}
-                </strong>
-              </div>
-            </div>
-            <HelperText>
-              This preview is not saved until you confirm.
-            </HelperText>
-          </ContentCard>
-        ) : null}
+            </section>
+          ) : null}
 
-        <FormActions
-          equal={false}
-          feedback={
-            actionData?.intent === "save-product-costs" &&
-            actionData.message ? (
-              <InlineResult variant={actionData.ok ? "success" : "error"}>
-                {actionData.message}
-              </InlineResult>
-            ) : enabled && !percentIsValid ? (
-              <HelperText>
-                Enter an estimated cost rate from 0 to 100.
-              </HelperText>
-            ) : !settingsChanged ? (
-              <HelperText>Make a change to enable saving.</HelperText>
-            ) : undefined
-          }
-        >
-          <AppButton
-            disabled={
-              isSaving || !settingsChanged || (enabled && !percentIsValid)
+          <FormActions
+            equal={false}
+            feedback={
+              actionData?.intent === "save-product-costs" &&
+              actionData.message ? (
+                <InlineResult variant={actionData.ok ? "success" : "error"}>
+                  {actionData.message}
+                </InlineResult>
+              ) : enabled && !percentIsValid ? (
+                <HelperText>
+                  Enter an estimated cost rate from 0 to 100.
+                </HelperText>
+              ) : !settingsChanged ? (
+                <HelperText>Make a change to enable saving.</HelperText>
+              ) : undefined
             }
-            type="submit"
-            variant="primary"
           >
-            {isSaving ? "Saving and recalculating..." : "Save and recalculate"}
-          </AppButton>
-        </FormActions>
+            <AppButton
+              disabled={
+                isSaving || !settingsChanged || (enabled && !percentIsValid)
+              }
+              type="submit"
+              variant="primary"
+            >
+              {isSaving
+                ? "Saving and recalculating..."
+                : "Save and recalculate"}
+            </AppButton>
+          </FormActions>
+        </ContentCard>
       </Form>
 
       <ContentCard title="Products missing costs">

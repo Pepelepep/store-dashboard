@@ -1237,10 +1237,21 @@ test("Product-cost controls use selection cards and hide preview in Shopify-only
   assert.match(component, /<SelectableCard/);
   assert.match(component, /title: "Shopify costs only"/);
   assert.match(component, /title: "Estimate missing costs"/);
-  assert.match(
-    component,
-    /\{enabled \? \([\s\S]*?<ContentCard title="Estimated impact preview">/,
+  const settingsCard = component.slice(
+    component.indexOf('<ContentCard title="How to handle missing costs">'),
+    component.indexOf("</ContentCard>", component.indexOf("<FormActions")),
   );
+  assert.match(settingsCard, /\{enabled \? \([\s\S]*?Estimated impact preview/);
+  assert.match(settingsCard, /className="product-cost-preview-grid"/);
+  assert.match(component, /fontVariantNumeric: "tabular-nums"/);
+  assert.match(settingsCard, /<FormActions/);
+  for (const label of [
+    "Affected sales lines",
+    "Estimated COGS",
+    "Estimated profit",
+  ]) {
+    assert.match(settingsCard, new RegExp(label));
+  }
   assert.match(component, /!settingsChanged/);
   assert.match(
     component,
@@ -1276,33 +1287,34 @@ test("dashboard notices live only in their relevant profit KPI cards", () => {
     new URL("../app/components/dashboard/KpiCards.tsx", import.meta.url),
     "utf8",
   );
-  const grossProfitStart = dashboardCards.indexOf('title="Gross profit"');
-  const grossMarginStart = dashboardCards.indexOf('title="Gross margin"');
-  const expensesStart = dashboardCards.indexOf('title="Expenses"');
-  const netProfitStart = dashboardCards.indexOf('title="Net profit"');
-  const detailsStart = dashboardCards.indexOf(
-    "{isFinancialMetricsV2 ? (",
+  const grossProfitStart = dashboardCards.indexOf("const grossProfitDetail =");
+  const netProfitStart = dashboardCards.indexOf("const netProfitDetail =");
+  const detailsStart = dashboardCards.indexOf("const details:", netProfitStart);
+  const grossProfitSection = dashboardCards.slice(
+    grossProfitStart,
     netProfitStart,
   );
-  const grossMarginSection = dashboardCards.slice(
-    grossMarginStart,
-    expensesStart,
-  );
   const netProfitSection = dashboardCards.slice(netProfitStart, detailsStart);
+  const detailsSection = dashboardCards.slice(
+    detailsStart,
+    dashboardCards.indexOf("const items =", detailsStart),
+  );
 
-  assert.ok(grossProfitStart >= 0);
+  assert.ok(grossProfitStart >= 0 && netProfitStart > grossProfitStart);
   assert.match(dashboardCards, /sales[\s\S]*?missing[\s\n]+product costs\./);
   assert.equal(
     dashboardCards.match(/Includes estimated product costs/g)?.length,
     1,
   );
-  assert.equal(grossMarginSection.includes("Review product costs"), false);
-  assert.equal(
-    grossMarginSection.includes("Includes estimated product costs"),
-    false,
-  );
+  assert.match(grossProfitSection, /Review product costs/);
   assert.match(netProfitSection, /No operating expenses configured\./);
   assert.match(netProfitSection, /Add expenses/);
+  assert.match(detailsSection, /grossProfit: grossProfitDetail/);
+  assert.match(detailsSection, /netProfit: netProfitDetail/);
+  assert.doesNotMatch(
+    detailsSection,
+    /grossMargin:[\s\S]*?Review product costs/,
+  );
 });
 
 test("old expense route redirects to Costs operating expenses with context", () => {
@@ -1800,6 +1812,13 @@ test("Location financial summary exposes completeness and expense setup states o
     "utf8",
   );
 
+  const presentation = readFileSync(
+    new URL("../app/lib/dashboard/kpi-presentation.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(locationRoute, /buildSharedReportKpiItems/);
+  assert.match(locationRoute, /buildLocationOnlyReportKpiItems/);
   for (const label of [
     "Net Sales",
     "COGS",
@@ -1808,7 +1827,7 @@ test("Location financial summary exposes completeness and expense setup states o
     "Expenses",
     "Net profit",
   ]) {
-    assert.match(locationRoute, new RegExp(`label: "${label}"`));
+    assert.match(presentation, new RegExp(`"${label}"`));
   }
   assert.equal(
     locationRoute.match(/Includes estimated product costs/g)?.length,
@@ -2717,14 +2736,18 @@ test("legacy merchant URLs redirect to the final section tabs without duplicatin
   assert.match(people, /from "\.\/app\.admin\.staff"/);
 });
 
-test("People separates sales attribution from active dashboard membership", () => {
+test("People separates sales attribution from active ShopOps membership", () => {
   const people = readFileSync(
     new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
     "utf8",
   );
 
   assert.match(people, /label: "Sales attribution"/);
-  assert.match(people, /label: "Dashboard access"/);
+  assert.match(people, /label: "ShopOps access"/);
+  assert.match(
+    people,
+    /Manage who can open ShopOps Studio and which locations they can[\s\n]+view\./,
+  );
   assert.match(people, /tab === "attribution" && data\.pending\.length/);
   assert.match(people, /tab === "access" \? "Role" : "POS sales"/);
   assert.match(
@@ -2732,7 +2755,18 @@ test("People separates sales attribution from active dashboard membership", () =
     /if \(!membership \|\| membership\.status !== "active"\) return "No access"/,
   );
   assert.match(people, /getFreshPlanLimits/);
+  assert.match(people, /\.from\("dashboard_memberships"\)/);
   assert.match(people, /replace_dashboard_membership_access/);
+  assert.match(people, /p_dashboard_user_limit/);
+  assert.match(
+    people,
+    /\{tab === "attribution" \? \([\s\S]*?<Button primary[\s\S]*?Add staff/,
+  );
+  assert.match(people, /\{tab === "attribution" && overlay === "add" \? \(/);
+  assert.doesNotMatch(
+    people.slice(people.indexOf("<PageHeader"), people.indexOf("<SectionTabs")),
+    /Add staff/,
+  );
 });
 
 test("Dashboard onboarding is compact, admin-only, and disappears when complete", () => {
@@ -2753,7 +2787,7 @@ test("Dashboard onboarding is compact, admin-only, and disappears when complete"
     "Select reporting locations",
     "Add product costs",
     "Add operating expenses",
-    "Review dashboard access",
+    "Review ShopOps access",
   ]) {
     assert.match(dashboard, new RegExp(label));
   }
@@ -2768,6 +2802,260 @@ test("Dashboard onboarding is compact, admin-only, and disappears when complete"
   assert.match(
     presentation,
     /\.shopops-section-tabs \{[^}]*white-space: nowrap/,
+  );
+});
+
+test("premium headers, tabs, and button states are centralized and distinct", () => {
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const buttons = readFileSync(
+    new URL("../app/components/ui/AppButton.tsx", import.meta.url),
+    "utf8",
+  );
+  const sync = readFileSync(
+    new URL("../app/routes/app.admin.sync.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    presentation,
+    /className="shopops-page-header__copy"[\s\S]*?<h1>\{title\}<\/h1>[\s\S]*?<p>\{description\}<\/p>/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-page-header__identity \{[^}]*align-items: center/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-page-header__icon \{[^}]*flex: 0 0 40px[^}]*height: 40px[^}]*width: 40px/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-page-header__icon \.Polaris-Icon \{[^}]*height: 21px[^}]*width: 21px/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-section-tabs__item\[aria-current="page"\] \{[^}]*background: var\(--shopops-accent-selected\)[^}]*border-color: var\(--shopops-accent\)[^}]*color: #163b7a/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-page :where\(a, button, input, select, summary\):focus-visible/,
+  );
+  assert.match(
+    buttons,
+    /primary: \{[\s\S]*?background: "#2563eb"[\s\S]*?disabledBackground: "#e5e7eb"[\s\S]*?disabledColor: "#6b7280"/,
+  );
+  assert.doesNotMatch(
+    buttons.slice(
+      buttons.indexOf("primary: {"),
+      buttons.indexOf("secondary: {"),
+    ),
+    /disabledBackground: "#93c5fd"/,
+  );
+  assert.match(sync, /\.sync-page \.primary:disabled\{background:#e5e7eb/);
+});
+
+test("Dashboard and Locations share compact filters and compact empty sales notices", () => {
+  const filterPresentation = readFileSync(
+    new URL("../app/components/dashboard/ReportFilters.tsx", import.meta.url),
+    "utf8",
+  );
+  const dashboardFilters = readFileSync(
+    new URL(
+      "../app/components/dashboard/DashboardFilters.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const dashboard = readFileSync(
+    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+    "utf8",
+  );
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const component of [
+    "ReportFilterPanel",
+    "ReportFilterField",
+    "ReadOnlyReportLocation",
+  ]) {
+    assert.match(
+      filterPresentation,
+      new RegExp(`export function ${component}`),
+    );
+  }
+  assert.match(dashboardFilters, /<ReportFilterPanel/);
+  assert.match(locations, /<ReportFilterPanel/);
+  assert.match(dashboardFilters, /Restricted by your ShopOps access\./);
+  assert.match(locations, /Restricted by your ShopOps access\./);
+  assert.doesNotMatch(dashboardFilters, /disabled=\{!canSwitchLocation\}/);
+  assert.match(
+    dashboard,
+    /locationAccessRestricted=\{!readiness\.canAdmin && locations\.length === 1\}/,
+  );
+  assert.match(presentation, /\.shopops-report-filter-grid \{/);
+  assert.match(presentation, /\.shopops-report-filter-control \{/);
+  assert.match(presentation, /export function CompactEmptyDataNotice/);
+  assert.match(
+    dashboard,
+    /hasNoSalesForPeriod \? \([\s\S]*?<CompactEmptyDataNotice[\s\S]*?No sales for this period\./,
+  );
+  assert.match(
+    locations,
+    /hasNoSalesForRange \? \([\s\S]*?<CompactEmptyDataNotice[\s\S]*?No sales for this date range\./,
+  );
+  assert.doesNotMatch(
+    dashboard.slice(
+      dashboard.indexOf(
+        "!readiness.noAssignedLocations && hasNoSalesForPeriod",
+      ),
+      dashboard.indexOf(
+        "readiness.syncFailureBanner.kind",
+        dashboard.indexOf("hasNoSalesForPeriod"),
+      ),
+    ),
+    /bullets=/,
+  );
+  assert.doesNotMatch(
+    locations.slice(
+      locations.indexOf(") : hasNoSalesForRange ? ("),
+      locations.indexOf("{shouldShowAnalytics ? ("),
+    ),
+    /bullets=/,
+  );
+});
+
+test("shared report KPI order, labels, formatting, and categories are canonical", () => {
+  const configuration = readFileSync(
+    new URL("../app/lib/dashboard/kpi-presentation.ts", import.meta.url),
+    "utf8",
+  );
+  const renderer = readFileSync(
+    new URL("../app/components/dashboard/ReportKpiGrid.tsx", import.meta.url),
+    "utf8",
+  );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const dashboardKpis = readFileSync(
+    new URL("../app/components/dashboard/KpiCards.tsx", import.meta.url),
+    "utf8",
+  );
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    configuration,
+    /legacy: \[\s*"sales",\s*"orders",\s*"unitsSold",\s*"cogs",\s*"grossProfit",\s*"grossMargin",\s*"expenses",\s*"netProfit",?\s*\]/,
+  );
+  assert.match(
+    configuration,
+    /v2: \[\s*"sales",\s*"refunds",\s*"returns",\s*"orders",\s*"unitsSold",\s*"cogs",\s*"grossProfit",\s*"grossMargin",\s*"expenses",\s*"netProfit",?\s*\]/,
+  );
+  assert.match(
+    configuration,
+    /Location-only metrics are appended after the complete shared KPI block/,
+  );
+  assert.match(
+    configuration,
+    /LOCATION_ONLY_REPORT_KPI_APPEND_ORDER = \[\s*"averageOrderValue",?\s*\]/,
+  );
+  for (const category of [
+    'sales: "commercial"',
+    'grossProfit: "commercial"',
+    'grossMargin: "commercial"',
+    'netProfit: "commercial"',
+    'orders: "activity"',
+    'unitsSold: "activity"',
+    'averageOrderValue: "activity"',
+    'refunds: "neutral"',
+    'returns: "neutral"',
+    'cogs: "neutral"',
+    'expenses: "neutral"',
+  ]) {
+    assert.match(configuration, new RegExp(category));
+  }
+  for (const label of [
+    "Net Sales",
+    "Refunds",
+    "Returns",
+    "Orders",
+    "Units sold",
+    "COGS",
+    "Gross profit",
+    "Gross margin",
+    "Expenses",
+    "Net profit",
+    "AOV (Net)",
+  ]) {
+    assert.match(configuration, new RegExp(label.replace(/[()]/g, "\\$&")));
+  }
+  assert.match(dashboardKpis, /buildSharedReportKpiItems/);
+  assert.match(locations, /buildSharedReportKpiItems/);
+  assert.match(locations, /buildLocationOnlyReportKpiItems/);
+  assert.match(renderer, /data-category=\{item\.category\}/);
+  assert.match(renderer, /data-item-count=\{items\.length\}/);
+  assert.match(
+    presentation,
+    /\.shopops-kpi-card\[data-category="commercial"\] \{[^}]*border-top-color: var\(--shopops-accent\)/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-kpi-card\[data-category="activity"\] \{[^}]*border-top-color: var\(--shopops-teal\)/,
+  );
+});
+
+test("Settings separates data freshness from scheduler state at the shared width", () => {
+  const settings = readFileSync(
+    new URL("../app/routes/app.settings.tsx", import.meta.url),
+    "utf8",
+  );
+  const sync = readFileSync(
+    new URL("../app/routes/app.admin.sync.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(settings, /<DataSyncPage embedded/);
+  assert.doesNotMatch(settings, /<h1|<h2/);
+  for (const label of [
+    "Current data status",
+    "Last successful update",
+    "Automatic synchronization",
+    "Next automatic check",
+    "Delayed automatic check",
+  ]) {
+    assert.match(sync, new RegExp(label));
+  }
+  assert.match(
+    sync,
+    /Current data can still be up to date; the background scheduler[\s\n]+has not completed a successful check on schedule\./,
+  );
+  assert.match(
+    sync,
+    /\.sync-page--embedded \.sync-shell\{margin:0;max-width:none;width:100%\}/,
+  );
+  assert.match(
+    sync,
+    /@media\(max-width:760px\)[\s\S]*?\.sync-page--embedded\{padding:0\}/,
+  );
+  assert.match(
+    sync,
+    /<ContentCard className="overall-row" title="Synchronization status">/,
+  );
+  assert.match(
+    sync,
+    /<ContentCard className="resource-card" title="Data freshness">/,
   );
 });
 
@@ -2792,9 +3080,22 @@ test("Plan and billing is summary-only, owner-priced, contextual, and uses a one
     new URL("../app/lib/flash.server.ts", import.meta.url),
     "utf8",
   );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.doesNotMatch(appShell, />\s*Plan\s*<\/a>/);
   assert.match(plan, /data\.canManagePlan && data\.managePlanUrl/);
+  assert.match(plan, /label="ShopOps users"/);
+  assert.match(plan, /Manage ShopOps access/);
+  assert.match(plan, /data\.dashboardUsers\.usage/);
+  assert.match(plan, /data\.dashboardUsers\.limit/);
+  assert.match(plan, /Subscription status/);
+  assert.match(plan, /<StatusBadge/);
+  assert.match(presentation, /usage > limit/);
+  assert.match(presentation, /"ShopOps user"/);
+  assert.match(presentation, /data-capacity=\{isOver \? "over" : "within"\}/);
   assert.match(plan, /Owner · Active · Always has access · Locked/);
   assert.equal((plan.match(/<UsageSummary/g) ?? []).length, 2);
   assert.match(plan, /<strong>Action required\.<\/strong>/);
@@ -2859,6 +3160,7 @@ test("merchant pages share the ShopOps presentation layer without editable owner
     "FormActions",
     "InlineNotice",
     "EmptyState",
+    "CompactEmptyDataNotice",
   ]) {
     assert.match(presentation, new RegExp(`export function ${component}`));
   }

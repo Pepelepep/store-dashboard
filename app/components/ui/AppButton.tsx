@@ -54,9 +54,9 @@ const buttonVariants: Record<
     hoverBackground: "#1d4ed8",
     hoverBorder: "#1d4ed8",
     activeBackground: "#1e40af",
-    disabledBackground: "#93c5fd",
-    disabledBorder: "#93c5fd",
-    disabledColor: "white",
+    disabledBackground: "#e5e7eb",
+    disabledBorder: "#d1d5db",
+    disabledColor: "#6b7280",
   },
   secondary: {
     border: "#c9cccf",
@@ -65,9 +65,9 @@ const buttonVariants: Record<
     hoverBackground: "#f6f6f7",
     hoverBorder: "#8a8f93",
     activeBackground: "#eceff1",
-    disabledBackground: "white",
-    disabledBorder: "#dde0e4",
-    disabledColor: "#8a8f93",
+    disabledBackground: "#f3f4f6",
+    disabledBorder: "#d1d5db",
+    disabledColor: "#9ca3af",
   },
   danger: {
     border: "#c9cccf",
@@ -76,9 +76,9 @@ const buttonVariants: Record<
     hoverBackground: "#fff4f4",
     hoverBorder: "#d92d20",
     activeBackground: "#fee4e2",
-    disabledBackground: "white",
-    disabledBorder: "#dde0e4",
-    disabledColor: "#8a8f93",
+    disabledBackground: "#f3f4f6",
+    disabledBorder: "#d1d5db",
+    disabledColor: "#9ca3af",
   },
   ghost: {
     border: "transparent",
@@ -147,7 +147,7 @@ export function AppButton({
         background,
         color: disabled ? colors.disabledColor : colors.color,
         cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.72 : 1,
+        opacity: 1,
         padding: compact ? "6px 10px" : buttonBaseStyle.padding,
         borderRadius: compact ? 8 : buttonBaseStyle.borderRadius,
         transform: isActive && !disabled ? "translateY(1px)" : "translateY(0)",
@@ -179,7 +179,8 @@ export function AppButtonLink({
     : isHovered
       ? colors.hoverBackground
       : colors.background;
-  const borderColor = isHovered || isActive ? colors.hoverBorder : colors.border;
+  const borderColor =
+    isHovered || isActive ? colors.hoverBorder : colors.border;
 
   return (
     <Link

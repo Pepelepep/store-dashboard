@@ -1,4 +1,4 @@
-import { Form, useNavigation } from "react-router";
+import { useNavigation } from "react-router";
 import { useEffect, useState } from "react";
 
 import type {
@@ -6,7 +6,11 @@ import type {
   LocationRow,
 } from "../../lib/dashboard/dashboard-types";
 import { AppButton } from "../ui/AppButton";
-import { InlineResult } from "../ui/InlineResult";
+import {
+  ReadOnlyReportLocation,
+  ReportFilterField,
+  ReportFilterPanel,
+} from "./ReportFilters";
 
 export function DashboardFilters({
   locations,
@@ -18,6 +22,7 @@ export function DashboardFilters({
   startDate,
   endDate,
   preservedSearchParams,
+  locationAccessRestricted,
 }: {
   locations: LocationRow[];
   selectedLocationId: string | null;
@@ -28,6 +33,7 @@ export function DashboardFilters({
   startDate: string;
   endDate: string;
   preservedSearchParams: Array<{ name: string; value: string }>;
+  locationAccessRestricted: boolean;
 }) {
   const navigation = useNavigation();
   const canSwitchLocation = locations.length > 1;
@@ -38,6 +44,12 @@ export function DashboardFilters({
     navigation.state !== "idle" && navigation.formMethod === "GET";
   const isApplyingToday =
     isApplying && navigation.formData?.get("preset") === "today";
+  const selectedLocation =
+    locations.find(
+      (location) => location.shopify_location_id === selectedLocationId,
+    ) ??
+    locations[0] ??
+    null;
 
   useEffect(() => {
     setStartDateValue(startDate);
@@ -67,54 +79,45 @@ export function DashboardFilters({
   }
 
   return (
-    <Form method="get" onSubmit={handleSubmit}>
-      {preservedSearchParams.map(({ name, value }, index) => (
-        <input
-          key={`${name}-${index}`}
-          type="hidden"
-          name={name}
-          value={value}
-        />
-      ))}
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 14,
-          alignItems: "end",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <label
-            htmlFor="locationId"
-            style={{
-              display: "block",
-              fontSize: 14,
-              fontWeight: 800,
-              marginBottom: 6,
-            }}
+    <ReportFilterPanel
+      actions={
+        <>
+          <AppButton
+            type="submit"
+            name="preset"
+            value="today"
+            variant="secondary"
+            onClick={handleTodayClick}
+            disabled={isApplying}
           >
-            Location
-          </label>
+            {isApplyingToday ? "Applying today..." : "Today"}
+          </AppButton>
+
+          <AppButton
+            type="submit"
+            variant="primary"
+            onClick={() => setHasUnsavedFilters(false)}
+            disabled={isApplying}
+          >
+            {isApplying && !isApplyingToday ? "Applying..." : "Apply"}
+          </AppButton>
+        </>
+      }
+      changed={hasUnsavedFilters}
+      onSubmit={handleSubmit}
+      preservedSearchParams={preservedSearchParams}
+    >
+      <ReportFilterField
+        htmlFor={canSwitchLocation ? "locationId" : undefined}
+        label="Location"
+      >
+        {canSwitchLocation ? (
           <select
+            className="shopops-report-filter-control"
             id="locationId"
             name="locationId"
             defaultValue={selectedLocationId ?? ""}
-            disabled={!canSwitchLocation}
             onChange={() => setHasUnsavedFilters(true)}
-            style={{
-              width: "100%",
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid #c9c9c9",
-              background: canSwitchLocation ? "white" : "#f3f4f6",
-              color: canSwitchLocation ? "#202223" : "#6b7280",
-              fontSize: 14,
-              minHeight: 44,
-              boxSizing: "border-box",
-              cursor: canSwitchLocation ? "pointer" : "not-allowed",
-            }}
           >
             {locations.map((location) => (
               <option
@@ -125,215 +128,81 @@ export function DashboardFilters({
               </option>
             ))}
           </select>
-          {!canSwitchLocation ? (
-            <div
-              style={{
-                marginTop: 6,
-                fontSize: 12,
-                color: "#6b7280",
-              }}
-            >
-              Location locked for this user.
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div
-        style={{
-          marginTop: 14,
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 220px))",
-          gap: 14,
-          alignItems: "end",
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <label
-            htmlFor="startDate"
-            style={{
-              display: "block",
-              fontSize: 14,
-              fontWeight: 800,
-              marginBottom: 6,
-            }}
-          >
-            Start date
-          </label>
-          <input
-            id="startDate"
-            name="startDate"
-            type="date"
-            value={startDateValue}
-            onChange={(event) => {
-              setStartDateValue(event.target.value);
-              setHasUnsavedFilters(true);
-            }}
-            style={{
-              width: "100%",
-              padding: "9px 10px",
-              borderRadius: 12,
-              border: "1px solid #c9c9c9",
-              background: "white",
-              fontSize: 14,
-              minHeight: 44,
-              boxSizing: "border-box",
-            }}
+        ) : (
+          <ReadOnlyReportLocation
+            helper={
+              locationAccessRestricted
+                ? "Restricted by your ShopOps access."
+                : selectedLocation
+                  ? "Only reporting location."
+                  : "No reporting location is available."
+            }
+            value={selectedLocation?.name ?? "No location access"}
           />
-        </div>
+        )}
+      </ReportFilterField>
 
-        <div style={{ minWidth: 0 }}>
-          <label
-            htmlFor="endDate"
-            style={{
-              display: "block",
-              fontSize: 14,
-              fontWeight: 800,
-              marginBottom: 6,
-            }}
-          >
-            End date
-          </label>
-          <input
-            id="endDate"
-            name="endDate"
-            type="date"
-            value={endDateValue}
-            onChange={(event) => {
-              setEndDateValue(event.target.value);
-              setHasUnsavedFilters(true);
-            }}
-            style={{
-              width: "100%",
-              padding: "9px 10px",
-              borderRadius: 12,
-              border: "1px solid #c9c9c9",
-              background: "white",
-              fontSize: 14,
-              minHeight: 44,
-              boxSizing: "border-box",
-            }}
-          />
-        </div>
+      <ReportFilterField htmlFor="startDate" label="Start date">
+        <input
+          className="shopops-report-filter-control"
+          id="startDate"
+          name="startDate"
+          type="date"
+          value={startDateValue}
+          onChange={(event) => {
+            setStartDateValue(event.target.value);
+            setHasUnsavedFilters(true);
+          }}
+        />
+      </ReportFilterField>
 
-        <div style={{ minWidth: 0 }}>
-          <label
-            htmlFor="staff"
-            style={{
-              display: "block",
-              fontSize: 14,
-              fontWeight: 800,
-              marginBottom: 6,
-            }}
-          >
-            Staff
-          </label>
-          <select
-            id="staff"
-            name="staff"
-            defaultValue={selectedStaff}
-            onChange={() => setHasUnsavedFilters(true)}
-            style={{
-              width: "100%",
-              padding: "9px 10px",
-              borderRadius: 12,
-              border: "1px solid #c9c9c9",
-              background: "white",
-              fontSize: 14,
-              minHeight: 44,
-              boxSizing: "border-box",
-            }}
-          >
-            <option value="">All staff</option>
-            {staffOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
+      <ReportFilterField htmlFor="endDate" label="End date">
+        <input
+          className="shopops-report-filter-control"
+          id="endDate"
+          name="endDate"
+          type="date"
+          value={endDateValue}
+          onChange={(event) => {
+            setEndDateValue(event.target.value);
+            setHasUnsavedFilters(true);
+          }}
+        />
+      </ReportFilterField>
 
-        <div style={{ minWidth: 0 }}>
-          <label
-            htmlFor="vendor"
-            style={{
-              display: "block",
-              fontSize: 14,
-              fontWeight: 800,
-              marginBottom: 6,
-            }}
-          >
-            Vendor
-          </label>
-          <select
-            id="vendor"
-            name="vendor"
-            defaultValue={selectedVendor}
-            onChange={() => setHasUnsavedFilters(true)}
-            style={{
-              width: "100%",
-              padding: "9px 10px",
-              borderRadius: 12,
-              border: "1px solid #c9c9c9",
-              background: "white",
-              fontSize: 14,
-              minHeight: 44,
-              boxSizing: "border-box",
-            }}
-          >
-            <option value="">All vendors</option>
-            {vendorOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div
-        style={{
-          marginTop: 16,
-          display: "flex",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <AppButton
-          type="submit"
-          name="preset"
-          value="today"
-          variant="secondary"
-          onClick={handleTodayClick}
-          disabled={isApplying}
-          style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
+      <ReportFilterField htmlFor="staff" label="Staff">
+        <select
+          className="shopops-report-filter-control"
+          id="staff"
+          name="staff"
+          defaultValue={selectedStaff}
+          onChange={() => setHasUnsavedFilters(true)}
         >
-          {isApplyingToday ? "Applying today..." : "Today"}
-        </AppButton>
+          <option value="">All staff</option>
+          {staffOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </ReportFilterField>
 
-        <AppButton
-          type="submit"
-          variant="primary"
-          onClick={() => setHasUnsavedFilters(false)}
-          disabled={isApplying}
-          style={{ minHeight: 44, minWidth: 150, whiteSpace: "nowrap" }}
+      <ReportFilterField htmlFor="vendor" label="Vendor">
+        <select
+          className="shopops-report-filter-control"
+          id="vendor"
+          name="vendor"
+          defaultValue={selectedVendor}
+          onChange={() => setHasUnsavedFilters(true)}
         >
-          {isApplying && !isApplyingToday ? "Applying..." : "Apply"}
-        </AppButton>
-
-        {hasUnsavedFilters ? (
-          <InlineResult
-            variant="info"
-            style={{
-              padding: "4px 8px",
-              fontSize: 12,
-              fontWeight: 700,
-            }}
-          >
-            Filters changed. Click Apply to update.
-          </InlineResult>
-        ) : null}
-      </div>
-    </Form>
+          <option value="">All vendors</option>
+          {vendorOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </ReportFilterField>
+    </ReportFilterPanel>
   );
 }

@@ -13,12 +13,23 @@ import { LocationIcon } from "@shopify/polaris-icons";
 
 import { AppButton, AppButtonLink } from "../components/ui/AppButton";
 import { NetSalesTrendPlot } from "../components/dashboard/NetSalesTrendPlot";
+import {
+  attachReportKpiDetails,
+  ReportKpiGrid,
+  ReportKpiNotice,
+} from "../components/dashboard/ReportKpiGrid";
+import {
+  ReadOnlyReportLocation,
+  ReportFilterField,
+  ReportFilterPanel,
+} from "../components/dashboard/ReportFilters";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { SectionTabs } from "../components/ui/SectionTabs";
 import {
   ContentCard,
+  CompactEmptyDataNotice,
   EmptyState,
   FormActions,
   InlineNotice,
@@ -86,6 +97,12 @@ import { buildDrilldownResetKey } from "../lib/dashboard/drilldown-reset-key";
 import { reconcileTrendRowsWithCashRefunds } from "../lib/dashboard/location-trend-reconciliation";
 import { limitRankedBreakdownRows } from "../lib/dashboard/ranked-breakdown";
 import { formatTrendPeriodLabel } from "../lib/dashboard/chart-formatters";
+import {
+  buildLocationOnlyReportKpiItems,
+  buildSharedReportKpiItems,
+  REPORT_METRIC_DEFINITIONS,
+  type ReportKpiId,
+} from "../lib/dashboard/kpi-presentation";
 
 type LocationMetricRow = {
   locationId: string;
@@ -1530,246 +1547,107 @@ function KpiGrid({
   const expensesSearch = new URLSearchParams(location.search);
   expensesSearch.set("tab", "expenses");
   const expensesPath = `/app/costs?${expensesSearch.toString()}`;
+  const grossSales = kpis.grossSales ?? kpis.revenue;
+  const discounts = kpis.discounts ?? 0;
+  const discountPercent =
+    grossSales > 0 ? `${((discounts / grossSales) * 100).toFixed(1)}%` : "0.0%";
   const grossProfitNotice = kpis.cogsIncomplete ? (
-    <div
-      role="status"
-      style={{
-        background: "#fff8e5",
-        border: "1px solid #e5c07b",
-        borderRadius: 8,
-        color: "#5c4813",
-        fontSize: 12,
-        marginTop: 8,
-        padding: "7px 8px",
-      }}
-    >
+    <ReportKpiNotice tone="warning">
       <div>
         {formatNumber(kpis.missingCogsLineCount)} sales{" "}
         {kpis.missingCogsLineCount === 1 ? "line is" : "lines are"} missing
         product costs.
       </div>
-      <Link
-        style={{ color: "#1d4ed8", display: "inline-block", marginTop: 4 }}
-        to={productCostsPath}
-      >
+      <Link className="shopops-kpi-notice__action" to={productCostsPath}>
         Review product costs
       </Link>
-    </div>
+    </ReportKpiNotice>
   ) : kpis.includesEstimatedCogs ? (
-    <div
-      role="status"
-      style={{
-        background: "#eff6ff",
-        border: "1px solid #bfdbfe",
-        borderRadius: 8,
-        color: "#1e3a5f",
-        fontSize: 12,
-        marginTop: 8,
-        padding: "7px 8px",
-      }}
-    >
+    <ReportKpiNotice tone="info">
       <div>Includes estimated product costs</div>
-      <Link
-        style={{ color: "#1d4ed8", display: "inline-block", marginTop: 4 }}
-        to={productCostsPath}
-      >
+      <Link className="shopops-kpi-notice__action" to={productCostsPath}>
         Review product costs
       </Link>
-    </div>
+    </ReportKpiNotice>
   ) : null;
   const expensesNotice = !hasOperatingExpenses ? (
-    <div
-      role="status"
-      style={{
-        background: "#f8fafc",
-        border: "1px solid #d9dee5",
-        borderRadius: 8,
-        color: "#4b5563",
-        fontSize: 12,
-        marginTop: 8,
-        padding: "7px 8px",
-      }}
-    >
+    <ReportKpiNotice tone="neutral">
       <div>No operating expenses configured.</div>
-      <Link
-        style={{ color: "#1d4ed8", display: "inline-block", marginTop: 4 }}
-        to={expensesPath}
-      >
+      <Link className="shopops-kpi-notice__action" to={expensesPath}>
         Add expenses
       </Link>
-    </div>
+    </ReportKpiNotice>
   ) : null;
-  const items: Array<{
-    label: string;
-    value: string;
-    title?: string;
-    notice?: ReactNode;
-  }> = isFinancialMetricsV2
-    ? [
-        {
-          label: "Net Sales",
-          value: formatCurrency(kpis.revenue),
-          title: "Net Sales: Gross Sales minus Discounts and Returns.",
-        },
-        {
-          label: "COGS",
-          value: formatCurrency(kpis.cogs),
-          title:
-            "COGS: cost of goods sold from synced Shopify inventory item cost data where available.",
-        },
-        {
-          label: "Gross profit",
-          value:
-            kpis.grossProfit === null ? "—" : formatCurrency(kpis.grossProfit),
-          notice: grossProfitNotice,
-          title: "Gross Profit: Net Sales minus COGS.",
-        },
-        {
-          label: "Gross margin",
-          value: formatPercent(kpis.grossMarginPct),
-          title: "Margin: Gross Profit divided by Net Sales.",
-        },
-        {
-          label: "Expenses",
-          value: formatCurrency(kpis.expenses),
-        },
-        {
-          label: "Net profit",
-          value: kpis.netProfit === null ? "—" : formatCurrency(kpis.netProfit),
-          notice: expensesNotice,
-          title: "Gross profit minus configured fixed expenses.",
-        },
-        {
-          label: "Refunds",
-          value: formatCurrency(kpis.refunds ?? 0),
-          title:
-            "Refunds: cash refunded on Shopify orders, reported separately from returns.",
-        },
-        {
-          label: "Returns",
-          value: `${formatCurrency(kpis.returns ?? 0)} · ${formatNumber(
-            kpis.returnedUnits ?? 0,
-          )} units`,
-          title:
-            "Returns: returned line-item value used in net sales calculations where available.",
-        },
-        {
-          label: "AOV (Net)",
-          value: formatCurrency(kpis.averageOrderValue),
-          title: "AOV (Net) = Net Sales / Orders",
-        },
-        { label: "Orders", value: formatNumber(kpis.ordersCount) },
-      ]
-    : [
-        { label: "Revenue", value: formatCurrency(kpis.revenue) },
-        { label: "Orders", value: formatNumber(kpis.ordersCount) },
-        { label: "Units sold", value: formatNumber(kpis.unitsSold) },
-        {
-          label: "COGS",
-          value: formatCurrency(kpis.cogs),
-          title:
-            "COGS: cost of goods sold from synced Shopify inventory item cost data where available.",
-        },
-        {
-          label: "Gross profit",
-          value:
-            kpis.grossProfit === null ? "—" : formatCurrency(kpis.grossProfit),
-          notice: grossProfitNotice,
-          title: "Gross Profit: Net Sales minus COGS.",
-        },
-        {
-          label: "Gross margin",
-          value: formatPercent(kpis.grossMarginPct),
-          title: "Margin: Gross Profit divided by Net Sales.",
-        },
-        { label: "Expenses", value: formatCurrency(kpis.expenses) },
-        {
-          label: "Net profit",
-          value: kpis.netProfit === null ? "—" : formatCurrency(kpis.netProfit),
-          notice: expensesNotice,
-        },
-        {
-          label: "AOV",
-          value: formatCurrency(kpis.averageOrderValue),
-          title: "Average Order Value = Revenue / Orders",
-        },
-      ];
+  const details: Partial<Record<ReportKpiId, ReactNode>> = {
+    sales: isFinancialMetricsV2 ? (
+      <>
+        <div>After discounts &amp; returns</div>
+        <div>
+          Discounts applied: {formatCurrency(discounts)} ({discountPercent} of
+          Gross)
+        </div>
+      </>
+    ) : (
+      "Synced retail sales"
+    ),
+    returns: `${formatNumber(kpis.returnedUnits ?? 0)} units`,
+    orders: "Unique orders in the selected range",
+    unitsSold: "Quantity sold from order lines",
+    cogs: (
+      <>
+        <div>
+          Actual: {formatCurrency(kpis.actualCogs)} · Estimated:{" "}
+          {formatCurrency(kpis.estimatedCogs)}
+        </div>
+        {kpis.missingCogsLineCount > 0 ? (
+          <div>
+            {formatNumber(kpis.missingCogsLineCount)} sales lines missing costs
+          </div>
+        ) : null}
+      </>
+    ),
+    grossProfit:
+      grossProfitNotice ??
+      (isFinancialMetricsV2 ? "Net Sales minus COGS" : "Revenue minus COGS"),
+    grossMargin: kpis.cogsIncomplete
+      ? "Requires complete product costs"
+      : isFinancialMetricsV2
+        ? "Gross profit / Net Sales"
+        : "Gross profit / revenue",
+    expenses: "Fixed expenses from DB",
+    netProfit: kpis.cogsIncomplete
+      ? "Requires complete product costs"
+      : (expensesNotice ?? "Gross profit minus expenses"),
+  };
+  const items = attachReportKpiDetails(
+    [
+      ...buildSharedReportKpiItems({
+        values: kpis,
+        financialMetricsVersion,
+      }),
+      ...buildLocationOnlyReportKpiItems({
+        averageOrderValue: kpis.averageOrderValue,
+        financialMetricsVersion,
+      }),
+    ],
+    details,
+  );
 
   return (
     <>
-      <section
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          marginBottom: 20,
-        }}
-      >
-        {items.map((item) => (
-          <div
-            key={item.label}
-            title={item.title}
-            style={{
-              background: "white",
-              border: "1px solid #e5e7eb",
-              borderRadius: 16,
-              borderTop:
-                item.label === "Net Sales" || item.label === "Revenue"
-                  ? "3px solid var(--shopops-accent, #2563eb)"
-                  : item.label === "Orders"
-                    ? "3px solid var(--shopops-teal, #0f766e)"
-                    : undefined,
-              boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
-              minHeight: 132,
-              padding: 20,
-            }}
-          >
-            <div
-              style={{
-                color: "#5f6368",
-                fontSize: 14,
-                fontWeight: 700,
-                marginBottom: 10,
-              }}
-            >
-              {item.label}
-            </div>
-            <div
-              style={{
-                color: "#202223",
-                fontSize: 28,
-                fontWeight: 800,
-                marginBottom: 8,
-              }}
-            >
-              {item.value}
-            </div>
-            {item.notice}
-          </div>
-        ))}
-      </section>
+      <ReportKpiGrid items={items} />
       {isFinancialMetricsV2 ? (
-        <details
-          style={{
-            color: "#616161",
-            fontSize: 13,
-            lineHeight: 1.5,
-            marginTop: -8,
-            marginBottom: 20,
-          }}
-        >
-          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-            Metric definitions
-          </summary>
-          <div style={{ marginTop: 8 }}>
-            Gross Sales: product sales before discounts and returns. Discounts:
-            Shopify discount allocations applied to orders and line items. Net
-            Sales: Gross Sales minus Discounts and Returns. COGS: cost of goods
-            sold from synced Shopify inventory item cost data where available.
-            Gross Profit: Net Sales minus COGS. Margin: Gross Profit divided by
-            Net Sales. Refunds: cash refunded on Shopify orders, reported
-            separately from returns. Returns: returned line-item value used in
-            net sales calculations where available.
+        <details className="shopops-metric-definitions">
+          <summary>Metric definitions</summary>
+          <div>
+            {REPORT_METRIC_DEFINITIONS.grossSales}{" "}
+            {REPORT_METRIC_DEFINITIONS.discounts}{" "}
+            {REPORT_METRIC_DEFINITIONS.netSales}{" "}
+            {REPORT_METRIC_DEFINITIONS.cogs}{" "}
+            {REPORT_METRIC_DEFINITIONS.grossProfit}{" "}
+            {REPORT_METRIC_DEFINITIONS.grossMargin}{" "}
+            {REPORT_METRIC_DEFINITIONS.refunds}{" "}
+            {REPORT_METRIC_DEFINITIONS.returns}
           </div>
         </details>
       ) : null}
@@ -3383,225 +3261,169 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
         ]}
       />
       <ContentCard>
-        <Form
-          id="locations-filter-form"
-          method="get"
-          onSubmit={() => setIsDirty(false)}
-          style={{ display: "grid", gap: 16 }}
-        >
-          {preservedSearchParams.map(({ name, value }, index) => (
+        <ReportFilterPanel
+          actions={
+            <>
+              <AppButton
+                type="submit"
+                name="preset"
+                value="today"
+                variant="secondary"
+                onClick={() => setIsDirty(false)}
+                disabled={isApplyingFilters}
+              >
+                {isApplyingToday ? "Applying today..." : "Today"}
+              </AppButton>
+              <AppButton
+                type="submit"
+                variant="primary"
+                onClick={() => setIsDirty(false)}
+                disabled={isApplyingFilters}
+              >
+                {isApplyingFilters && !isApplyingToday
+                  ? "Applying..."
+                  : "Apply"}
+              </AppButton>
+            </>
+          }
+          changed={isDirty}
+          hiddenFields={
             <input
-              key={`${name}-${index}`}
               type="hidden"
-              name={name}
-              value={value}
+              name="locations"
+              value={allLocationsSelected ? "" : draftLocationIds.join(",")}
             />
-          ))}
-          <input
-            type="hidden"
-            name="locations"
-            value={allLocationsSelected ? "" : draftLocationIds.join(",")}
-          />
-
-          <div
-            style={{
-              display: "grid",
-              gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-            }}
-          >
-            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              Start date
-              <input
-                name="startDate"
-                type="date"
-                defaultValue={startDate}
-                onChange={() => setIsDirty(true)}
-                style={{
-                  border: "1px solid #c9cccf",
-                  borderRadius: 10,
-                  padding: 10,
-                }}
-              />
-            </label>
-            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              End date
-              <input
-                name="endDate"
-                type="date"
-                defaultValue={endDate}
-                onChange={() => setIsDirty(true)}
-                style={{
-                  border: "1px solid #c9cccf",
-                  borderRadius: 10,
-                  padding: 10,
-                }}
-              />
-            </label>
-            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              Staff
-              <select
-                name="staff"
-                defaultValue={selectedStaff}
-                onChange={() => setIsDirty(true)}
-                style={{
-                  border: "1px solid #c9cccf",
-                  borderRadius: 10,
-                  padding: 10,
-                }}
-              >
-                <option value="">All staff</option>
-                {staffOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-              Vendor
-              <select
-                name="vendor"
-                defaultValue={selectedVendor}
-                onChange={() => setIsDirty(true)}
-                style={{
-                  border: "1px solid #c9cccf",
-                  borderRadius: 10,
-                  padding: 10,
-                }}
-              >
-                <option value="">All vendors</option>
-                {vendorOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div>
-            <div
-              style={{
-                alignItems: "baseline",
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 8,
-                marginBottom: 8,
-              }}
+          }
+          id="locations-filter-form"
+          onSubmit={() => setIsDirty(false)}
+          preservedSearchParams={preservedSearchParams}
+        >
+          <ReportFilterField htmlFor="locations-start-date" label="Start date">
+            <input
+              className="shopops-report-filter-control"
+              id="locations-start-date"
+              name="startDate"
+              type="date"
+              defaultValue={startDate}
+              onChange={() => setIsDirty(true)}
+            />
+          </ReportFilterField>
+          <ReportFilterField htmlFor="locations-end-date" label="End date">
+            <input
+              className="shopops-report-filter-control"
+              id="locations-end-date"
+              name="endDate"
+              type="date"
+              defaultValue={endDate}
+              onChange={() => setIsDirty(true)}
+            />
+          </ReportFilterField>
+          <ReportFilterField htmlFor="locations-staff" label="Staff">
+            <select
+              className="shopops-report-filter-control"
+              id="locations-staff"
+              name="staff"
+              defaultValue={selectedStaff}
+              onChange={() => setIsDirty(true)}
             >
-              <div style={{ color: "#616161", fontSize: 13, fontWeight: 800 }}>
-                Locations
-              </div>
-              <div style={{ color: "#707070", fontSize: 13 }}>
-                {locationSummary}
-              </div>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setDraftLocationIds(
-                    locations.map((location) => location.shopify_location_id),
-                  );
-                  setIsDirty(true);
-                }}
-                style={{
-                  alignItems: "center",
-                  background: "white",
-                  border: `1px solid ${allLocationsSelected ? "#2563eb" : "#dcdcdc"}`,
-                  borderRadius: 999,
-                  color: "#202223",
-                  cursor: "pointer",
-                  display: "inline-flex",
-                  font: "inherit",
-                  gap: 8,
-                  padding: "7px 10px",
-                }}
-              >
-                All locations
-              </button>
-              {locations.map((location) => (
-                <label
-                  key={location.shopify_location_id}
-                  style={{
-                    alignItems: "center",
-                    border: `1px solid ${
-                      draftLocationIds.includes(location.shopify_location_id)
-                        ? "#2563eb"
-                        : "#dcdcdc"
-                    }`,
-                    borderRadius: 999,
-                    display: "inline-flex",
-                    gap: 8,
-                    padding: "7px 10px",
+              <option value="">All staff</option>
+              {staffOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </ReportFilterField>
+          <ReportFilterField htmlFor="locations-vendor" label="Vendor">
+            <select
+              className="shopops-report-filter-control"
+              id="locations-vendor"
+              name="vendor"
+              defaultValue={selectedVendor}
+              onChange={() => setIsDirty(true)}
+            >
+              <option value="">All vendors</option>
+              {vendorOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </ReportFilterField>
+
+          <ReportFilterField
+            helper={locations.length > 1 ? locationSummary : undefined}
+            label={locations.length > 1 ? "Locations" : "Location"}
+            wide={locations.length > 1}
+          >
+            {locations.length > 1 ? (
+              <div className="shopops-report-filter-options">
+                <button
+                  aria-pressed={allLocationsSelected}
+                  className="shopops-report-filter-option"
+                  data-selected={allLocationsSelected ? "true" : "false"}
+                  type="button"
+                  onClick={() => {
+                    setDraftLocationIds(
+                      locations.map((location) => location.shopify_location_id),
+                    );
+                    setIsDirty(true);
                   }}
                 >
-                  <input
-                    type="checkbox"
-                    checked={draftLocationIds.includes(
-                      location.shopify_location_id,
-                    )}
-                    onChange={(event) => {
-                      setDraftLocationIds((current) =>
-                        event.target.checked
-                          ? Array.from(
-                              new Set([
-                                ...current,
-                                location.shopify_location_id,
-                              ]),
-                            )
-                          : current.filter(
-                              (id) => id !== location.shopify_location_id,
-                            ),
-                      );
-                      setIsDirty(true);
-                    }}
-                  />
-                  {location.name}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {isDirty ? (
-            <div
-              style={{
-                background: "#eff8ff",
-                border: "1px solid #b2ddff",
-                borderRadius: 10,
-                color: "#175cd3",
-                fontSize: 13,
-                fontWeight: 700,
-                padding: "8px 10px",
-                width: "fit-content",
-              }}
-            >
-              Filters changed. Click Apply to update.
-            </div>
-          ) : null}
-
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <AppButton
-              type="submit"
-              name="preset"
-              value="today"
-              variant="secondary"
-              onClick={() => setIsDirty(false)}
-              disabled={isApplyingFilters}
-            >
-              {isApplyingToday ? "Applying today..." : "Today"}
-            </AppButton>
-            <AppButton
-              type="submit"
-              variant="primary"
-              onClick={() => setIsDirty(false)}
-              disabled={isApplyingFilters}
-            >
-              {isApplyingFilters && !isApplyingToday ? "Applying..." : "Apply"}
-            </AppButton>
-          </div>
-        </Form>
+                  {allLocationsSelected ? (
+                    <span aria-hidden="true">✓</span>
+                  ) : null}
+                  All locations
+                </button>
+                {locations.map((location) => (
+                  <label
+                    className="shopops-report-filter-option"
+                    data-selected={
+                      draftLocationIds.includes(location.shopify_location_id)
+                        ? "true"
+                        : "false"
+                    }
+                    key={location.shopify_location_id}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={draftLocationIds.includes(
+                        location.shopify_location_id,
+                      )}
+                      onChange={(event) => {
+                        setDraftLocationIds((current) =>
+                          event.target.checked
+                            ? Array.from(
+                                new Set([
+                                  ...current,
+                                  location.shopify_location_id,
+                                ]),
+                              )
+                            : current.filter(
+                                (id) => id !== location.shopify_location_id,
+                              ),
+                        );
+                        setIsDirty(true);
+                      }}
+                    />
+                    {location.name}
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <ReadOnlyReportLocation
+                helper={
+                  !data.canManageReportingLocations && locations.length === 1
+                    ? "Restricted by your ShopOps access."
+                    : locations.length === 1
+                      ? "Only reporting location."
+                      : "No reporting location is available."
+                }
+                value={locations[0]?.name ?? "No location access"}
+              />
+            )}
+          </ReportFilterField>
+        </ReportFilterPanel>
       </ContentCard>
 
       <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
@@ -3666,15 +3488,14 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
           tone="info"
         />
       ) : hasNoSalesForRange ? (
-        <PageNotice
+        <CompactEmptyDataNotice
           title="No sales for this date range."
-          message="Try another date range or confirm sync status."
-          bullets={[
-            "Filters remain available so admins can review another location, staff member, vendor, or date range.",
-            "If sales should already be available, check Sync Status for freshness or failures.",
-          ]}
-          cta={{ to: dataSyncPath, label: "Open Sync Status" }}
-          tone="neutral"
+          guidance="Try another date range or confirm sync status."
+          action={
+            <AppButtonLink compact to={dataSyncPath} variant="secondary">
+              Open Sync Status
+            </AppButtonLink>
+          }
         />
       ) : null}
 

@@ -6,6 +6,7 @@ import type {
 import { ChartVerticalIcon } from "@shopify/polaris-icons";
 import { ContentCard, PageHeader } from "../ui/ShopOpsPage";
 import { DashboardFilters } from "./DashboardFilters";
+import { ReportFilterMeta } from "./ReportFilters";
 
 export function DashboardHeader({
   locations,
@@ -20,6 +21,7 @@ export function DashboardHeader({
   preservedSearchParams,
   lastSuccessfulSync,
   selectedDays,
+  locationAccessRestricted,
 }: {
   locations: LocationRow[];
   selectedLocationId: string | null;
@@ -33,6 +35,7 @@ export function DashboardHeader({
   preservedSearchParams: Array<{ name: string; value: string }>;
   lastSuccessfulSync: string | null;
   selectedDays: number;
+  locationAccessRestricted: boolean;
 }) {
   return (
     <>
@@ -52,17 +55,11 @@ export function DashboardHeader({
           startDate={startDate}
           endDate={endDate}
           preservedSearchParams={preservedSearchParams}
+          locationAccessRestricted={locationAccessRestricted}
         />
 
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-            marginTop: 18,
-          }}
-        >
-          {[
+        <ReportFilterMeta
+          items={[
             `Current location: ${selectedLocationName ?? "-"}`,
             `Range: ${startDate} → ${endDate}`,
             `${selectedDays} ${selectedDays > 1 ? "days" : "day"}`,
@@ -71,22 +68,8 @@ export function DashboardHeader({
                 ? formatStoreDateTime(lastSuccessfulSync)
                 : "unavailable"
             }`,
-          ].map((label) => (
-            <span
-              key={label}
-              style={{
-                background: "var(--shopops-surface-subdued)",
-                border: "1px solid var(--shopops-border)",
-                borderRadius: 999,
-                fontSize: 12,
-                fontWeight: 800,
-                padding: "5px 9px",
-              }}
-            >
-              {label}
-            </span>
-          ))}
-        </div>
+          ]}
+        />
       </ContentCard>
     </>
   );

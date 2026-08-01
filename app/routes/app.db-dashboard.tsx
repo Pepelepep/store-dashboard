@@ -27,7 +27,11 @@ import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
-import { ShopOpsPage } from "../components/ui/ShopOpsPage";
+import { AppButtonLink } from "../components/ui/AppButton";
+import {
+  CompactEmptyDataNotice,
+  ShopOpsPage,
+} from "../components/ui/ShopOpsPage";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
 import {
   applyDashboardDrilldowns,
@@ -922,7 +926,7 @@ export default function DbDashboardPage() {
     },
     {
       complete: readiness.onboarding.reviewDashboardAccess,
-      label: "Review dashboard access",
+      label: "Review ShopOps access",
       to: "/app/people?tab=access",
     },
   ];
@@ -944,6 +948,7 @@ export default function DbDashboardPage() {
         preservedSearchParams={preservedSearchParams}
         lastSuccessfulSync={lastSuccessfulSync}
         selectedDays={selectedDays}
+        locationAccessRestricted={!readiness.canAdmin && locations.length === 1}
       />
 
       {showOnboarding ? (
@@ -1013,17 +1018,16 @@ export default function DbDashboardPage() {
       ) : null}
 
       {!readiness.noAssignedLocations && hasNoSalesForPeriod ? (
-        <PageNotice
+        <CompactEmptyDataNotice
           title="No sales for this period."
-          message="Try another date range or confirm sync status."
-          bullets={[
-            "Filters remain available so you can review another location, staff member, vendor, or date range.",
-            readiness.canAdmin
-              ? "Admins can check Sync Status if sales should already be available."
-              : "Ask an app admin to confirm sync status if sales should already be available.",
-          ]}
-          cta={syncCenterCta}
-          tone="neutral"
+          guidance="Try another date range or confirm sync status."
+          action={
+            syncCenterCta ? (
+              <AppButtonLink compact to={syncCenterCta.to} variant="secondary">
+                {syncCenterCta.label}
+              </AppButtonLink>
+            ) : undefined
+          }
         />
       ) : null}
 
