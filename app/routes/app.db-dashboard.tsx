@@ -27,6 +27,7 @@ import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
+import { ShopOpsPage } from "../components/ui/ShopOpsPage";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
 import {
   applyDashboardDrilldowns,
@@ -929,217 +930,205 @@ export default function DbDashboardPage() {
     readiness.canAdmin && onboardingItems.some((item) => !item.complete);
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "#f6f6f7",
-        padding: 28,
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-      }}
-    >
-      <div style={{ maxWidth: 1360, margin: "0 auto" }}>
-        {showOnboarding ? (
-          <details
-            open
+    <ShopOpsPage>
+      <DashboardHeader
+        locations={locations}
+        selectedLocationId={selectedLocationId}
+        selectedLocationName={selectedLocationName}
+        selectedStaff={selectedStaff}
+        selectedVendor={selectedVendor}
+        staffOptions={staffOptions}
+        vendorOptions={vendorOptions}
+        startDate={startDate}
+        endDate={endDate}
+        preservedSearchParams={preservedSearchParams}
+        lastSuccessfulSync={lastSuccessfulSync}
+        selectedDays={selectedDays}
+      />
+
+      {showOnboarding ? (
+        <details
+          open
+          style={{
+            background: "white",
+            border: "1px solid #d1d5db",
+            borderRadius: 12,
+            marginBottom: 18,
+            padding: "12px 16px",
+          }}
+        >
+          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+            Finish setting up ShopOps
+          </summary>
+          <div
             style={{
-              background: "white",
-              border: "1px solid #d1d5db",
-              borderRadius: 12,
-              marginBottom: 18,
-              padding: "12px 16px",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px 18px",
+              marginTop: 12,
             }}
           >
-            <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-              Finish setting up ShopOps
-            </summary>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "8px 18px",
-                marginTop: 12,
-              }}
-            >
-              {onboardingItems.map((item) => (
-                <span key={item.label}>
-                  {item.complete ? "✓ " : "○ "}
-                  {item.complete ? (
-                    item.label
-                  ) : (
-                    <Link to={item.to}>{item.label}</Link>
-                  )}
-                </span>
-              ))}
-            </div>
-          </details>
-        ) : null}
-        {readiness.noAssignedLocations ? (
-          <PageNotice
-            title="You do not have access to any locations yet."
-            message="Ask an app admin to assign your location access."
-            bullets={[
-              "ShopOps Studio keeps dashboard data filtered to locations you are allowed to view.",
-              "After an admin grants access, return to the dashboard to review your assigned location reports.",
-            ]}
-            tone="warning"
-          />
-        ) : isFirstRunPreparing ? (
-          <PageNotice
-            title="Your data is being prepared"
-            message="Reports appear after Shopify data sync completes. ShopOps Studio helps multi-location merchants understand sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health."
-            bullets={
-              readiness.canAdmin
-                ? [
-                    "Check Sync Status to confirm whether locations, products, inventory, and orders have synced.",
-                    "Dashboard reports populate automatically once synced Shopify data is available.",
-                    "You can return here once sync finishes to review sales, margins, and inventory.",
-                  ]
-                : [
-                    "Ask an app admin to confirm sync status.",
-                    "If you should see a location, ask an app admin to assign your location access.",
-                  ]
-            }
-            cta={syncCenterCta}
-            tone="info"
-          />
-        ) : null}
-
-        <DashboardHeader
-          locations={locations}
-          selectedLocationId={selectedLocationId}
-          selectedLocationName={selectedLocationName}
-          selectedStaff={selectedStaff}
-          selectedVendor={selectedVendor}
-          staffOptions={staffOptions}
-          vendorOptions={vendorOptions}
-          startDate={startDate}
-          endDate={endDate}
-          preservedSearchParams={preservedSearchParams}
-          lastSuccessfulSync={lastSuccessfulSync}
-          selectedDays={selectedDays}
+            {onboardingItems.map((item) => (
+              <span key={item.label}>
+                {item.complete ? "✓ " : "○ "}
+                {item.complete ? (
+                  item.label
+                ) : (
+                  <Link to={item.to}>{item.label}</Link>
+                )}
+              </span>
+            ))}
+          </div>
+        </details>
+      ) : null}
+      {readiness.noAssignedLocations ? (
+        <PageNotice
+          title="You do not have access to any locations yet."
+          message="Ask an app admin to assign your location access."
+          bullets={[
+            "ShopOps Studio keeps dashboard data filtered to locations you are allowed to view.",
+            "After an admin grants access, return to the dashboard to review your assigned location reports.",
+          ]}
+          tone="warning"
         />
+      ) : isFirstRunPreparing ? (
+        <PageNotice
+          title="Your data is being prepared"
+          message="Reports appear after Shopify data sync completes. ShopOps Studio helps multi-location merchants understand sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health."
+          bullets={
+            readiness.canAdmin
+              ? [
+                  "Check Sync Status to confirm whether locations, products, inventory, and orders have synced.",
+                  "Dashboard reports populate automatically once synced Shopify data is available.",
+                  "You can return here once sync finishes to review sales, margins, and inventory.",
+                ]
+              : [
+                  "Ask an app admin to confirm sync status.",
+                  "If you should see a location, ask an app admin to assign your location access.",
+                ]
+          }
+          cta={syncCenterCta}
+          tone="info"
+        />
+      ) : null}
 
-        {!readiness.noAssignedLocations && hasNoSalesForPeriod ? (
-          <PageNotice
-            title="No sales for this period."
-            message="Try another date range or confirm sync status."
-            bullets={[
-              "Filters remain available so you can review another location, staff member, vendor, or date range.",
-              readiness.canAdmin
-                ? "Admins can check Sync Status if sales should already be available."
-                : "Ask an app admin to confirm sync status if sales should already be available.",
-            ]}
-            cta={syncCenterCta}
-            tone="neutral"
+      {!readiness.noAssignedLocations && hasNoSalesForPeriod ? (
+        <PageNotice
+          title="No sales for this period."
+          message="Try another date range or confirm sync status."
+          bullets={[
+            "Filters remain available so you can review another location, staff member, vendor, or date range.",
+            readiness.canAdmin
+              ? "Admins can check Sync Status if sales should already be available."
+              : "Ask an app admin to confirm sync status if sales should already be available.",
+          ]}
+          cta={syncCenterCta}
+          tone="neutral"
+        />
+      ) : null}
+
+      {!readiness.noAssignedLocations &&
+      readiness.syncFailureBanner.kind !== "hidden" ? (
+        <PageNotice
+          title={readiness.syncFailureBanner.title}
+          message={readiness.syncFailureBanner.message}
+          cta={reconnectCta}
+          tone="warning"
+        />
+      ) : null}
+
+      {!readiness.noAssignedLocations && !isFirstRunPreparing ? (
+        <>
+          <KpiCards
+            kpis={kpis}
+            financialMetricsVersion={financialMetricsVersion}
+            canAdmin={readiness.canAdmin}
           />
-        ) : null}
 
-        {!readiness.noAssignedLocations &&
-        readiness.syncFailureBanner.kind !== "hidden" ? (
-          <PageNotice
-            title={readiness.syncFailureBanner.title}
-            message={readiness.syncFailureBanner.message}
-            cta={reconnectCta}
-            tone="warning"
+          <ActiveDrilldownBadge
+            activeDrilldowns={activeDrilldowns}
+            onClearOne={(key) =>
+              setActiveDrilldowns((current) => ({
+                ...current,
+                [key]: null,
+              }))
+            }
+            onClearAll={() => setActiveDrilldowns(emptyDrilldowns)}
           />
-        ) : null}
 
-        {!readiness.noAssignedLocations && !isFirstRunPreparing ? (
-          <>
-            <KpiCards
-              kpis={kpis}
+          <div style={{ marginBottom: 20 }}>
+            <SalesByHourCard
+              salesByHour={drilldownSalesByHour}
               financialMetricsVersion={financialMetricsVersion}
-              canAdmin={readiness.canAdmin}
+              selectedHour={selectedHour}
+              onSelectHour={toggleHourDrilldown}
             />
+          </div>
 
-            <ActiveDrilldownBadge
-              activeDrilldowns={activeDrilldowns}
-              onClearOne={(key) =>
-                setActiveDrilldowns((current) => ({
-                  ...current,
-                  [key]: null,
-                }))
+          <div
+            className="shopops-dashboard-pair"
+            style={{
+              alignItems: "stretch",
+            }}
+          >
+            <BestSellersCard
+              bestSellers={drilldownBestSellers}
+              financialMetricsVersion={financialMetricsVersion}
+              selectedProductKey={selectedProductKey}
+              onSelectBestSeller={(row) =>
+                toggleDrilldown("product", {
+                  value: getBestSellerDrilldownValue(row),
+                  label:
+                    row.sku && row.sku !== "-"
+                      ? `${row.product} / ${row.sku}`
+                      : row.product,
+                })
               }
-              onClearAll={() => setActiveDrilldowns(emptyDrilldowns)}
             />
 
-            <div style={{ marginBottom: 20 }}>
-              <SalesByHourCard
-                salesByHour={drilldownSalesByHour}
-                financialMetricsVersion={financialMetricsVersion}
-                selectedHour={selectedHour}
-                onSelectHour={toggleHourDrilldown}
-              />
-            </div>
+            <StockAlertsCard stockAlerts={stockAlerts} />
+          </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)",
-                gap: 20,
-                marginBottom: 20,
-              }}
-            >
-              <BestSellersCard
-                bestSellers={drilldownBestSellers}
-                financialMetricsVersion={financialMetricsVersion}
-                selectedProductKey={selectedProductKey}
-                onSelectBestSeller={(row) =>
-                  toggleDrilldown("product", {
-                    value: getBestSellerDrilldownValue(row),
-                    label:
-                      row.sku && row.sku !== "-"
-                        ? `${row.product} / ${row.sku}`
-                        : row.product,
-                  })
-                }
-              />
-
-              <StockAlertsCard stockAlerts={stockAlerts} />
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                gap: 20,
-                marginBottom: 20,
-              }}
-            >
-              <SalesByStaffCard
-                salesByStaff={drilldownSalesByStaff}
-                financialMetricsVersion={financialMetricsVersion}
-                staffAttributionAvailable={staffAttributionAvailable}
-                selectedStaffKey={selectedStaffKey}
-                onSelectStaff={(row) =>
-                  toggleDrilldown("staff", {
-                    value: row.staffKey,
-                    label: row.staff,
-                  })
-                }
-              />
-
-              <SalesByVendorCard
-                salesByVendor={drilldownSalesByVendor}
-                financialMetricsVersion={financialMetricsVersion}
-                selectedVendorKey={selectedVendorKey}
-                onSelectVendor={(row) =>
-                  toggleDrilldown("vendor", {
-                    value: row.vendor,
-                    label: row.vendor,
-                  })
-                }
-              />
-            </div>
-
-            <RecentOrderLinesCard
-              recentOrders={drilldownRecentOrders}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+              gap: 20,
+              marginBottom: 20,
+            }}
+          >
+            <SalesByStaffCard
+              salesByStaff={drilldownSalesByStaff}
               financialMetricsVersion={financialMetricsVersion}
+              staffAttributionAvailable={staffAttributionAvailable}
+              selectedStaffKey={selectedStaffKey}
+              onSelectStaff={(row) =>
+                toggleDrilldown("staff", {
+                  value: row.staffKey,
+                  label: row.staff,
+                })
+              }
             />
-          </>
-        ) : null}
-      </div>
-    </main>
+
+            <SalesByVendorCard
+              salesByVendor={drilldownSalesByVendor}
+              financialMetricsVersion={financialMetricsVersion}
+              selectedVendorKey={selectedVendorKey}
+              onSelectVendor={(row) =>
+                toggleDrilldown("vendor", {
+                  value: row.vendor,
+                  label: row.vendor,
+                })
+              }
+            />
+          </div>
+
+          <RecentOrderLinesCard
+            recentOrders={drilldownRecentOrders}
+            financialMetricsVersion={financialMetricsVersion}
+          />
+        </>
+      ) : null}
+    </ShopOpsPage>
   );
 }

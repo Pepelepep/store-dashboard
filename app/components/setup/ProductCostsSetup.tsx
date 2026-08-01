@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Form,
-  useFetcher,
-  useLocation,
-  useNavigation,
-} from "react-router";
+import { Form, useFetcher, useLocation, useNavigation } from "react-router";
 
 import { formatRelativeUpdatedAt } from "../../lib/financial/cogs-setup";
 import type {
@@ -14,6 +9,14 @@ import type {
 import { AppButton } from "../ui/AppButton";
 import { HelperText } from "../ui/HelperText";
 import { InlineResult } from "../ui/InlineResult";
+import {
+  ContentCard,
+  EmptyState,
+  FormActions,
+  InlineNotice,
+  SelectableCard,
+  SummaryCard,
+} from "../ui/ShopOpsPage";
 
 type ProductCostsSetupProps = {
   shop: string;
@@ -59,16 +62,12 @@ export function ProductCostsSetup({
   const navigation = useNavigation();
   const missingProductsFetcher = useFetcher<MissingProductCostsPageData>();
   const [enabled, setEnabled] = useState(data.settings.enabled);
-  const [percent, setPercent] = useState(
-    String(data.settings.percent ?? 40),
-  );
+  const [percent, setPercent] = useState(String(data.settings.percent ?? 40));
   const [estimateCustomSales, setEstimateCustomSales] = useState(
     data.settings.estimateCustomSales,
   );
   const [search, setSearch] = useState(data.missingProducts.search);
-  const [missingProducts, setMissingProducts] = useState(
-    data.missingProducts,
-  );
+  const [missingProducts, setMissingProducts] = useState(data.missingProducts);
   const didMountSearch = useRef(false);
 
   useEffect(() => {
@@ -158,12 +157,7 @@ export function ProductCostsSetup({
       estimatedCogs,
       estimatedProfit,
     };
-  }, [
-    data.previewBasis,
-    estimateCustomSales,
-    numericPercent,
-    percentIsValid,
-  ]);
+  }, [data.previewBasis, estimateCustomSales, numericPercent, percentIsValid]);
   const confirmation = enabled
     ? `Apply a ${numericPercent}% estimated cost rate?\n\n${preview.affectedLineCount} sales lines will use estimated costs.\nExisting Shopify costs will not be changed.`
     : "Disable estimated product costs?\n\nEstimated rows will return to missing cost. Existing Shopify costs will not be changed.";
@@ -178,84 +172,31 @@ export function ProductCostsSetup({
           showingStart + missingProducts.rows.length - 1,
           missingProducts.totalCount,
         );
+  const coveredLineCount =
+    data.coverage.actualLineCount + data.coverage.estimatedLineCount;
+  const totalLineCount = coveredLineCount + data.coverage.missingLineCount;
 
   return (
     <>
-      <section
-        style={{
-          background: "white",
-          border: "1px solid #e3e3e3",
-          borderRadius: 16,
-          marginBottom: 20,
-          padding: 20,
-        }}
-      >
-        <div
-          style={{
-            alignItems: "baseline",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "6px 12px",
-            justifyContent: "space-between",
-            marginBottom: 16,
-          }}
-        >
-          <h2 style={{ margin: 0 }}>Product cost coverage</h2>
-          <span
-            style={{ color: "#616161", fontSize: 13 }}
-            title={formatTimestamp(data.coverage.lastCalculatedAt)}
-          >
-            {formatRelativeUpdatedAt(data.coverage.lastCalculatedAt)}
-          </span>
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gap: 12,
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          }}
-        >
-          {[
-            {
-              label: "Using Shopify costs",
-              value: formatNumber(data.coverage.actualLineCount),
-            },
-            {
-              label: "Using ShopOps estimates",
-              value: formatNumber(data.coverage.estimatedLineCount),
-            },
-            {
-              label: "Missing costs",
-              value: formatNumber(data.coverage.missingLineCount),
-            },
-            {
-              label: "Sales missing costs",
-              value: formatCurrency(data.coverage.missingSalesAmount),
-            },
-            {
-              label: "Products affected",
-              value: formatNumber(data.coverage.affectedProductCount),
-            },
-          ].map((item) => (
-            <div
-              key={item.label}
-              style={{
-                background: "#f8fafc",
-                border: "1px solid #e5e7eb",
-                borderRadius: 12,
-                padding: 14,
-              }}
-            >
-              <div style={{ color: "#616161", fontSize: 12, fontWeight: 700 }}>
-                {item.label}
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 800, marginTop: 5 }}>
-                {item.value}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+      <div className="shopops-summary-grid">
+        <SummaryCard
+          label="Cost coverage"
+          value={`${formatNumber(coveredLineCount)} of ${formatNumber(totalLineCount)} sales lines`}
+          detail={
+            <span title={formatTimestamp(data.coverage.lastCalculatedAt)}>
+              {formatNumber(data.coverage.actualLineCount)} Shopify ·{" "}
+              {formatNumber(data.coverage.estimatedLineCount)} estimated ·{" "}
+              {formatRelativeUpdatedAt(data.coverage.lastCalculatedAt)}
+            </span>
+          }
+        />
+        <SummaryCard
+          label="Products missing costs"
+          value={formatNumber(data.coverage.affectedProductCount)}
+          detail={`${formatNumber(data.coverage.missingLineCount)} sales lines · ${formatCurrency(data.coverage.missingSalesAmount)} in sales`}
+          tone={data.coverage.missingLineCount > 0 ? "warning" : "neutral"}
+        />
+      </div>
 
       <Form
         method="post"
@@ -277,37 +218,13 @@ export function ProductCostsSetup({
           value={String(estimateCustomSales)}
         />
 
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 16,
-            marginBottom: 20,
-            padding: 20,
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>How to handle missing costs</h2>
-          <style>{`
-            @media (max-width: 520px) {
-              .cost-method-options {
-                grid-template-columns: 1fr !important;
-              }
-            }
-          `}</style>
-          <div
-            className="cost-method-options"
-            style={{
-              display: "grid",
-              gap: 12,
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            }}
-          >
+        <ContentCard title="How to handle missing costs">
+          <div className="shopops-selectable-grid">
             {[
               {
                 enabled: false,
                 title: "Shopify costs only",
-                description:
-                  "Products without a Shopify cost remain missing.",
+                description: "Products without a Shopify cost remain missing.",
               },
               {
                 enabled: true,
@@ -319,43 +236,24 @@ export function ProductCostsSetup({
               const selected = enabled === option.enabled;
 
               return (
-                <label
+                <SelectableCard
                   key={option.title}
-                  style={{
-                    alignItems: "flex-start",
-                    background: selected ? "#eef5ff" : "white",
-                    border: selected
-                      ? "2px solid #2563eb"
-                      : "1px solid #c9cccf",
-                    borderRadius: 14,
-                    cursor: "pointer",
-                    display: "flex",
-                    gap: 10,
-                    minHeight: 82,
-                    padding: 16,
+                  input={{
+                    "aria-label": option.title,
+                    checked: selected,
+                    name: "missing_cost_method",
+                    onChange: () => setEnabled(option.enabled),
+                    type: "radio",
+                    value: option.enabled ? "estimate" : "shopify-only",
                   }}
                 >
-                  <input
-                    aria-label={option.title}
-                    checked={selected}
-                    name="missing_cost_method"
-                    onChange={() => setEnabled(option.enabled)}
-                    type="radio"
-                    value={option.enabled ? "estimate" : "shopify-only"}
-                  />
                   <span style={{ display: "grid", gap: 6 }}>
                     <strong>{option.title}</strong>
-                    <span
-                      style={{
-                        color: "#616161",
-                        fontSize: 13,
-                        lineHeight: 1.4,
-                      }}
-                    >
+                    <span className="shopops-helper-text" style={{ margin: 0 }}>
                       {option.description}
                     </span>
                   </span>
-                </label>
+                </SelectableCard>
               );
             })}
           </div>
@@ -363,7 +261,7 @@ export function ProductCostsSetup({
           {enabled ? (
             <div
               style={{
-                borderTop: "1px solid #e5e7eb",
+                borderTop: "1px solid var(--shopops-border)",
                 display: "grid",
                 gap: 18,
                 marginTop: 18,
@@ -388,8 +286,8 @@ export function ProductCostsSetup({
                     step="0.1"
                     style={{
                       border: percentIsValid
-                        ? "1px solid #c9cccf"
-                        : "1px solid #d92d20",
+                        ? "1px solid var(--shopops-border)"
+                        : "1px solid var(--p-color-border-critical, #d92d20)",
                       borderRadius: 8,
                       padding: 10,
                       width: 120,
@@ -429,34 +327,17 @@ export function ProductCostsSetup({
               </label>
             </div>
           ) : data.coverage.missingLineCount > 0 ? (
-            <div
-              style={{
-                background: "#fff8e5",
-                border: "1px solid #e5c07b",
-                borderRadius: 10,
-                color: "#5c4813",
-                fontSize: 13,
-                marginTop: 18,
-                padding: "10px 12px",
-              }}
-            >
-              Profit remains unavailable while relevant product costs are
-              missing.
+            <div style={{ marginTop: 18 }}>
+              <InlineNotice tone="warning">
+                Profit remains unavailable while relevant product costs are
+                missing.
+              </InlineNotice>
             </div>
           ) : null}
-        </section>
+        </ContentCard>
 
         {enabled ? (
-          <section
-            style={{
-              background: "white",
-              border: "1px solid #e3e3e3",
-              borderRadius: 16,
-              marginBottom: 20,
-              padding: 20,
-            }}
-          >
-            <h2 style={{ marginTop: 0 }}>Estimated impact preview</h2>
+          <ContentCard title="Estimated impact preview">
             <div
               style={{
                 display: "grid",
@@ -481,46 +362,42 @@ export function ProductCostsSetup({
                 </strong>
               </div>
             </div>
-            <HelperText>This preview is not saved until you confirm.</HelperText>
-          </section>
+            <HelperText>
+              This preview is not saved until you confirm.
+            </HelperText>
+          </ContentCard>
         ) : null}
 
-        <div
-          style={{
-            alignItems: "center",
-            display: "flex",
-            gap: 12,
-            marginBottom: 24,
-          }}
+        <FormActions
+          equal={false}
+          feedback={
+            actionData?.intent === "save-product-costs" &&
+            actionData.message ? (
+              <InlineResult variant={actionData.ok ? "success" : "error"}>
+                {actionData.message}
+              </InlineResult>
+            ) : enabled && !percentIsValid ? (
+              <HelperText>
+                Enter an estimated cost rate from 0 to 100.
+              </HelperText>
+            ) : !settingsChanged ? (
+              <HelperText>Make a change to enable saving.</HelperText>
+            ) : undefined
+          }
         >
           <AppButton
             disabled={
-              isSaving ||
-              !settingsChanged ||
-              (enabled && !percentIsValid)
+              isSaving || !settingsChanged || (enabled && !percentIsValid)
             }
             type="submit"
             variant="primary"
           >
             {isSaving ? "Saving and recalculating..." : "Save and recalculate"}
           </AppButton>
-          {actionData?.intent === "save-product-costs" && actionData.message ? (
-            <InlineResult variant={actionData.ok ? "success" : "error"}>
-              {actionData.message}
-            </InlineResult>
-          ) : null}
-        </div>
+        </FormActions>
       </Form>
 
-      <section
-        style={{
-          background: "white",
-          border: "1px solid #e3e3e3",
-          borderRadius: 16,
-          padding: 20,
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Products missing costs</h2>
+      <ContentCard title="Products missing costs">
         <div
           style={{
             alignItems: "end",
@@ -546,7 +423,7 @@ export function ProductCostsSetup({
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search product or variant"
               style={{
-                border: "1px solid #c9cccf",
+                border: "1px solid var(--shopops-border)",
                 borderRadius: 8,
                 padding: 10,
                 width: "100%",
@@ -555,7 +432,7 @@ export function ProductCostsSetup({
               value={search}
             />
           </label>
-          <div aria-live="polite" style={{ color: "#616161", fontSize: 13 }}>
+          <div aria-live="polite" className="shopops-helper-text">
             {isLoadingMissingProducts
               ? "Loading..."
               : `Showing ${formatNumber(showingStart)}–${formatNumber(
@@ -563,7 +440,7 @@ export function ProductCostsSetup({
                 )} of ${formatNumber(missingProducts.totalCount)}`}
           </div>
         </div>
-        <div style={{ marginTop: 12, overflowX: "auto" }}>
+        <div className="shopops-table-scroll" style={{ marginTop: 12 }}>
           <table
             style={{ borderCollapse: "collapse", fontSize: 14, width: "100%" }}
           >
@@ -607,10 +484,22 @@ export function ProductCostsSetup({
                   <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
                     {row.variant}
                   </td>
-                  <td style={{ borderBottom: "1px solid #eee", padding: 10, textAlign: "right" }}>
+                  <td
+                    style={{
+                      borderBottom: "1px solid #eee",
+                      padding: 10,
+                      textAlign: "right",
+                    }}
+                  >
                     {formatNumber(row.unitsSold)}
                   </td>
-                  <td style={{ borderBottom: "1px solid #eee", padding: 10, textAlign: "right" }}>
+                  <td
+                    style={{
+                      borderBottom: "1px solid #eee",
+                      padding: 10,
+                      textAlign: "right",
+                    }}
+                  >
                     {formatCurrency(row.salesAffected)}
                   </td>
                   <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
@@ -620,23 +509,30 @@ export function ProductCostsSetup({
                           shop,
                           row.shopifyProductId,
                         )}
-                        style={{ color: "#2563eb", fontWeight: 700 }}
+                        style={{
+                          color: "var(--shopops-accent)",
+                          fontWeight: 700,
+                        }}
                         target="_top"
                       >
                         Open in Shopify
                       </a>
                     ) : (
-                      <span style={{ color: "#8a8f93" }}>—</span>
+                      <span style={{ color: "var(--shopops-muted)" }}>—</span>
                     )}
                   </td>
                 </tr>
               ))}
               {missingProducts.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ color: "#616161", padding: 16 }}>
-                    {search
-                      ? "No missing-cost products match this search."
-                      : "All synced sales lines have product costs."}
+                  <td colSpan={5}>
+                    <EmptyState
+                      title={
+                        search
+                          ? "No missing-cost products match this search."
+                          : "All synced sales lines have product costs."
+                      }
+                    />
                   </td>
                 </tr>
               ) : null}
@@ -654,9 +550,7 @@ export function ProductCostsSetup({
           <AppButton
             compact
             disabled={isLoadingMissingProducts || missingProducts.page <= 1}
-            onClick={() =>
-              loadMissingProducts(missingProducts.page - 1)
-            }
+            onClick={() => loadMissingProducts(missingProducts.page - 1)}
             type="button"
             variant="secondary"
           >
@@ -668,16 +562,14 @@ export function ProductCostsSetup({
               isLoadingMissingProducts ||
               showingEnd >= missingProducts.totalCount
             }
-            onClick={() =>
-              loadMissingProducts(missingProducts.page + 1)
-            }
+            onClick={() => loadMissingProducts(missingProducts.page + 1)}
             type="button"
             variant="secondary"
           >
             Next
           </AppButton>
         </div>
-      </section>
+      </ContentCard>
     </>
   );
 }

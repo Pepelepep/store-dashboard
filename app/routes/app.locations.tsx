@@ -9,13 +9,23 @@ import {
   useLocation,
   useNavigation,
 } from "react-router";
+import { LocationIcon } from "@shopify/polaris-icons";
 
-import { AppButton } from "../components/ui/AppButton";
+import { AppButton, AppButtonLink } from "../components/ui/AppButton";
 import { NetSalesTrendPlot } from "../components/dashboard/NetSalesTrendPlot";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { SectionTabs } from "../components/ui/SectionTabs";
+import {
+  ContentCard,
+  EmptyState,
+  FormActions,
+  InlineNotice,
+  PageHeader,
+  SelectableCard,
+  ShopOpsPage,
+} from "../components/ui/ShopOpsPage";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
 import {
   assertReportingEntitlements,
@@ -1702,7 +1712,13 @@ function KpiGrid({
             style={{
               background: "white",
               border: "1px solid #e5e7eb",
-              borderRadius: 18,
+              borderRadius: 16,
+              borderTop:
+                item.label === "Net Sales" || item.label === "Revenue"
+                  ? "3px solid var(--shopops-accent, #2563eb)"
+                  : item.label === "Orders"
+                    ? "3px solid var(--shopops-teal, #0f766e)"
+                    : undefined,
               boxShadow: "0 1px 3px rgba(0,0,0,0.07)",
               minHeight: 132,
               padding: 20,
@@ -1763,8 +1779,8 @@ function KpiGrid({
 
 const LOCATION_CHART_CARD_STYLE: CSSProperties = {
   background: "white",
-  border: "1px solid #e5e7eb",
-  borderRadius: 18,
+  border: "1px solid var(--shopops-border, #e5e7eb)",
+  borderRadius: 16,
   boxShadow: "0 1px 3px rgba(0, 0, 0, 0.06)",
   padding: 20,
 };
@@ -2949,103 +2965,107 @@ function ReportingLocationsPage({ data }: { data: ReportingLoaderData }) {
   const usage =
     data.limit === null
       ? `${data.usage} reporting ${data.usage === 1 ? "location" : "locations"}`
-      : `${data.usage} of ${data.limit} reporting locations`;
+      : `${data.usage} of ${data.limit} reporting ${data.limit === 1 ? "location" : "locations"}`;
 
   return (
-    <main
-      style={{
-        background: "#f6f6f7",
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-        minHeight: "100vh",
-        padding: 28,
-      }}
-    >
-      <div style={{ margin: "0 auto", maxWidth: 960 }}>
-        <header style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 32, margin: "0 0 18px" }}>Locations</h1>
-          <SectionTabs
-            activeTab="reporting"
-            ariaLabel="Locations sections"
-            tabs={[
-              { value: "performance", label: "Performance" },
-              { value: "reporting", label: "Reporting locations" },
-            ]}
-          />
-        </header>
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>Reporting locations</h2>
-          <p style={{ color: "#616161" }}>
-            Shopify locations remain detected and synchronized. Select which
-            locations appear in ShopOps reporting. Historical data is retained
-            when a location is disabled.
-          </p>
-          <p style={{ fontWeight: 800 }}>{usage}</p>
-          {actionData ? (
-            <div
-              role={actionData.ok ? "status" : "alert"}
-              style={{
-                color: actionData.ok ? "#166534" : "#b42318",
-                fontWeight: 700,
-                marginBottom: 14,
-              }}
-            >
-              {actionData.message}
-            </div>
-          ) : null}
-          <Form method="post" style={{ display: "grid", gap: 12 }}>
-            <input
-              name="intent"
-              type="hidden"
-              value="save-reporting-locations"
-            />
+    <ShopOpsPage>
+      <PageHeader
+        description="Review location performance and choose which locations appear in ShopOps."
+        icon={LocationIcon}
+        title="Locations"
+      />
+      <SectionTabs
+        activeTab="reporting"
+        ariaLabel="Locations sections"
+        tabs={[
+          { value: "performance", label: "Performance" },
+          { value: "reporting", label: "Reporting locations" },
+        ]}
+      />
+      <ContentCard
+        title="Reporting locations"
+        description="Shopify locations remain detected and synchronized. Choose which locations appear in ShopOps reporting. Historical data is retained when a location is disabled."
+      >
+        <p style={{ fontWeight: 800, margin: "0 0 16px" }}>{usage}</p>
+        {actionData ? (
+          <InlineNotice tone={actionData.ok ? "success" : "critical"}>
+            {actionData.message}
+          </InlineNotice>
+        ) : null}
+        <Form method="post">
+          <input name="intent" type="hidden" value="save-reporting-locations" />
+          <div
+            className="shopops-selectable-grid"
+            style={{ marginTop: actionData ? 16 : 0 }}
+          >
             {data.locations.map((reportingLocation) => (
-              <label
+              <SelectableCard
                 key={reportingLocation.id}
-                style={{ alignItems: "center", display: "flex", gap: 10 }}
-              >
-                <input
-                  defaultChecked={
+                input={{
+                  "aria-label": `Include ${reportingLocation.name} in ShopOps reporting`,
+                  defaultChecked:
                     reportingLocation.shopifyIsActive &&
-                    reportingLocation.reportingEnabled
-                  }
-                  disabled={!reportingLocation.shopifyIsActive}
-                  name="location_ids"
-                  type="checkbox"
-                  value={reportingLocation.shopifyLocationId}
-                />
-                <span>
-                  {reportingLocation.name}
-                  {!reportingLocation.shopifyIsActive
-                    ? " (inactive in Shopify)"
-                    : ""}
+                    reportingLocation.reportingEnabled,
+                  disabled: !reportingLocation.shopifyIsActive,
+                  name: "location_ids",
+                  type: "checkbox",
+                  value: reportingLocation.shopifyLocationId,
+                }}
+              >
+                <strong>{reportingLocation.name}</strong>
+                <span style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                  <StatusBadge
+                    variant={
+                      reportingLocation.shopifyIsActive ? "success" : "neutral"
+                    }
+                  >
+                    Shopify{" "}
+                    {reportingLocation.shopifyIsActive ? "active" : "inactive"}
+                  </StatusBadge>
+                  <StatusBadge
+                    variant={
+                      reportingLocation.reportingEnabled ? "info" : "neutral"
+                    }
+                  >
+                    {reportingLocation.reportingEnabled
+                      ? "Currently included"
+                      : "Not included"}
+                  </StatusBadge>
                 </span>
-              </label>
+                <span className="shopops-helper-text" style={{ margin: 0 }}>
+                  {reportingLocation.shopifyIsActive
+                    ? "Available for ShopOps reporting."
+                    : "Reactivate this location in Shopify before selecting it."}
+                </span>
+              </SelectableCard>
             ))}
-            {data.locations.length === 0 ? (
-              <p style={{ color: "#616161" }}>
-                No Shopify locations detected yet.
-              </p>
-            ) : null}
-            <div>
-              <button disabled={isSaving} type="submit">
-                {isSaving ? "Saving..." : "Save reporting locations"}
-              </button>
-            </div>
-          </Form>
-          <p style={{ marginBottom: 0, marginTop: 18 }}>
-            <Link to="/app/settings?tab=plan">Review plan &amp; billing</Link>
-          </p>
-        </section>
-      </div>
-    </main>
+          </div>
+          {data.locations.length === 0 ? (
+            <EmptyState
+              title="No Shopify locations detected yet."
+              description="Locations will appear here after Shopify data sync completes."
+            />
+          ) : null}
+          <FormActions>
+            <AppButtonLink
+              fullWidth
+              to="/app/settings?tab=plan"
+              variant="secondary"
+            >
+              Review plan &amp; billing
+            </AppButtonLink>
+            <AppButton
+              disabled={isSaving}
+              fullWidth
+              type="submit"
+              variant="primary"
+            >
+              {isSaving ? "Saving..." : "Save reporting locations"}
+            </AppButton>
+          </FormActions>
+        </Form>
+      </ContentCard>
+    </ShopOpsPage>
   );
 }
 
@@ -3239,16 +3259,7 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
   const shouldShowAnalytics = !hasNoSyncedLocations && !isDataPreparing;
 
   return (
-    <main
-      className="shopops-locations-page"
-      style={{
-        background: "#f6f6f7",
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-        minHeight: "100vh",
-        padding: 28,
-      }}
-    >
+    <ShopOpsPage className="shopops-locations-page">
       <style>{`
         .shopops-chart-interactive:focus-visible {
           outline: 3px solid #93c5fd !important;
@@ -3346,417 +3357,388 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
           }
         }
         @media (max-width: 640px) {
-          .shopops-locations-page {
-            padding: 16px !important;
-          }
           .shopops-location-chart-card {
             padding: 16px !important;
           }
         }
       `}</style>
-      <div style={{ margin: "0 auto", maxWidth: 1360 }}>
-        <header style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 32, margin: "0 0 18px" }}>Locations</h1>
-          <SectionTabs
-            activeTab="performance"
-            ariaLabel="Locations sections"
-            tabs={[
-              { value: "performance", label: "Performance" },
-              ...(data.canManageReportingLocations
-                ? [
-                    {
-                      value: "reporting" as const,
-                      label: "Reporting locations",
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        </header>
-        <section
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 16,
-            marginBottom: 20,
-            padding: 20,
-          }}
+      <PageHeader
+        description="Review location performance and choose which locations appear in ShopOps."
+        icon={LocationIcon}
+        title="Locations"
+      />
+      <SectionTabs
+        activeTab="performance"
+        ariaLabel="Locations sections"
+        tabs={[
+          { value: "performance", label: "Performance" },
+          ...(data.canManageReportingLocations
+            ? [
+                {
+                  value: "reporting" as const,
+                  label: "Reporting locations",
+                },
+              ]
+            : []),
+        ]}
+      />
+      <ContentCard>
+        <Form
+          id="locations-filter-form"
+          method="get"
+          onSubmit={() => setIsDirty(false)}
+          style={{ display: "grid", gap: 16 }}
         >
-          <div style={{ marginBottom: 18 }}>
-            <div>
-              <h2 style={{ fontSize: 28, lineHeight: 1.15, margin: 0 }}>
-                Performance
-              </h2>
-              <p style={{ color: "#616161", margin: "6px 0 0" }}>
-                Compare stores by net sales, margin, expenses, discounts,
-                refunds, and inventory health.
-              </p>
-            </div>
-          </div>
-
-          <Form
-            id="locations-filter-form"
-            method="get"
-            onSubmit={() => setIsDirty(false)}
-            style={{ display: "grid", gap: 16 }}
-          >
-            {preservedSearchParams.map(({ name, value }, index) => (
-              <input
-                key={`${name}-${index}`}
-                type="hidden"
-                name={name}
-                value={value}
-              />
-            ))}
+          {preservedSearchParams.map(({ name, value }, index) => (
             <input
+              key={`${name}-${index}`}
               type="hidden"
-              name="locations"
-              value={allLocationsSelected ? "" : draftLocationIds.join(",")}
+              name={name}
+              value={value}
             />
+          ))}
+          <input
+            type="hidden"
+            name="locations"
+            value={allLocationsSelected ? "" : draftLocationIds.join(",")}
+          />
 
-            <div
-              style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-              }}
-            >
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Start date
-                <input
-                  name="startDate"
-                  type="date"
-                  defaultValue={startDate}
-                  onChange={() => setIsDirty(true)}
-                  style={{
-                    border: "1px solid #c9cccf",
-                    borderRadius: 10,
-                    padding: 10,
-                  }}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                End date
-                <input
-                  name="endDate"
-                  type="date"
-                  defaultValue={endDate}
-                  onChange={() => setIsDirty(true)}
-                  style={{
-                    border: "1px solid #c9cccf",
-                    borderRadius: 10,
-                    padding: 10,
-                  }}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Staff
-                <select
-                  name="staff"
-                  defaultValue={selectedStaff}
-                  onChange={() => setIsDirty(true)}
-                  style={{
-                    border: "1px solid #c9cccf",
-                    borderRadius: 10,
-                    padding: 10,
-                  }}
-                >
-                  <option value="">All staff</option>
-                  {staffOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
-                Vendor
-                <select
-                  name="vendor"
-                  defaultValue={selectedVendor}
-                  onChange={() => setIsDirty(true)}
-                  style={{
-                    border: "1px solid #c9cccf",
-                    borderRadius: 10,
-                    padding: 10,
-                  }}
-                >
-                  <option value="">All vendors</option>
-                  {vendorOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div>
-              <div
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+            }}
+          >
+            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+              Start date
+              <input
+                name="startDate"
+                type="date"
+                defaultValue={startDate}
+                onChange={() => setIsDirty(true)}
                 style={{
-                  alignItems: "baseline",
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  marginBottom: 8,
+                  border: "1px solid #c9cccf",
+                  borderRadius: 10,
+                  padding: 10,
+                }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+              End date
+              <input
+                name="endDate"
+                type="date"
+                defaultValue={endDate}
+                onChange={() => setIsDirty(true)}
+                style={{
+                  border: "1px solid #c9cccf",
+                  borderRadius: 10,
+                  padding: 10,
+                }}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+              Staff
+              <select
+                name="staff"
+                defaultValue={selectedStaff}
+                onChange={() => setIsDirty(true)}
+                style={{
+                  border: "1px solid #c9cccf",
+                  borderRadius: 10,
+                  padding: 10,
                 }}
               >
-                <div
-                  style={{ color: "#616161", fontSize: 13, fontWeight: 800 }}
-                >
-                  Locations
-                </div>
-                <div style={{ color: "#707070", fontSize: 13 }}>
-                  {locationSummary}
-                </div>
+                <option value="">All staff</option>
+                {staffOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+              Vendor
+              <select
+                name="vendor"
+                defaultValue={selectedVendor}
+                onChange={() => setIsDirty(true)}
+                style={{
+                  border: "1px solid #c9cccf",
+                  borderRadius: 10,
+                  padding: 10,
+                }}
+              >
+                <option value="">All vendors</option>
+                {vendorOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div>
+            <div
+              style={{
+                alignItems: "baseline",
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              <div style={{ color: "#616161", fontSize: 13, fontWeight: 800 }}>
+                Locations
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDraftLocationIds(
-                      locations.map((location) => location.shopify_location_id),
-                    );
-                    setIsDirty(true);
-                  }}
+              <div style={{ color: "#707070", fontSize: 13 }}>
+                {locationSummary}
+              </div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftLocationIds(
+                    locations.map((location) => location.shopify_location_id),
+                  );
+                  setIsDirty(true);
+                }}
+                style={{
+                  alignItems: "center",
+                  background: "white",
+                  border: `1px solid ${allLocationsSelected ? "#2563eb" : "#dcdcdc"}`,
+                  borderRadius: 999,
+                  color: "#202223",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  font: "inherit",
+                  gap: 8,
+                  padding: "7px 10px",
+                }}
+              >
+                All locations
+              </button>
+              {locations.map((location) => (
+                <label
+                  key={location.shopify_location_id}
                   style={{
                     alignItems: "center",
-                    background: "white",
-                    border: `1px solid ${allLocationsSelected ? "#2563eb" : "#dcdcdc"}`,
+                    border: `1px solid ${
+                      draftLocationIds.includes(location.shopify_location_id)
+                        ? "#2563eb"
+                        : "#dcdcdc"
+                    }`,
                     borderRadius: 999,
-                    color: "#202223",
-                    cursor: "pointer",
                     display: "inline-flex",
-                    font: "inherit",
                     gap: 8,
                     padding: "7px 10px",
                   }}
                 >
-                  All locations
-                </button>
-                {locations.map((location) => (
-                  <label
-                    key={location.shopify_location_id}
-                    style={{
-                      alignItems: "center",
-                      border: `1px solid ${
-                        draftLocationIds.includes(location.shopify_location_id)
-                          ? "#2563eb"
-                          : "#dcdcdc"
-                      }`,
-                      borderRadius: 999,
-                      display: "inline-flex",
-                      gap: 8,
-                      padding: "7px 10px",
+                  <input
+                    type="checkbox"
+                    checked={draftLocationIds.includes(
+                      location.shopify_location_id,
+                    )}
+                    onChange={(event) => {
+                      setDraftLocationIds((current) =>
+                        event.target.checked
+                          ? Array.from(
+                              new Set([
+                                ...current,
+                                location.shopify_location_id,
+                              ]),
+                            )
+                          : current.filter(
+                              (id) => id !== location.shopify_location_id,
+                            ),
+                      );
+                      setIsDirty(true);
                     }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={draftLocationIds.includes(
-                        location.shopify_location_id,
-                      )}
-                      onChange={(event) => {
-                        setDraftLocationIds((current) =>
-                          event.target.checked
-                            ? Array.from(
-                                new Set([
-                                  ...current,
-                                  location.shopify_location_id,
-                                ]),
-                              )
-                            : current.filter(
-                                (id) => id !== location.shopify_location_id,
-                              ),
-                        );
-                        setIsDirty(true);
-                      }}
-                    />
-                    {location.name}
-                  </label>
-                ))}
-              </div>
+                  />
+                  {location.name}
+                </label>
+              ))}
             </div>
+          </div>
 
-            {isDirty ? (
-              <div
-                style={{
-                  background: "#eff8ff",
-                  border: "1px solid #b2ddff",
-                  borderRadius: 10,
-                  color: "#175cd3",
-                  fontSize: 13,
-                  fontWeight: 700,
-                  padding: "8px 10px",
-                  width: "fit-content",
-                }}
-              >
-                Filters changed. Click Apply to update.
-              </div>
-            ) : null}
-
+          {isDirty ? (
             <div
-              style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
-            >
-              <AppButton
-                type="submit"
-                name="preset"
-                value="today"
-                variant="secondary"
-                onClick={() => setIsDirty(false)}
-                disabled={isApplyingFilters}
-              >
-                {isApplyingToday ? "Applying today..." : "Today"}
-              </AppButton>
-              <AppButton
-                type="submit"
-                variant="primary"
-                onClick={() => setIsDirty(false)}
-                disabled={isApplyingFilters}
-              >
-                {isApplyingFilters && !isApplyingToday
-                  ? "Applying..."
-                  : "Apply"}
-              </AppButton>
-            </div>
-          </Form>
-        </section>
-
-        <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
-          Expenses include active location-specific amounts. Global expenses are
-          shared equally across all active locations.
-          {financialMetricsVersion === "v2"
-            ? " Refunds are order-level cash movements allocated to locations from matching order lines."
-            : ""}
-        </p>
-
-        {debugInfo ? (
-          <details
-            style={{
-              background: "white",
-              border: "1px solid #e3e3e3",
-              borderRadius: 12,
-              marginBottom: 20,
-              padding: 14,
-            }}
-          >
-            <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-              Support diagnostics
-            </summary>
-            <pre
               style={{
-                background: "#111827",
+                background: "#eff8ff",
+                border: "1px solid #b2ddff",
                 borderRadius: 10,
-                color: "#f9fafb",
-                fontSize: 12,
-                lineHeight: 1.45,
-                margin: "10px 0 0",
-                overflowX: "auto",
-                padding: 12,
-                whiteSpace: "pre-wrap",
+                color: "#175cd3",
+                fontSize: 13,
+                fontWeight: 700,
+                padding: "8px 10px",
+                width: "fit-content",
               }}
             >
-              {JSON.stringify(debugInfo, null, 2)}
-            </pre>
-          </details>
-        ) : null}
+              Filters changed. Click Apply to update.
+            </div>
+          ) : null}
 
-        {hasNoSyncedLocations ? (
-          <PageNotice
-            title="Your data is being prepared"
-            message="No locations have synced yet. Location reports appear after Shopify data sync completes."
-            bullets={[
-              "Open Sync Status to confirm whether locations, products, inventory, and orders have synced.",
-              "Location reporting becomes useful once Shopify data is available.",
-            ]}
-            cta={{ to: dataSyncPath, label: "Open Sync Status" }}
-            tone="info"
-          />
-        ) : isDataPreparing ? (
-          <PageNotice
-            title="Your data is being prepared"
-            message="Reports appear after Shopify data sync completes."
-            bullets={[
-              "Location comparisons populate after successful sync runs create sales rows.",
-              "ShopOps Studio uses synced Shopify data to report sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health.",
-            ]}
-            cta={{ to: dataSyncPath, label: "Open Sync Status" }}
-            tone="info"
-          />
-        ) : hasNoSalesForRange ? (
-          <PageNotice
-            title="No sales for this date range."
-            message="Try another date range or confirm sync status."
-            bullets={[
-              "Filters remain available so admins can review another location, staff member, vendor, or date range.",
-              "If sales should already be available, check Sync Status for freshness or failures.",
-            ]}
-            cta={{ to: dataSyncPath, label: "Open Sync Status" }}
-            tone="neutral"
-          />
-        ) : null}
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <AppButton
+              type="submit"
+              name="preset"
+              value="today"
+              variant="secondary"
+              onClick={() => setIsDirty(false)}
+              disabled={isApplyingFilters}
+            >
+              {isApplyingToday ? "Applying today..." : "Today"}
+            </AppButton>
+            <AppButton
+              type="submit"
+              variant="primary"
+              onClick={() => setIsDirty(false)}
+              disabled={isApplyingFilters}
+            >
+              {isApplyingFilters && !isApplyingToday ? "Applying..." : "Apply"}
+            </AppButton>
+          </div>
+        </Form>
+      </ContentCard>
 
-        {shouldShowAnalytics ? (
-          <>
-            <KpiGrid
-              kpis={kpis}
-              financialMetricsVersion={financialMetricsVersion}
-              hasOperatingExpenses={hasOperatingExpenses}
-            />
-            <ActiveLocationsDrilldownChips
-              activeDrilldowns={activeDrilldowns}
-              onClearOne={(key) =>
-                setActiveDrilldowns((current) => ({
-                  ...current,
-                  [key]: null,
-                }))
-              }
-              onClearAll={() => setActiveDrilldowns({})}
-            />
-            <TrendChart
-              rows={drilldownTrendRows}
-              period={period}
-              financialMetricsVersion={financialMetricsVersion}
-              onFilterChange={() => setIsDirty(true)}
-              selectedPeriod={activeDrilldowns.period?.value ?? null}
-              onSelectPeriod={(row) =>
-                toggleDrilldown("period", {
-                  value: row.period,
-                  label: row.period,
-                })
-              }
-            />
-            <RevenueBreakdownSection
-              revenueByVendor={drilldownRevenueByVendor}
-              revenueByStaff={drilldownRevenueByStaff}
-              financialMetricsVersion={financialMetricsVersion}
-              activeDrilldowns={activeDrilldowns}
-              onSelectVendor={(row) =>
-                toggleDrilldown("vendor", {
-                  value: row.value,
-                  label: row.label,
-                })
-              }
-              onSelectStaff={(row) =>
-                toggleDrilldown("staff", {
-                  value: row.value,
-                  label: row.label,
-                })
-              }
-            />
-            <LocationTable
-              rows={drilldownLocationRows}
-              financialMetricsVersion={financialMetricsVersion}
-              selectedLocation={activeDrilldowns.location?.value ?? null}
-              onSelectLocation={(row) =>
-                toggleDrilldown("location", {
-                  value: row.locationId,
-                  label: row.locationName,
-                })
-              }
-            />
-          </>
-        ) : null}
-      </div>
-    </main>
+      <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
+        Expenses include active location-specific amounts. Global expenses are
+        shared equally across all active locations.
+        {financialMetricsVersion === "v2"
+          ? " Refunds are order-level cash movements allocated to locations from matching order lines."
+          : ""}
+      </p>
+
+      {debugInfo ? (
+        <details
+          style={{
+            background: "white",
+            border: "1px solid #e3e3e3",
+            borderRadius: 12,
+            marginBottom: 20,
+            padding: 14,
+          }}
+        >
+          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
+            Support diagnostics
+          </summary>
+          <pre
+            style={{
+              background: "#111827",
+              borderRadius: 10,
+              color: "#f9fafb",
+              fontSize: 12,
+              lineHeight: 1.45,
+              margin: "10px 0 0",
+              overflowX: "auto",
+              padding: 12,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {JSON.stringify(debugInfo, null, 2)}
+          </pre>
+        </details>
+      ) : null}
+
+      {hasNoSyncedLocations ? (
+        <PageNotice
+          title="Your data is being prepared"
+          message="No locations have synced yet. Location reports appear after Shopify data sync completes."
+          bullets={[
+            "Open Sync Status to confirm whether locations, products, inventory, and orders have synced.",
+            "Location reporting becomes useful once Shopify data is available.",
+          ]}
+          cta={{ to: dataSyncPath, label: "Open Sync Status" }}
+          tone="info"
+        />
+      ) : isDataPreparing ? (
+        <PageNotice
+          title="Your data is being prepared"
+          message="Reports appear after Shopify data sync completes."
+          bullets={[
+            "Location comparisons populate after successful sync runs create sales rows.",
+            "ShopOps Studio uses synced Shopify data to report sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health.",
+          ]}
+          cta={{ to: dataSyncPath, label: "Open Sync Status" }}
+          tone="info"
+        />
+      ) : hasNoSalesForRange ? (
+        <PageNotice
+          title="No sales for this date range."
+          message="Try another date range or confirm sync status."
+          bullets={[
+            "Filters remain available so admins can review another location, staff member, vendor, or date range.",
+            "If sales should already be available, check Sync Status for freshness or failures.",
+          ]}
+          cta={{ to: dataSyncPath, label: "Open Sync Status" }}
+          tone="neutral"
+        />
+      ) : null}
+
+      {shouldShowAnalytics ? (
+        <>
+          <KpiGrid
+            kpis={kpis}
+            financialMetricsVersion={financialMetricsVersion}
+            hasOperatingExpenses={hasOperatingExpenses}
+          />
+          <ActiveLocationsDrilldownChips
+            activeDrilldowns={activeDrilldowns}
+            onClearOne={(key) =>
+              setActiveDrilldowns((current) => ({
+                ...current,
+                [key]: null,
+              }))
+            }
+            onClearAll={() => setActiveDrilldowns({})}
+          />
+          <TrendChart
+            rows={drilldownTrendRows}
+            period={period}
+            financialMetricsVersion={financialMetricsVersion}
+            onFilterChange={() => setIsDirty(true)}
+            selectedPeriod={activeDrilldowns.period?.value ?? null}
+            onSelectPeriod={(row) =>
+              toggleDrilldown("period", {
+                value: row.period,
+                label: row.period,
+              })
+            }
+          />
+          <RevenueBreakdownSection
+            revenueByVendor={drilldownRevenueByVendor}
+            revenueByStaff={drilldownRevenueByStaff}
+            financialMetricsVersion={financialMetricsVersion}
+            activeDrilldowns={activeDrilldowns}
+            onSelectVendor={(row) =>
+              toggleDrilldown("vendor", {
+                value: row.value,
+                label: row.label,
+              })
+            }
+            onSelectStaff={(row) =>
+              toggleDrilldown("staff", {
+                value: row.value,
+                label: row.label,
+              })
+            }
+          />
+          <LocationTable
+            rows={drilldownLocationRows}
+            financialMetricsVersion={financialMetricsVersion}
+            selectedLocation={activeDrilldowns.location?.value ?? null}
+            onSelectLocation={(row) =>
+              toggleDrilldown("location", {
+                value: row.locationId,
+                label: row.locationName,
+              })
+            }
+          />
+        </>
+      ) : null}
+    </ShopOpsPage>
   );
 }

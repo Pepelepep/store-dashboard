@@ -80,8 +80,8 @@ export function SectionCard({
       className="shopops-section-card"
       style={{
         background: "white",
-        border: "1px solid #e5e7eb",
-        borderRadius: 18,
+        border: "1px solid var(--shopops-border, #e5e7eb)",
+        borderRadius: 16,
         padding: 20,
         boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
       }}

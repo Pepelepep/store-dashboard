@@ -17,19 +17,7 @@ export function SectionTabs<T extends string>({
   const location = useLocation();
 
   return (
-    <nav
-      aria-label={ariaLabel}
-      className="shopops-section-tabs"
-      style={{
-        display: "flex",
-        gap: 8,
-        marginBottom: 24,
-        overflowX: "auto",
-        paddingBottom: 2,
-        scrollbarWidth: "thin",
-        whiteSpace: "nowrap",
-      }}
-    >
+    <nav aria-label={ariaLabel} className="shopops-section-tabs">
       {tabs.map((tab) => {
         const searchParams = new URLSearchParams(location.search);
         searchParams.set("tab", tab.value);
@@ -39,18 +27,9 @@ export function SectionTabs<T extends string>({
         return (
           <Link
             aria-current={isActive ? "page" : undefined}
+            className="shopops-section-tabs__item"
             key={tab.value}
             to={to}
-            style={{
-              background: isActive ? "#eaf2ff" : "white",
-              border: isActive ? "2px solid #2563eb" : "1px solid #c9cccf",
-              borderRadius: 10,
-              color: isActive ? "#174ea6" : "#374151",
-              flex: "0 0 auto",
-              fontWeight: 800,
-              padding: "10px 16px",
-              textDecoration: "none",
-            }}
           >
             {tab.label}
           </Link>
