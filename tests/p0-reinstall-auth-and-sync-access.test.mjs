@@ -3370,8 +3370,8 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
     /accessToken|idToken|sessionId|hmac|requestUrl|payload/,
   );
   assert.ok(
-    permissions.indexOf("else if (userIdMembership)") <
-      permissions.indexOf('emailMembership?.status === "active"'),
+    permissions.indexOf("} else if (userIdMembership) {") <
+      permissions.indexOf('} else if (emailMembership?.status === "active") {'),
     "the hidden Shopify user binding must take precedence after first sign-in",
   );
 
@@ -3396,6 +3396,98 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   assert.match(migration, /dashboard_memberships_shop_user_id_uidx/);
   assert.match(migration, /owner_membership_locked/);
   assert.match(migration, /last_admin_required/);
+});
+
+test("revoked hidden identity consolidates one explicit waiting approval without moving the Shopify identity", () => {
+  const permissions = readFileSync(
+    new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
+    "utf8",
+  );
+  const consolidation = readFileSync(
+    new URL("../app/lib/auth/duplicate-access.server.ts", import.meta.url),
+    "utf8",
+  );
+  const people = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(permissions, /userIdMembership\?\.status === "disabled"/);
+  assert.match(permissions, /emailMembership\?\.status === "active"/);
+  assert.match(permissions, /emailMembership\.id !== userIdMembership\.id/);
+  assert.match(permissions, /resolveApprovedDuplicateAccess/);
+  assert.match(permissions, /verified_email_reactivated/);
+  assert.match(permissions, /consolidated_reactivation/);
+  assert.match(
+    permissions,
+    /else \{[\s\n]+membership = userIdMembership;[\s\n]+accessReason = "membership_revoked"/,
+  );
+  assert.ok(
+    permissions.indexOf("resolveApprovedDuplicateAccess({") <
+      permissions.indexOf("const activeMembership ="),
+    "duplicate consolidation must finish before membership authorization",
+  );
+
+  assert.match(consolidation, /hiddenMatches\.length !== 1/);
+  assert.match(consolidation, /emailMatches\.length !== 1/);
+  assert.match(consolidation, /thirdAccessClaim/);
+  assert.match(consolidation, /hasAttributedIdentity && !allowAttributedMerge/);
+  assert.match(consolidation, /reason: "attribution_conflict"/);
+  assert.match(consolidation, /p_person_id: boundPerson\.id/);
+  assert.match(consolidation, /p_role: waitingMembership\.role/);
+  assert.match(consolidation, /p_location_ids: locationIds/);
+  assert.match(consolidation, /p_shopify_user_ids: \[shopifyUserId\]/);
+  assert.match(consolidation, /p_dashboard_user_limit: null/);
+  assert.match(consolidation, /rollbackClaim/);
+  assert.match(consolidation, /isCanonicalResolvedMembership/);
+  assert.match(consolidation, /waitForCanonicalResolution/);
+  assert.match(consolidation, /const replacementCommitted =/);
+  assert.match(
+    consolidation,
+    /\.eq\("updated_at", waitingMembership\.updated_at\)/,
+  );
+  assert.match(consolidation, /\.eq\("status", "active"\)/);
+  assert.match(consolidation, /\.is\("shopify_user_id", null\)/);
+  assert.match(
+    consolidation,
+    /\.from\("staff_identity_aliases"\)[\s\S]*?\.update\(\{ person_id: boundPerson\.id/,
+  );
+  assert.doesNotMatch(
+    consolidation,
+    /\.from\("staff_identity_aliases"\)[\s\S]{0,80}?\.delete\(\)/,
+  );
+  assert.ok(
+    consolidation.indexOf('rpc("replace_dashboard_membership_access"') <
+      consolidation.indexOf('.from("dashboard_memberships")\n    .delete()'),
+    "canonical access must be committed before the duplicate waiting membership is removed",
+  );
+  assert.match(
+    consolidation,
+    /\.from\("staff_people"\)[\s\S]*?\.delete\(\)[\s\S]*?waitingPerson\.id/,
+  );
+
+  assert.match(people, /duplicateAccessConflict/);
+  assert.match(people, /Resolve duplicate access/);
+  assert.match(people, /intent === "resolve_duplicate_access"/);
+  assert.match(people, /if \(!permissions\.isOwner\)/);
+  assert.match(people, /allowAttributedMerge: true/);
+  assert.match(
+    people,
+    /Sales attribution, aliases, and[\s\n]+reporting history/,
+  );
+  assert.doesNotMatch(people, /Shopify user ID/);
+
+  assert.match(migration, /dashboard_memberships_shop_person_uidx/);
+  assert.match(migration, /dashboard_memberships_shop_email_uidx/);
+  assert.match(migration, /dashboard_memberships_shop_user_id_uidx/);
+  assert.match(migration, /pg_advisory_xact_lock/);
 });
 
 test("Dashboard onboarding is compact, admin-only, and disappears when complete", () => {

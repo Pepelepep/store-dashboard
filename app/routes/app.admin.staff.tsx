@@ -23,6 +23,10 @@ import {
   ShopOpsPage,
 } from "../components/ui/ShopOpsPage";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
+import {
+  findDuplicateAccessCandidate,
+  resolveApprovedDuplicateAccess,
+} from "../lib/auth/duplicate-access.server";
 import { ensureActiveShopOpsPersonByEmail } from "../lib/auth/shopops-access.server";
 import {
   getShopOpsAccessPresentation,
@@ -93,9 +97,11 @@ type StaffProfile = StaffPersonRow & {
   permissions: PermissionRow[];
   posMetrics: SellerMetric;
   canHardDelete: boolean;
+  duplicateAccessConflict: boolean;
 };
 type LoaderData = {
   shop: string;
+  canResolveDuplicateAccess: boolean;
   profiles: StaffProfile[];
   pending: StaffAlias[];
   deferred: StaffAlias[];
@@ -117,6 +123,7 @@ type Overlay =
   | "access"
   | "pos"
   | "remove"
+  | "duplicate"
   | "setup"
   | null;
 
@@ -259,6 +266,58 @@ function hasIdentityAttention({
   });
 }
 
+function getDuplicateAccessWaitingPersonIds({
+  aliases,
+  memberships,
+}: {
+  aliases: StaffAlias[];
+  memberships: MembershipRow[];
+}) {
+  const waitingMatches = memberships.filter(
+    (membership) =>
+      membership.status === "active" &&
+      !membership.shopify_user_id &&
+      Boolean(membership.person_id && membership.normalized_email) &&
+      aliases.some(
+        (alias) =>
+          alias.person_id === membership.person_id &&
+          alias.alias_type === STAFF_ALIAS_TYPES.email &&
+          normalizeShopOpsEmail(alias.alias_value) ===
+            normalizeShopOpsEmail(membership.normalized_email) &&
+          alias.review_status === "pending",
+      ),
+  );
+  return new Set(
+    waitingMatches
+      .filter((waiting) => {
+        const emailAlias = aliases.find(
+          (alias) =>
+            alias.person_id === waiting.person_id &&
+            alias.alias_type === STAFF_ALIAS_TYPES.email &&
+            normalizeShopOpsEmail(alias.alias_value) ===
+              normalizeShopOpsEmail(waiting.normalized_email) &&
+            alias.review_status === "pending",
+        );
+        if (!emailAlias?.updated_at) return false;
+        const revokedMatches = memberships.filter(
+          (membership) =>
+            membership.status === "disabled" &&
+            Boolean(membership.person_id && membership.shopify_user_id) &&
+            aliases.some(
+              (alias) =>
+                alias.person_id === membership.person_id &&
+                alias.alias_type === STAFF_ALIAS_TYPES.shopifyAdminUserId &&
+                alias.alias_value === membership.shopify_user_id &&
+                alias.review_status === "pending" &&
+                alias.updated_at === emailAlias.updated_at,
+            ),
+        );
+        return revokedMatches.length === 1;
+      })
+      .map((membership) => membership.person_id!),
+  );
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   if (url.pathname === "/app/admin/staff") {
@@ -275,7 +334,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  await assertAdminAccess({ request, session, supabase });
+  const loaderPermissions = await assertAdminAccess({
+    request,
+    session,
+    supabase,
+  });
   const [
     peopleResult,
     aliasesResult,
@@ -356,6 +419,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const aliases = (aliasesResult.data ?? []) as StaffAlias[];
   const permissions = (permissionsResult.data ?? []) as PermissionRow[];
   const memberships = (membershipsResult.data ?? []) as MembershipRow[];
+  const duplicateAccessWaitingPersonIds = getDuplicateAccessWaitingPersonIds({
+    aliases,
+    memberships,
+  });
   const metrics = new Map<string, SellerMetric>();
   for (const row of metricsResult.data ?? []) {
     const candidate = getStaffIdentityAliasCandidates({
@@ -440,6 +507,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         membership === null &&
         personAliases.length === 0 &&
         posMetrics.orderCount === 0,
+      duplicateAccessConflict: duplicateAccessWaitingPersonIds.has(person.id),
     };
   });
   const reviewable = aliases.filter(
@@ -473,6 +541,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   return {
     shop: session.shop,
+    canResolveDuplicateAccess: loaderPermissions.isOwner,
     profiles,
     pending: reviewable.filter((alias) => alias.review_status !== "deferred"),
     deferred: reviewable.filter((alias) => alias.review_status === "deferred"),
@@ -540,6 +609,50 @@ export async function action({ request }: ActionFunctionArgs) {
   const personId = text(data.get("person_id"));
   const aliasId = text(data.get("alias_id"));
   const now = new Date().toISOString();
+
+  if (intent === "resolve_duplicate_access") {
+    if (!permissions.isOwner) {
+      return {
+        ok: false,
+        message: "Only the store owner can resolve duplicate ShopOps access.",
+      };
+    }
+    const candidate = personId
+      ? await findDuplicateAccessCandidate({
+          shop: session.shop,
+          supabase,
+          waitingPersonId: personId,
+        })
+      : null;
+    if (!candidate) {
+      return {
+        ok: false,
+        message:
+          "This duplicate access case is ambiguous. Nothing was changed.",
+      };
+    }
+    const resolution = await resolveApprovedDuplicateAccess({
+      allowAttributedMerge: true,
+      ownerMembershipId: permissions.membership.id,
+      revokedMembershipId: candidate.revokedMembershipId,
+      shop: session.shop,
+      shopifyUserId: candidate.shopifyUserId,
+      supabase,
+      verifiedEmail: candidate.verifiedEmail,
+      waitingMembershipId: candidate.waitingMembershipId,
+    });
+    return resolution.status === "resolved"
+      ? {
+          ok: true,
+          message:
+            "Duplicate ShopOps access resolved. Access, sales attribution, aliases, and reporting history were consolidated into one person.",
+        }
+      : {
+          ok: false,
+          message:
+            "Duplicate access could not be resolved safely. Nothing was changed.",
+        };
+  }
 
   if (intent === "apply_csv_mappings") {
     type CsvMapping = {
@@ -1941,7 +2054,8 @@ export default function StaffPage() {
                     if (!(event.target as HTMLElement).closest(".actions")) {
                       open(
                         tab === "access" && !profile.membership?.is_owner
-                          ? profile.accessState === "archived"
+                          ? profile.accessState === "archived" ||
+                            profile.duplicateAccessConflict
                             ? "details"
                             : "access"
                           : "details",
@@ -1955,7 +2069,8 @@ export default function StaffPage() {
                     if (event.key === "Enter") {
                       open(
                         tab === "access" && !profile.membership?.is_owner
-                          ? profile.accessState === "archived"
+                          ? profile.accessState === "archived" ||
+                            profile.duplicateAccessConflict
                             ? "details"
                             : "access"
                           : "details",
@@ -2029,7 +2144,8 @@ export default function StaffPage() {
                           onClick={() =>
                             open(
                               tab === "access" && !profile.membership?.is_owner
-                                ? profile.accessState === "archived"
+                                ? profile.accessState === "archived" ||
+                                  profile.duplicateAccessConflict
                                   ? "details"
                                   : "access"
                                 : "details",
@@ -2043,6 +2159,17 @@ export default function StaffPage() {
                             : "View"}
                         </button>
                         {tab === "access" &&
+                        profile.duplicateAccessConflict &&
+                        data.canResolveDuplicateAccess ? (
+                          <button
+                            type="button"
+                            onClick={() => open("duplicate", profile)}
+                          >
+                            Resolve duplicate access
+                          </button>
+                        ) : null}
+                        {tab === "access" &&
+                        !profile.duplicateAccessConflict &&
                         !profile.membership?.is_owner &&
                         profile.accessState === "archived" ? (
                           <Form method="post">
@@ -2060,6 +2187,7 @@ export default function StaffPage() {
                           </Form>
                         ) : null}
                         {tab === "access" &&
+                        !profile.duplicateAccessConflict &&
                         !profile.membership?.is_owner &&
                         profile.accessState !== "archived" &&
                         (!profile.membership ||
@@ -2074,6 +2202,7 @@ export default function StaffPage() {
                           </button>
                         ) : null}
                         {tab === "access" &&
+                        !profile.duplicateAccessConflict &&
                         !profile.membership?.is_owner &&
                         profile.accessState !== "archived" &&
                         profile.membership &&
@@ -2100,6 +2229,7 @@ export default function StaffPage() {
                           </>
                         ) : null}
                         {tab === "access" &&
+                        !profile.duplicateAccessConflict &&
                         !profile.membership?.is_owner &&
                         (profile.accessState === "revoked" ||
                           profile.accessState === "needs_attention") ? (
@@ -2111,6 +2241,7 @@ export default function StaffPage() {
                           </button>
                         ) : null}
                         {tab === "access" &&
+                        !profile.duplicateAccessConflict &&
                         !profile.membership?.is_owner &&
                         (profile.accessState === "active" ||
                           profile.accessState === "pending") ? (
@@ -2401,6 +2532,39 @@ export default function StaffPage() {
           ) : null}
         </OverlayPanel>
       ) : null}
+      {selected && overlay === "duplicate" ? (
+        <OverlayPanel
+          title="Resolve duplicate access"
+          onClose={() => setOverlay("details")}
+        >
+          <div className="remove-confirmation">
+            <h3>This Shopify user already has a previous ShopOps profile.</h3>
+            <p>
+              Consolidate the newly approved role and reporting locations into
+              the existing linked person. Sales attribution, aliases, and
+              reporting history from both profiles will be preserved. Shopify
+              identity details remain private.
+            </p>
+            {data.canResolveDuplicateAccess ? (
+              <Form method="post">
+                <input
+                  type="hidden"
+                  name="intent"
+                  value="resolve_duplicate_access"
+                />
+                <input type="hidden" name="person_id" value={selected.id} />
+                <Button primary type="submit">
+                  Resolve duplicate access
+                </Button>
+              </Form>
+            ) : (
+              <InlineNotice tone="warning">
+                Ask the store owner to resolve this duplicate access case.
+              </InlineNotice>
+            )}
+          </div>
+        </OverlayPanel>
+      ) : null}
       {selected && overlay === "details" ? (
         <OverlayPanel
           title={selected.display_name}
@@ -2430,7 +2594,12 @@ export default function StaffPage() {
                   Email is the merchant-managed login identity. The Shopify user
                   binding remains private.
                 </small>
-                {selected.accessState === "needs_attention" ? (
+                {selected.duplicateAccessConflict ? (
+                  <small>
+                    This Shopify user already has a previous ShopOps profile.
+                    Resolve the duplicate before access can be granted.
+                  </small>
+                ) : selected.accessState === "needs_attention" ? (
                   <small>
                     Confirm the email in Edit access, then ask the user to
                     reopen ShopOps Studio from Shopify admin with a verified
@@ -2438,7 +2607,11 @@ export default function StaffPage() {
                   </small>
                 ) : null}
               </div>
-              {selected.membership?.is_owner ? (
+              {selected.duplicateAccessConflict ? (
+                <Button onClick={() => setOverlay("duplicate")}>
+                  Resolve duplicate access
+                </Button>
+              ) : selected.membership?.is_owner ? (
                 <StatusBadge variant="neutral">Locked</StatusBadge>
               ) : selected.accessState === "archived" ? (
                 <Form method="post">
