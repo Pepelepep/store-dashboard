@@ -10,15 +10,16 @@ Prepare a dedicated marketplace environment for ShopOps Studio that is separate 
 
 Render service:
 
-- Create a dedicated Render service for marketplace review.
+- Use the existing dedicated Render preview service for marketplace review and pre-launch QA.
 - Do not reuse the current client production Render service.
-- Recommended placeholder URL: `https://TODO_MARKETPLACE_APP_URL`.
+- Current temporary URL: `https://shopops-marketplace-preview.onrender.com`.
 - Configure deploys from the marketplace branch or a controlled marketplace release branch.
 - Confirm Node version matches `package.json` engine constraints.
 
 Shopify app:
 
-- Create a dedicated Shopify Partner app for marketplace review.
+- Use the existing ShopOps Studio Marketplace registration with canonical handle `shopops-studio` for the pre-launch Render preview and future public production release.
+- Do not create or require a separate staging Shopify registration during pre-launch.
 - Use `shopify.app.shopops-marketplace.toml` only for this marketplace app.
 - Do not deploy marketplace config to `shopify.app.store-dashboard.toml`.
 - Do not deploy marketplace config to `shopify.app.store-dashboard-staging.toml` unless intentionally testing a separate staging app.
@@ -45,12 +46,12 @@ Marketplace Render service should define:
 - `FINANCIAL_METRICS_VERSION`: recommended `v2` for marketplace review if the demo data and sync path support current financial fields.
 - `ADMIN_EMAILS`: reviewer/admin bootstrap email list for the demo shop.
 - `ADMIN_SHOPIFY_USER_IDS`: optional bootstrap user IDs for reviewer/admin access.
-- `BILLING_ENABLED`: keep `false` by default. Set to `true` only in a controlled Shopify App Pricing QA environment.
+- `BILLING_ENABLED`: use `false` only for local, non-production development. It must be `true` in marketplace preview and final production.
 - `SHOPIFY_PARTNER_ORG_ID`: Partner organization ID used in the Partner API endpoint. Required only when billing is enabled.
 - `SHOPIFY_PARTNER_ACCESS_TOKEN`: server-only Partner API token with Manage apps access. Required only when billing is enabled; never expose it to the browser or logs.
-- `SHOPIFY_PARTNER_APP_GID`: Shopify App GID for the marketplace app. Required only when billing is enabled.
+- `SHOPIFY_PARTNER_APP_GID`: Shopify App GID for the canonical `shopops-studio` Marketplace registration. It must identify the same registration as the Marketplace TOML client ID and hosted pricing handle. Required only when billing is enabled.
 - `SHOPIFY_PARTNER_API_VERSION`: must be `2026-07` when billing is enabled.
-- `SHOPIFY_APP_HANDLE`: must be `shopops-studio` when billing is enabled.
+- `SHOPIFY_APP_HANDLE`: must be the canonical Marketplace handle `shopops-studio` when billing is enabled.
 - `SHOP_CUSTOM_DOMAIN`: only if the marketplace app needs a custom shop domain. Leave unset by default.
 
 Do not copy current client production secrets into the marketplace environment.
@@ -61,23 +62,61 @@ Billing uses Shopify App Pricing only. Do not configure Stripe, create recurring
 
 Partner Dashboard plans and application capacity:
 
-| Plan           | Handle           | Active locations | Dashboard users | Availability                                |
-| -------------- | ---------------- | ---------------: | --------------: | ------------------------------------------- |
-| Solo           | `solo`           |                1 |               1 | Public                                      |
-| Growth         | `growth`         |                5 |               5 | Public                                      |
-| Multi-location | `multi-location` |               10 |       Unlimited | Public                                      |
-| QA Pilot       | `qa-pilot`       |        Unlimited |       Unlimited | Restricted to approved QA stores in Shopify |
+| Plan           | Handle           | Monthly price | Trial   | Reporting locations | ShopOps users | Availability                                 |
+| -------------- | ---------------- | ------------: | ------- | ------------------: | ------------: | -------------------------------------------- |
+| Solo           | `solo`           |       $19 USD | 14 days |                   1 |             1 | Public                                       |
+| Growth         | `growth`         |       $49 USD | 14 days |                   5 |             5 | Public                                       |
+| Multi-location | `multi-location` |       $99 USD | 14 days |                  10 |     Unlimited | Public                                       |
+| QA Pilot       | `qa-pilot`       |            $0 | None    |           Unmetered |     Unmetered | Private; explicitly authorized QA shops only |
 
-All Shopify App Pricing plans must redirect to `/app/billing/complete`. Plan prices and trials are configured in Shopify rather than application code.
+All Shopify App Pricing plans must use `/app/billing/complete` as their welcome link. Prices, trials, and public/private visibility are configured in Shopify rather than application code. The application catalog owns only the exact handle-to-entitlement mapping. `qa-pilot` is recognized so authorized preview and review shops can use it, but the application does not render a local plan list; Shopify must keep it in the private-plan section.
 
 Runtime behavior:
 
-- Keep `BILLING_ENABLED=false` until final review.
-- When `BILLING_ENABLED=false`, Partner API variables are optional, the Partner API is not called during normal app access, app access is not blocked, and plan limits are not enforced.
+- Local development with `NODE_ENV` other than `production` may use `BILLING_ENABLED=false`. Partner API variables are then optional, no Partner lookup is made, and billing entitlements are not enforced.
+- A production-mode runtime with missing or false `BILLING_ENABLED` fails closed as billing temporarily unavailable. Marketplace preview and final production must set it to `true`; there is no production billing bypass.
 - When `BILLING_ENABLED=true`, the app verifies the authenticated shop's current subscription through Partner API version `2026-07` before granting access or accepting a plan-sensitive increase.
 - Shops without a recognized active plan are sent to the billing-required state. Trials remain accessible, and cancel-at-end-of-cycle plans remain accessible through their effective cycle.
 - Temporary Partner API failures produce a retryable billing-unavailable state and never classify the merchant as unpaid.
-- There is no environment-variable billing bypass. QA access uses Shopify's restricted `qa-pilot` plan.
+- There is no environment-variable billing bypass. QA access uses Shopify's private, store-restricted `qa-pilot` plan on the current Marketplace registration; Shopify must limit that plan to authorized QA stores.
+
+Environment matrix:
+
+| Environment               | `NODE_ENV`     | `BILLING_ENABLED` | App identity and offer expectations                                                                                                                                                                                     |
+| ------------------------- | -------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local development         | Non-production | `false` allowed   | No Partner credentials required. Use only for local work; access is intentionally ungated.                                                                                                                              |
+| Pre-launch Render preview | `production`   | `true` required   | Uses the canonical `shopops-studio` Marketplace client ID, app GID, and handle. The Render preview URL is temporary hosting for that same future production app. MyShop may use the private, store-restricted QA Pilot. |
+| Final public production   | `production`   | `true` required   | Uses the same canonical `shopops-studio` Marketplace registration and matching app GID/client ID. Replace temporary hosting URLs with final production URLs; only Solo, Growth, and Multi-location are public offers.   |
+
+Source of truth and lifecycle:
+
+- Each protected request reads the active Shopify App Pricing subscription through the Partner API, subject to a 30-second in-memory cache. There is no persisted local subscription or plan-authority field.
+- The Marketplace TOML client ID, strict `shopops-studio` handle validation, Partner API app GID, and hosted pricing URL must form one configured Shopify app identity. The current Render preview is hosting topology, not a second Shopify registration.
+- Entitlement-changing actions bypass that cache and refresh Shopify before applying capacity limits in the existing transactional database functions.
+- The authenticated Shopify shop GID and canonical shop domain must match the Partner API response.
+- `activeSubscription: null` means no active contract and produces the plan-required state. Unknown or multiple handles produce the unsupported-plan state. Malformed responses and Partner authentication, throttling, network, or service failures produce the retryable unavailable state.
+- An active trial remains accessible through `trialEndsAt`. A cancel-at-end subscription remains accessible through its current cycle. When Shopify no longer returns an active subscription, access is gated after the next authoritative read.
+- Uninstall deletes Shopify sessions and invalidates the shop's in-memory billing cache. Reinstall must authenticate again and cannot reuse the prior cached paid state.
+- Shopify App Pricing appends `plan_handle` to the welcome link; it does not provide an application callback nonce. The return route requires an authenticated Shopify owner, refreshes `activeSubscription`, and accepts the return only when the authoritative handle matches. The redirect destination is a fixed internal Settings path, so replay does not create or assign a subscription.
+
+Partner Dashboard checks requiring human verification:
+
+- Confirm the three public handles, display names, USD monthly prices, 14-day trials, and `/app/billing/complete` welcome links exactly match the table.
+- Confirm QA Pilot is a $0 private plan on the current Marketplace registration, is absent from every public listing, and contains only intended preview/review shop domains.
+- Confirm the Partner API client has Manage apps access and API version `2026-07` is available for `activeSubscription`.
+- Confirm the configured Partner app GID belongs to the same `shopops-studio` registration as client ID `751df93cb283cb05edc5b46b35de06be`, and that Shopify's hosted pricing URL uses the `shopops-studio` handle.
+- During pre-launch QA, confirm the current application and auth URLs point to the temporary Render preview deployment. Before public launch, replace those URLs with the final production hosting values without changing the Shopify app identity.
+- Exercise initial selection, all three paid plans, private QA activation, trial display, upgrade, downgrade, cancellation, callback retry, uninstall/reinstall, and a temporary Partner API failure in test stores without using live service calls in automated tests.
+
+## Future Post-Launch Topology (Not Implemented)
+
+- `shopops-studio` will be the public production Marketplace app.
+- A separate internal `ShopOps Studio Staging` Shopify app registration will be created later and linked to its own TOML, credentials, Render staging service, and staging database.
+- MyShop will move to that staging registration only after the staging topology exists.
+- The staging handle must come from the actual future Shopify registration. No staging handle is assumed or hard-coded now.
+- This phase does not create or delete Shopify registrations, Render services, databases, or Git branches.
+- `marketplace/stable-prep` remains the single release-candidate branch until V1 is frozen.
+- After V1 is frozen, the release-candidate branch becomes `marketplace/stable`, and `marketplace/develop` is created for ongoing development.
 
 ## Financial Metrics Version Guidance
 
@@ -145,14 +184,15 @@ Do not alter:
 - `shopify.app.store-dashboard-staging.toml`
 - `shopify.web.toml`
 
-Before deploy, replace placeholders in `shopify.app.shopops-marketplace.toml`:
+Current pre-launch values in `shopify.app.shopops-marketplace.toml`:
 
-- `TODO_MARKETPLACE_CLIENT_ID`
-- `https://TODO_MARKETPLACE_APP_URL`
-- final app name/handle if Shopify Partner Dashboard differs
-- OAuth redirect URLs
-- operational webhook URLs through `application_url`
-- compliance webhook URLs through `application_url`
+- Client ID: `751df93cb283cb05edc5b46b35de06be`
+- App name: `ShopOps Studio`
+- Canonical handle: `shopops-studio`
+- Temporary application URL: `https://shopops-marketplace-preview.onrender.com`
+- OAuth redirect URLs use that same temporary Render host.
+
+Before public launch, verify the application URL, OAuth redirect URLs, operational webhook URLs, and compliance webhook URLs use the approved production host. Do not change the canonical handle or substitute an unrelated client ID or Partner app GID.
 
 App distribution:
 

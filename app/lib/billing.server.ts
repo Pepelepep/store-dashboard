@@ -41,6 +41,15 @@ export const PLAN_DEFINITIONS = {
 export type PlanHandle = keyof typeof PLAN_DEFINITIONS;
 export type PlanDefinition = (typeof PLAN_DEFINITIONS)[PlanHandle];
 
+export const PUBLIC_PLAN_HANDLES = [
+  "solo",
+  "growth",
+  "multi-location",
+] as const satisfies readonly PlanHandle[];
+export const PRIVATE_PLAN_HANDLES = [
+  "qa-pilot",
+] as const satisfies readonly PlanHandle[];
+
 type DisabledBillingEnvironment = {
   enabled: false;
 };
@@ -227,6 +236,11 @@ export function getBillingEnvironment(
 ): BillingEnvironment {
   const rawEnabled = source.BILLING_ENABLED?.trim().toLowerCase();
   if (!rawEnabled || rawEnabled === "false") {
+    if (source.NODE_ENV?.trim().toLowerCase() === "production") {
+      throw new BillingConfigurationError(
+        "BILLING_ENABLED must be true in production.",
+      );
+    }
     return { enabled: false };
   }
   if (rawEnabled !== "true") {
@@ -277,7 +291,7 @@ export function getBillingEnvironment(
     accessToken,
     appGid,
     apiVersion,
-    appHandle,
+    appHandle: EXPECTED_SHOPIFY_APP_HANDLE,
   };
 }
 
@@ -717,6 +731,7 @@ export async function getBillingState({
   shop,
   bypassCache = false,
   environment,
+  environmentSource,
   fetchImpl,
   now = () => new Date(),
 }: {
@@ -724,12 +739,14 @@ export async function getBillingState({
   shop: string;
   bypassCache?: boolean;
   environment?: BillingEnvironment;
+  environmentSource?: BillingEnvironmentSource;
   fetchImpl?: FetchLike;
   now?: () => Date;
 }): Promise<BillingState> {
   let resolvedEnvironment: BillingEnvironment;
   try {
-    resolvedEnvironment = environment ?? getBillingEnvironment();
+    resolvedEnvironment =
+      environment ?? getBillingEnvironment(environmentSource ?? process.env);
   } catch {
     logBilling("error", "subscription lookup failure", {
       shop: normalizeShopDomain(shop),
@@ -823,10 +840,10 @@ export async function requireBillingAccess(
 
 export function buildHostedPricingUrl({
   shop,
-  appHandle = EXPECTED_SHOPIFY_APP_HANDLE,
+  environment = getBillingEnvironment(),
 }: {
   shop: string;
-  appHandle?: string;
+  environment?: BillingEnvironment;
 }) {
   const normalizedShop = normalizeShopDomain(shop);
   const suffix = ".myshopify.com";
@@ -837,11 +854,14 @@ export function buildHostedPricingUrl({
   if (!/^[a-z0-9][a-z0-9-]*$/.test(storeHandle)) {
     throw new Error("The Shopify store handle is invalid.");
   }
-  if (appHandle !== EXPECTED_SHOPIFY_APP_HANDLE) {
-    throw new Error("The Shopify app handle is invalid.");
+  if (!environment.enabled) {
+    throw new Error("Billing must be enabled to build the hosted pricing URL.");
+  }
+  if (environment.appHandle !== EXPECTED_SHOPIFY_APP_HANDLE) {
+    throw new Error("The configured Shopify app identity is invalid.");
   }
 
-  return `https://admin.shopify.com/store/${encodeURIComponent(storeHandle)}/charges/${encodeURIComponent(appHandle)}/pricing_plans`;
+  return `https://admin.shopify.com/store/${encodeURIComponent(storeHandle)}/charges/${encodeURIComponent(environment.appHandle)}/pricing_plans`;
 }
 
 export function verifyBillingCallbackPlan({
@@ -874,5 +894,19 @@ export function logBillingCallbackVerification({
         ? billing.planHandle
         : null,
     matched,
+  });
+}
+
+export function logBillingCallbackInputRejection({
+  shop,
+  reason,
+}: {
+  shop: string;
+  reason: "missing_plan_handle" | "unrecognized_plan_handle";
+}) {
+  logBilling("error", "billing callback rejected", {
+    shop: normalizeShopDomain(shop),
+    billingState: "not_checked",
+    reason,
   });
 }

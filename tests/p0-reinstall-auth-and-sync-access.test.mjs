@@ -51,12 +51,16 @@ import {
 } from "../app/lib/dashboard/chart-formatters.ts";
 import { computeHourlySalesRows } from "../app/lib/dashboard/hourly-sales.ts";
 import {
+  EXPECTED_SHOPIFY_APP_HANDLE,
   PLAN_DEFINITIONS,
+  PRIVATE_PLAN_HANDLES,
+  PUBLIC_PLAN_HANDLES,
   buildHostedPricingUrl,
   clearBillingCache,
   getActiveSubscription,
   getBillingEnvironment,
   getBillingState,
+  refreshBillingState,
   requireBillingAccess,
   resolveCurrentPlan,
   verifyBillingCallbackPlan,
@@ -1859,7 +1863,7 @@ test("Dashboard and Location filters expose pending labels and disable repeat su
   }
 });
 
-test("marketplace identity and Shopify App Pricing configuration are exact", () => {
+test("Marketplace Shopify App Pricing identity is canonical", () => {
   const marketplaceConfig = readFileSync(
     new URL("../shopify.app.shopops-marketplace.toml", import.meta.url),
     "utf8",
@@ -1877,7 +1881,8 @@ test("marketplace identity and Shopify App Pricing configuration are exact", () 
   assert.match(marketplaceConfig, /^handle = "shopops-studio"$/m);
   assert.match(billing, /BILLING_ENABLED/);
   assert.match(billing, /EXPECTED_PARTNER_API_VERSION = "2026-07"/);
-  assert.match(billing, /EXPECTED_SHOPIFY_APP_HANDLE = "shopops-studio"/);
+  assert.equal(EXPECTED_SHOPIFY_APP_HANDLE, "shopops-studio");
+  assert.doesNotMatch(billing, /SHOPIFY_APP_ENVIRONMENT/);
   assert.doesNotMatch(billing, /BILLING_TEST_SHOPS/);
   assert.deepEqual(Object.keys(PLAN_DEFINITIONS), [
     "solo",
@@ -1905,12 +1910,17 @@ test("marketplace identity and Shopify App Pricing configuration are exact", () 
     activeLocations: null,
     dashboardUsers: null,
   });
+  assert.deepEqual(PUBLIC_PLAN_HANDLES, ["solo", "growth", "multi-location"]);
+  assert.deepEqual(PRIVATE_PLAN_HANDLES, ["qa-pilot"]);
 });
 
-test("billing-disabled mode requires no Partner configuration or lookup", async () => {
+test("billing-disabled mode is local-only and requires no Partner lookup", async () => {
   let adminCalls = 0;
   let partnerCalls = 0;
-  const environment = getBillingEnvironment({ BILLING_ENABLED: "false" });
+  const environment = getBillingEnvironment({
+    BILLING_ENABLED: "false",
+    NODE_ENV: "development",
+  });
   const admin = billingAdmin("gid://shopify/Shop/disabled", () => {
     adminCalls += 1;
   });
@@ -1933,6 +1943,49 @@ test("billing-disabled mode requires no Partner configuration or lookup", async 
   });
   assert.deepEqual(state, { state: "disabled", billingEnabled: false });
   assert.equal(access.access, "allowed");
+  assert.equal(adminCalls, 0);
+  assert.equal(partnerCalls, 0);
+});
+
+test("production fails closed when billing is missing or disabled", async () => {
+  assert.throws(
+    () =>
+      getBillingEnvironment({
+        BILLING_ENABLED: "false",
+        NODE_ENV: "production",
+      }),
+    /BILLING_ENABLED must be true in production/,
+  );
+  assert.throws(
+    () => getBillingEnvironment({ NODE_ENV: "production" }),
+    /BILLING_ENABLED must be true in production/,
+  );
+
+  let adminCalls = 0;
+  let partnerCalls = 0;
+  const args = {
+    admin: billingAdmin("gid://shopify/Shop/production-disabled", () => {
+      adminCalls += 1;
+    }),
+    shop: "production-disabled.myshopify.com",
+    environmentSource: {
+      BILLING_ENABLED: "false",
+      NODE_ENV: "production",
+    },
+    fetchImpl: async () => {
+      partnerCalls += 1;
+      throw new Error("Partner API must not be called for invalid config");
+    },
+  };
+  const state = await getBillingState(args);
+  const access = await requireBillingAccess(args);
+
+  assert.deepEqual(state, {
+    state: "billing_unavailable",
+    billingEnabled: true,
+    reason: "configuration",
+  });
+  assert.equal(access.access, "billing_unavailable");
   assert.equal(adminCalls, 0);
   assert.equal(partnerCalls, 0);
 });
@@ -1960,16 +2013,50 @@ test("billing environment validates enabled Partner API settings server-side", (
       appHandle: "shopops-studio",
     },
   );
+
+  const common = {
+    BILLING_ENABLED: "true",
+    SHOPIFY_PARTNER_ORG_ID: "123456",
+    SHOPIFY_PARTNER_ACCESS_TOKEN: "secret",
+    SHOPIFY_PARTNER_APP_GID: "gid://shopify/App/123456",
+    SHOPIFY_PARTNER_API_VERSION: "2026-07",
+  };
+  assert.throws(
+    () =>
+      getBillingEnvironment({
+        ...common,
+        SHOPIFY_APP_HANDLE: "wrong-handle",
+      }),
+    /SHOPIFY_APP_HANDLE must be shopops-studio/,
+  );
 });
 
-test("hosted pricing URL uses the canonical Shopify Admin route", () => {
+test("hosted pricing URL uses the validated canonical Marketplace registration", () => {
   assert.equal(
-    buildHostedPricingUrl({ shop: "example-store.myshopify.com" }),
+    buildHostedPricingUrl({
+      shop: "example-store.myshopify.com",
+      environment: enabledBillingEnvironment,
+    }),
     "https://admin.shopify.com/store/example-store/charges/shopops-studio/pricing_plans",
   );
   assert.throws(
-    () => buildHostedPricingUrl({ shop: "example.com" }),
+    () =>
+      buildHostedPricingUrl({
+        shop: "example.com",
+        environment: enabledBillingEnvironment,
+      }),
     /canonical myshopify\.com domain/,
+  );
+  assert.throws(
+    () =>
+      buildHostedPricingUrl({
+        shop: "example-store.myshopify.com",
+        environment: {
+          ...enabledBillingEnvironment,
+          appHandle: "wrong-handle",
+        },
+      }),
+    /configured Shopify app identity is invalid/,
   );
 });
 
@@ -2081,6 +2168,40 @@ test("missing, unsupported, malformed, and unavailable Partner responses remain 
   assert.notEqual(unavailable.state, "missing_subscription");
 });
 
+test("missing and unsupported subscriptions are gated while temporary failures stay retryable", async () => {
+  for (const fixture of [
+    {
+      shop: "billing-gated-missing.myshopify.com",
+      payload: { data: { activeSubscription: null } },
+    },
+    {
+      shop: "billing-gated-unsupported.myshopify.com",
+      payload: activeSubscriptionPayload({
+        shopDomain: "billing-gated-unsupported.myshopify.com",
+        handle: "inactive-or-legacy",
+      }),
+    },
+  ]) {
+    const result = await requireBillingAccess({
+      admin: billingAdmin(),
+      shop: fixture.shop,
+      environment: enabledBillingEnvironment,
+      fetchImpl: subscriptionFetch(fixture.payload),
+      bypassCache: true,
+    });
+    assert.equal(result.access, "billing_required");
+  }
+
+  const unavailable = await requireBillingAccess({
+    admin: billingAdmin(),
+    shop: "billing-gated-unavailable.myshopify.com",
+    environment: enabledBillingEnvironment,
+    fetchImpl: async () => new Response("service unavailable", { status: 503 }),
+    bypassCache: true,
+  });
+  assert.equal(unavailable.access, "billing_unavailable");
+});
+
 test("Partner API timeout, throttling, authentication, and GraphQL failures are controlled unavailable states", async () => {
   const common = {
     environment: enabledBillingEnvironment,
@@ -2188,6 +2309,77 @@ test("billing cache reuses reads and explicit refresh paths bypass it", async ()
   assert.equal(partnerCalls, 2);
 });
 
+test("Shopify refresh replaces a disagreeing cached paid plan", async () => {
+  const shopDomain = "billing-cache-disagreement.myshopify.com";
+  let partnerCalls = 0;
+  let payload = activeSubscriptionPayload({
+    shopDomain,
+    handle: "growth",
+  });
+  const fetchImpl = subscriptionFetch(payload, () => {
+    partnerCalls += 1;
+  });
+  clearBillingCache(shopDomain);
+
+  const cachedPaidPlan = await getBillingState({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+  assert.equal(cachedPaidPlan.state, "active");
+  assert.equal(cachedPaidPlan.planHandle, "growth");
+
+  payload.data.activeSubscription = null;
+  const refreshed = await refreshBillingState({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+  const access = await requireBillingAccess({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+
+  assert.equal(refreshed.state, "missing_subscription");
+  assert.equal(access.access, "billing_required");
+  assert.equal(partnerCalls, 2);
+});
+
+test("uninstall cache invalidation makes reinstall without a subscription gated", async () => {
+  const shopDomain = "billing-reinstall.myshopify.com";
+  let payload = activeSubscriptionPayload({ shopDomain, handle: "solo" });
+  const fetchImpl = subscriptionFetch(payload);
+  clearBillingCache(shopDomain);
+
+  const installed = await getBillingState({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+  assert.equal(installed.state, "active");
+
+  clearBillingCache(shopDomain);
+  payload.data.activeSubscription = null;
+  const reinstalled = await requireBillingAccess({
+    admin: billingAdmin(),
+    shop: shopDomain,
+    environment: enabledBillingEnvironment,
+    fetchImpl,
+  });
+  assert.equal(reinstalled.access, "billing_required");
+
+  const uninstallRoute = readFileSync(
+    new URL("../app/routes/webhooks.app.uninstalled.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(uninstallRoute, /clearBillingCache\(shop\)/);
+});
+
 test("billing callback matching rejects forged and mismatched plan handles", () => {
   const active = {
     state: "active",
@@ -2225,6 +2417,28 @@ test("billing callback matching rejects forged and mismatched plan handles", () 
       returnedPlanHandle: "solo",
     }),
     false,
+  );
+  assert.equal(
+    verifyBillingCallbackPlan({
+      billing: active,
+      returnedPlanHandle: "qa-pilot",
+    }),
+    false,
+  );
+  assert.equal(
+    verifyBillingCallbackPlan({
+      billing: active,
+      returnedPlanHandle: "malformed",
+    }),
+    false,
+  );
+  assert.equal(
+    verifyBillingCallbackPlan({
+      billing: active,
+      returnedPlanHandle: "solo",
+    }),
+    true,
+    "a replay is idempotent because verification only compares the refreshed state",
   );
 });
 
@@ -2377,6 +2591,53 @@ test("finite reporting-location limits block over-limit states without changing 
   }
 });
 
+test("approved dashboard-user limits enforce Growth and leave Multi-location unlimited", () => {
+  const growthAtLimit = summarizeEntitlements({
+    memberships: Array.from({ length: 5 }, (_, index) =>
+      membership(`growth-${index}`, index === 0 ? "owner" : "viewer"),
+    ),
+    locations: [reportingLocation("growth-location")],
+    limits: {
+      planHandle: "growth",
+      planName: "Growth",
+      activeLocations: 5,
+      dashboardUsers: 5,
+    },
+  });
+  const growthOverLimit = summarizeEntitlements({
+    memberships: [
+      ...Array.from({ length: 5 }, (_, index) =>
+        membership(`growth-${index}`, index === 0 ? "owner" : "viewer"),
+      ),
+      membership("growth-extra", "viewer"),
+    ],
+    locations: [reportingLocation("growth-location")],
+    limits: {
+      planHandle: "growth",
+      planName: "Growth",
+      activeLocations: 5,
+      dashboardUsers: 5,
+    },
+  });
+  const multiLocation = summarizeEntitlements({
+    memberships: Array.from({ length: 25 }, (_, index) =>
+      membership(`multi-${index}`, index === 0 ? "owner" : "viewer"),
+    ),
+    locations: [reportingLocation("multi-location")],
+    limits: {
+      planHandle: "multi-location",
+      planName: "Multi-location",
+      activeLocations: 10,
+      dashboardUsers: null,
+    },
+  });
+
+  assert.equal(growthAtLimit.userLimitExceeded, false);
+  assert.equal(growthOverLimit.userLimitExceeded, true);
+  assert.equal(multiLocation.activeDashboardUsers, 25);
+  assert.equal(multiLocation.userLimitExceeded, false);
+});
+
 test("billing route safety excludes OAuth, webhooks, charge creation, and client secrets", () => {
   const appRoute = readFileSync(
     new URL("../app/routes/app.tsx", import.meta.url),
@@ -2412,12 +2673,49 @@ test("billing route safety excludes OAuth, webhooks, charge creation, and client
   assert.match(callbackRoute, /refreshBillingState/);
   assert.match(callbackRoute, /isRecognizedPlanHandle/);
   assert.match(callbackRoute, /if \(!returnedPlanHandle\)/);
+  assert.match(callbackRoute, /logBillingCallbackInputRejection/);
   assert.match(callbackRoute, /No matching active subscription was found\./);
+  assert.match(callbackRoute, /export function ErrorBoundary/);
+  assert.match(callbackRoute, /Plan not confirmed/);
+  assert.match(callbackRoute, /Nothing was changed/);
+  assert.match(callbackRoute, /buildBillingRecoveryPath/);
+  assert.match(callbackRoute, /searchParams\.delete\("plan_handle"\)/);
+  assert.doesNotMatch(
+    callbackRoute,
+    /redirect_uri|return_url|window\.location/,
+  );
   assert.doesNotMatch(allBillingSources, /appSubscriptionCreate/);
   assert.doesNotMatch(allBillingSources, /charge_id/);
   assert.doesNotMatch(billingRequiredRoute, /SHOPIFY_PARTNER_ACCESS_TOKEN/);
   assert.doesNotMatch(callbackRoute, /SHOPIFY_PARTNER_ACCESS_TOKEN/);
   assert.doesNotMatch(appRoute, /SHOPIFY_PARTNER_ACCESS_TOKEN/);
+});
+
+test("billing UX presents active, trial, canceling, inactive, and unavailable states", () => {
+  const plan = readFileSync(
+    new URL("../app/components/setup/PlanSetup.tsx", import.meta.url),
+    "utf8",
+  );
+  const billingRequired = readFileSync(
+    new URL("../app/routes/app.billing-required.tsx", import.meta.url),
+    "utf8",
+  );
+  const callback = readFileSync(
+    new URL("../app/routes/app.billing.complete.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(plan, /state: "active" \| "trial" \| "canceling"/);
+  assert.match(plan, /\? "Canceling"/);
+  assert.match(plan, /\? "Trial"/);
+  assert.match(plan, /: "Active"/);
+  assert.match(plan, /Trial ends/);
+  assert.match(plan, /Cancels at the end of the billing cycle/);
+  assert.match(billingRequired, /Choose a plan to continue/);
+  assert.match(billingRequired, /An active ShopOps Studio plan is required/);
+  assert.match(billingRequired, /Billing temporarily unavailable/);
+  assert.match(callback, /Plan confirmation temporarily unavailable/);
+  assert.match(callback, /Plan not confirmed/);
 });
 
 test("POS merchant modal has automatic attribution state and no diagnostics", () => {
@@ -2580,7 +2878,7 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
   assert.match(billingRequired, /view: "owner_setup"/);
   assert.match(
     billingRequired,
-    /ShopOps Studio requires setup by the store owner\./,
+    /Only the Shopify store owner can choose or manage the ShopOps/,
   );
   assert.match(billingRequired, /error instanceof OwnerBootstrapError/);
   assert.ok(
@@ -3115,6 +3413,10 @@ test("Plan and billing is summary-only, owner-priced, contextual, and uses a one
   assert.match(plan, /data\.dashboardUsers\.limit/);
   assert.match(plan, /Subscription status/);
   assert.match(plan, /<StatusBadge/);
+  assert.match(plan, /formatStoreDate/);
+  assert.match(plan, /Only the Shopify store owner can change this plan/);
+  assert.match(plan, /Trial ends/);
+  assert.match(plan, /Cancels at the end of the billing cycle/);
   assert.match(presentation, /usage > limit/);
   assert.match(presentation, /"ShopOps user"/);
   assert.match(presentation, /data-capacity=\{isOver \? "over" : "within"\}/);
@@ -3134,6 +3436,8 @@ test("Plan and billing is summary-only, owner-priced, contextual, and uses a one
   assert.match(callback, /assertOwnerAccess/);
   assert.match(callback, /setPlanConfirmedFlash/);
   assert.match(callback, /\/app\/settings/);
+  assert.match(callback, /Retry confirmation/);
+  assert.match(callback, /Continue to plan selection/);
   assert.doesNotMatch(callback, /billing", "activated/);
   assert.match(flash, /session\.flash\("planConfirmed", "Plan confirmed\."\)/);
   assert.match(flash, /session\.get\("planConfirmed"\)/);

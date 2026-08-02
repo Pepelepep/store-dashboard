@@ -168,12 +168,14 @@ export default function BillingRequired() {
         ) : data.view === "owner_setup" ? (
           <>
             <h1 style={{ margin: "0 0 12px", fontSize: 28 }}>
-              Store owner setup required
+              Store owner action required
             </h1>
             <p
               style={{ color: "#45484d", lineHeight: 1.6, margin: "0 0 22px" }}
             >
-              ShopOps Studio requires setup by the store owner.
+              Only the Shopify store owner can choose or manage the ShopOps
+              Studio plan. Ask the store owner to open the app and complete plan
+              selection.
             </p>
             <a href={data.supportUrl}>Contact support</a>
           </>
