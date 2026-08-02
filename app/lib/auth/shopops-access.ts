@@ -5,6 +5,17 @@ export type ShopOpsAccessState =
   | "archived"
   | "needs_attention";
 
+export type ShopOpsAccessPresentation = {
+  label:
+    | "Waiting for first sign-in"
+    | "Active"
+    | "Access revoked"
+    | "Needs attention"
+    | "Archived";
+  showConfiguredRole: boolean;
+  tone: "success" | "info" | "warning" | "neutral";
+};
+
 export type ShopifySessionIdentitySource = {
   shop: string;
   userId?: string | number | bigint | null;
@@ -104,4 +115,38 @@ export function getShopOpsAccessState({
     return shopifyUserId ? "active" : "pending";
   }
   return "needs_attention";
+}
+
+export function getShopOpsAccessPresentation({
+  state,
+  hasApprovedAccess,
+}: {
+  state: ShopOpsAccessState;
+  hasApprovedAccess: boolean;
+}): ShopOpsAccessPresentation {
+  if (state === "active") {
+    return { label: "Active", showConfiguredRole: true, tone: "success" };
+  }
+  if (state === "pending") {
+    return {
+      label: "Waiting for first sign-in",
+      showConfiguredRole: true,
+      tone: "info",
+    };
+  }
+  if (state === "needs_attention") {
+    return {
+      label: "Needs attention",
+      showConfiguredRole: hasApprovedAccess,
+      tone: "warning",
+    };
+  }
+  if (state === "revoked") {
+    return {
+      label: "Access revoked",
+      showConfiguredRole: false,
+      tone: "neutral",
+    };
+  }
+  return { label: "Archived", showConfiguredRole: false, tone: "neutral" };
 }

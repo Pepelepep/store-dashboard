@@ -9,6 +9,7 @@ type AppButtonProps = {
   children: ReactNode;
   compact?: boolean;
   fullWidth?: boolean;
+  className?: string;
   style?: CSSProperties;
 } & Pick<
   ButtonHTMLAttributes<HTMLButtonElement>,
@@ -99,6 +100,7 @@ export function AppButton({
   disabled = false,
   compact = false,
   fullWidth = false,
+  className,
   children,
   onClick,
   name,
@@ -124,6 +126,7 @@ export function AppButton({
 
   return (
     <button
+      className={className}
       type={type}
       disabled={disabled}
       name={name}
