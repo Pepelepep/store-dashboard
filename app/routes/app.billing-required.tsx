@@ -13,6 +13,7 @@ import {
 } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
+import { getShopLevelAdminClient } from "../lib/shopify/shop-level-admin.server";
 import { authenticate } from "../shopify.server";
 
 function buildEmbeddedPath(
@@ -30,7 +31,7 @@ function buildEmbeddedPath(
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   const url = new URL(request.url);
   const identity = getCurrentUserIdentity({ session });
@@ -83,10 +84,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase,
   });
 
+  const billingAdmin = await getShopLevelAdminClient({
+    shop: session.shop,
+    route: "billing-required",
+  });
   const billing =
     url.searchParams.get("retry") === "1"
-      ? await refreshBillingState({ admin, shop: session.shop })
-      : await getBillingState({ admin, shop: session.shop });
+      ? await refreshBillingState({ admin: billingAdmin, shop: session.shop })
+      : await getBillingState({ admin: billingAdmin, shop: session.shop });
 
   if (
     billing.state === "disabled" ||

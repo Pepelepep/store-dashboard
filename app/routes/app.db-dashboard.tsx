@@ -228,7 +228,7 @@ async function fetchRefundTransactionsForOrders({
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.db-dashboard",
@@ -239,7 +239,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     request,
     session,
     supabase,
-    admin,
   });
   const url = new URL(request.url);
   const preservedSearchParams = Array.from(url.searchParams.entries())

@@ -21,6 +21,7 @@ import {
   ensureShopInitialized,
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
+import { getShopLevelAdminClient } from "../lib/shopify/shop-level-admin.server";
 import { AppButton } from "../components/ui/AppButton";
 import { FieldError } from "../components/ui/FieldError";
 import { HelperText } from "../components/ui/HelperText";
@@ -247,7 +248,7 @@ export async function action({ request }: ActionFunctionArgs) {
     throw redirect(`/app/costs?${requestUrl.searchParams.toString()}`);
   }
 
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.setup.action",
@@ -260,7 +261,14 @@ export async function action({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "save");
 
-  const currentBilling = await getBillingState({ admin, shop: session.shop });
+  const billingAdmin = await getShopLevelAdminClient({
+    shop: session.shop,
+    route: "costs.action",
+  });
+  const currentBilling = await getBillingState({
+    admin: billingAdmin,
+    shop: session.shop,
+  });
   if (isAccessibleBillingState(currentBilling)) {
     const currentEntitlements = await getEntitlementSnapshot({
       supabase,

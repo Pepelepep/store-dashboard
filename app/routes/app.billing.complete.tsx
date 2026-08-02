@@ -22,6 +22,7 @@ import {
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { setPlanConfirmedFlash } from "../lib/flash.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
+import { getShopLevelAdminClient } from "../lib/shopify/shop-level-admin.server";
 import { authenticate } from "../shopify.server";
 
 function buildVerifiedRedirect(url: URL) {
@@ -46,7 +47,7 @@ function buildBillingRecoveryPath(search: string) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   try {
     await assertOwnerAccess({
@@ -84,8 +85,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     throw new Response("Unrecognized plan handle.", { status: 400 });
   }
 
+  const billingAdmin = await getShopLevelAdminClient({
+    shop: session.shop,
+    route: "billing-complete",
+  });
   const billing = await refreshBillingState({
-    admin,
+    admin: billingAdmin,
     shop: session.shop,
   });
   if (billing.state === "billing_unavailable") {

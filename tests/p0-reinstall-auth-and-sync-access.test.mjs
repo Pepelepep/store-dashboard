@@ -70,6 +70,12 @@ import {
   summarizeEntitlements,
 } from "../app/lib/entitlement-model.ts";
 import { resolveOwnerMaterializationIdentifiers } from "../app/lib/auth/owner-bootstrap.ts";
+import {
+  getCurrentShopifyUserIdentity,
+  getShopOpsAccessState,
+  isValidShopOpsEmail,
+  normalizeShopOpsEmail,
+} from "../app/lib/auth/shopops-access.ts";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -2466,6 +2472,98 @@ function reportingLocation(id, overrides = {}) {
   };
 }
 
+test("ShopOps access normalizes merchant email and requires verified Shopify email for initial linking", () => {
+  assert.equal(
+    normalizeShopOpsEmail("  Viewer@Example.COM "),
+    "viewer@example.com",
+  );
+  assert.equal(isValidShopOpsEmail("viewer@example.com"), true);
+  assert.equal(isValidShopOpsEmail("not-an-email"), false);
+
+  const verified = getCurrentShopifyUserIdentity({
+    session: {
+      shop,
+      onlineAccessInfo: {
+        associated_user: {
+          id: 7788,
+          email: " Viewer@Example.COM ",
+          email_verified: true,
+          first_name: "Shop",
+          last_name: "Viewer",
+          account_owner: false,
+        },
+      },
+    },
+  });
+  const unverified = getCurrentShopifyUserIdentity({
+    session: {
+      shop,
+      onlineAccessInfo: {
+        associated_user: {
+          id: 8899,
+          email: "viewer@example.com",
+          email_verified: false,
+          account_owner: false,
+        },
+      },
+    },
+  });
+
+  assert.equal(verified.email, "viewer@example.com");
+  assert.equal(verified.shopifyUserId, "7788");
+  assert.equal(verified.isEmailVerified, true);
+  assert.equal(unverified.isEmailVerified, false);
+});
+
+test("ShopOps access states distinguish pending, active, revoked, archived, and attention", () => {
+  assert.equal(
+    getShopOpsAccessState({
+      isOwner: false,
+      isPersonActive: true,
+      membershipStatus: "active",
+      shopifyUserId: null,
+    }),
+    "pending",
+  );
+  assert.equal(
+    getShopOpsAccessState({
+      isOwner: false,
+      isPersonActive: true,
+      membershipStatus: "active",
+      shopifyUserId: "7788",
+    }),
+    "active",
+  );
+  assert.equal(
+    getShopOpsAccessState({
+      isOwner: false,
+      isPersonActive: true,
+      membershipStatus: "disabled",
+      shopifyUserId: "7788",
+      needsAttention: true,
+    }),
+    "revoked",
+  );
+  assert.equal(
+    getShopOpsAccessState({
+      isOwner: false,
+      isPersonActive: false,
+      membershipStatus: "disabled",
+      shopifyUserId: "7788",
+    }),
+    "archived",
+  );
+  assert.equal(
+    getShopOpsAccessState({
+      isOwner: false,
+      isPersonActive: true,
+      membershipStatus: null,
+      shopifyUserId: null,
+    }),
+    "needs_attention",
+  );
+});
+
 test("canonical memberships count every dashboard role exactly once and exclude Staff/POS-only profiles", () => {
   const limits = {
     planHandle: "qa-pilot",
@@ -2828,6 +2926,10 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
     new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
     "utf8",
   );
+  const shopOpsAccess = readFileSync(
+    new URL("../app/lib/auth/shopops-access.ts", import.meta.url),
+    "utf8",
+  );
   const appRoute = readFileSync(
     new URL("../app/routes/app.tsx", import.meta.url),
     "utf8",
@@ -2842,13 +2944,11 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
   );
 
   assert.match(shopifyServer, /useOnlineTokens:\s*true/);
-  assert.match(permissions, /associatedUser\?\.account_owner/);
+  assert.match(shopOpsAccess, /associatedUser\?\.account_owner/);
   assert.match(permissions, /materialize_dashboard_owner/);
   assert.match(permissions, /owner_setup_required/);
-  assert.match(
-    permissions,
-    /You don't have access to ShopOps Studio\. Contact the store owner\./,
-  );
+  assert.match(permissions, /ShopOps access required\./);
+  assert.match(shopOpsAccess, /associatedUser\?\.email_verified/);
   assert.doesNotMatch(permissions, /decodeJwtPayload|id_token/);
   assert.doesNotMatch(
     permissions,
@@ -3047,15 +3147,18 @@ test("People separates sales attribution from active ShopOps membership", () => 
     /Manage who can open ShopOps Studio and which locations they can[\s\n]+view\./,
   );
   assert.match(people, /tab === "attribution" && data\.pending\.length/);
-  assert.match(people, /tab === "access" \? "Role" : "POS sales"/);
-  assert.match(
-    people,
-    /if \(!membership \|\| membership\.status !== "active"\) return "No access"/,
-  );
+  assert.match(people, /tab === "access" \? "ShopOps role" : "POS sales"/);
+  assert.match(people, /Pending first sign-in/);
+  assert.match(people, /Needs attention/);
+  assert.match(people, /Revoked/);
   assert.match(people, /getFreshPlanLimits/);
   assert.match(people, /\.from\("dashboard_memberships"\)/);
   assert.match(people, /replace_dashboard_membership_access/);
   assert.match(people, /p_dashboard_user_limit/);
+  assert.match(people, /Add ShopOps user/);
+  assert.match(people, /intent" value="add_shopops_user"/);
+  assert.match(people, /Sales attribution is optional/);
+  assert.match(people, /p_shopify_user_ids: \[\]/);
   assert.match(
     people,
     /\{tab === "attribution" \? \([\s\S]*?<Button primary[\s\S]*?Add staff/,
@@ -3065,6 +3168,114 @@ test("People separates sales attribution from active ShopOps membership", () => 
     people.slice(people.indexOf("<PageHeader"), people.indexOf("<SectionTabs")),
     /Add staff/,
   );
+});
+
+test("email-first ShopOps access reuses people, binds verified identity, and keeps shop billing offline", () => {
+  const people = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const accessService = readFileSync(
+    new URL("../app/lib/auth/shopops-access.server.ts", import.meta.url),
+    "utf8",
+  );
+  const permissions = readFileSync(
+    new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
+    "utf8",
+  );
+  const shopOpsAccess = readFileSync(
+    new URL("../app/lib/auth/shopops-access.ts", import.meta.url),
+    "utf8",
+  );
+  const appRoute = readFileSync(
+    new URL("../app/routes/app.tsx", import.meta.url),
+    "utf8",
+  );
+  const dashboard = readFileSync(
+    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+    "utf8",
+  );
+  const entitlements = readFileSync(
+    new URL("../app/lib/entitlements.server.ts", import.meta.url),
+    "utf8",
+  );
+  const shopLevelAdmin = readFileSync(
+    new URL("../app/lib/shopify/shop-level-admin.server.ts", import.meta.url),
+    "utf8",
+  );
+  const routeError = readFileSync(
+    new URL("../app/components/ui/RouteErrorNotice.tsx", import.meta.url),
+    "utf8",
+  );
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const identityMigration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260708200000_add_staff_identity_mapping.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(people, /intent === "add_shopops_user"/);
+  assert.match(accessService, /\.from\("staff_people"\)/);
+  assert.match(accessService, /\.ilike\("email", email\)/);
+  assert.match(accessService, /STAFF_ALIAS_TYPES\.email/);
+  assert.match(accessService, /created\.error\?\.code === "23505"/);
+  assert.match(accessService, /restore_archived_staff/);
+  assert.match(people, /replace_dashboard_membership_access/);
+  assert.match(people, /disable_dashboard_membership/);
+  assert.match(people, /archive_staff_with_dashboard_protection/);
+  assert.match(people, /p_shopify_user_ids: \[\]/);
+  assert.match(people, /Pending first sign-in/);
+  assert.match(people, /Grant access/);
+  assert.match(people, /Edit role/);
+  assert.match(people, /Edit locations/);
+  assert.match(people, /Revoke access/);
+  assert.match(people, />Restore</);
+  assert.match(people, /if \(tab === "access"\) \{/);
+  assert.match(people, /if \(filter === "all"\) return true/);
+
+  assert.match(shopOpsAccess, /associatedUser\?\.email_verified/);
+  assert.match(permissions, /identity\.isEmailVerified &&/);
+  assert.match(permissions, /bindVerifiedMembership/);
+  assert.match(permissions, /shopify_user_id: identity\.shopifyUserId/);
+  assert.match(permissions, /linked_shopify_user_id/);
+  assert.match(permissions, /verified_email_linked/);
+  assert.match(permissions, /email_unverified/);
+  assert.match(permissions, /authenticated_session_attention/);
+  assert.ok(
+    permissions.indexOf("else if (userIdMembership)") <
+      permissions.indexOf('emailMembership?.status === "active"'),
+    "the hidden Shopify user binding must take precedence after first sign-in",
+  );
+
+  assert.match(appRoute, /if \(!permissions\.isActiveMember\)/);
+  assert.match(appRoute, /ShopOps access required/);
+  assert.doesNotMatch(appRoute, /Shopify user ID/);
+  assert.match(routeError, /title: "ShopOps access required"/);
+  assert.match(routeError, /title: "Location access denied"/);
+
+  assert.match(appRoute, /getShopLevelAdminClient/);
+  assert.match(entitlements, /getShopLevelAdminClient/);
+  assert.match(shopLevelAdmin, /getOfflineAdminClient/);
+  assert.doesNotMatch(dashboard, /const \{ admin, session \}/);
+  assert.match(shopLevelAdmin, /offline_authentication_required/);
+
+  assert.match(
+    identityMigration,
+    /staff_people_shop_email_uidx[\s\S]*?shop_domain, lower\(email\)/,
+  );
+  assert.match(migration, /dashboard_memberships_shop_person_uidx/);
+  assert.match(migration, /dashboard_memberships_shop_email_uidx/);
+  assert.match(migration, /dashboard_memberships_shop_user_id_uidx/);
+  assert.match(migration, /owner_membership_locked/);
+  assert.match(migration, /last_admin_required/);
 });
 
 test("Dashboard onboarding is compact, admin-only, and disappears when complete", () => {

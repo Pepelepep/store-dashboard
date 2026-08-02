@@ -17,9 +17,11 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
   getPermissionContext,
   OwnerBootstrapError,
+  type PermissionContext,
 } from "../lib/auth/permissions.server";
 import { requireBillingAccess } from "../lib/billing.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
+import { getShopLevelAdminClient } from "../lib/shopify/shop-level-admin.server";
 
 import { authenticate } from "../shopify.server";
 
@@ -48,10 +50,11 @@ export const middleware: MiddlewareFunction[] = [
       return next();
     }
 
-    const { admin, session } = await authenticate.admin(request);
+    const { session } = await authenticate.admin(request);
     const supabase = getSupabaseAdminClient();
+    let permissions: PermissionContext;
     try {
-      await getPermissionContext({
+      permissions = await getPermissionContext({
         request,
         session,
         supabase,
@@ -64,8 +67,16 @@ export const middleware: MiddlewareFunction[] = [
       throw redirect(`${url.pathname}${url.search}`);
     }
 
+    if (!permissions.isActiveMember) {
+      return next();
+    }
+
+    const billingAdmin = await getShopLevelAdminClient({
+      shop: session.shop,
+      route: "app.billing-middleware",
+    });
     const access = await requireBillingAccess({
-      admin,
+      admin: billingAdmin,
       shop: session.shop,
     });
     if (access.access !== "allowed") {
@@ -91,7 +102,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       accessState: "allowed" as const,
       accessIdentity: {
         shop: session.shop,
-        shopifyUserId: null,
         email: null,
       },
     };
@@ -121,7 +131,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     accessState,
     accessIdentity: {
       shop: permissions.identity.shop,
-      shopifyUserId: permissions.identity.shopifyUserId,
       email: permissions.identity.email,
     },
   };
@@ -161,11 +170,11 @@ export default function App() {
               padding: 24,
             }}
           >
-            <h1 style={{ margin: 0, fontSize: 28 }}>Access required</h1>
+            <h1 style={{ margin: 0, fontSize: 28 }}>ShopOps access required</h1>
             <p style={{ color: "#616161", margin: "8px 0 20px" }}>
               {accessState === "owner_setup_required"
                 ? "ShopOps Studio setup must be completed by the Shopify store owner."
-                : "You don't have access to ShopOps Studio. Contact the store owner."}
+                : "Contact the store owner to request ShopOps access for your email address."}
             </p>
 
             <dl style={{ display: "grid", gap: 12, margin: 0 }}>
@@ -173,14 +182,6 @@ export default function App() {
                 <dt style={{ color: "#616161", fontWeight: 800 }}>Shop</dt>
                 <dd style={{ margin: 0 }}>{accessIdentity.shop}</dd>
               </div>
-              {accessIdentity.shopifyUserId ? (
-                <div>
-                  <dt style={{ color: "#616161", fontWeight: 800 }}>
-                    Shopify user ID
-                  </dt>
-                  <dd style={{ margin: 0 }}>{accessIdentity.shopifyUserId}</dd>
-                </div>
-              ) : null}
               {accessIdentity.email ? (
                 <div>
                   <dt style={{ color: "#616161", fontWeight: 800 }}>Email</dt>

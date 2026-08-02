@@ -59,6 +59,7 @@ import {
   ensureShopInitialized,
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
+import { getShopLevelAdminClient } from "../lib/shopify/shop-level-admin.server";
 import {
   daysBetween,
   formatCurrency,
@@ -1082,7 +1083,7 @@ function computeRevenueBreakdown({
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.locations",
@@ -1092,7 +1093,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   if (url.searchParams.get("tab") === "reporting") {
     await assertAdminAccess({ request, session, supabase });
-    const billing = await getBillingState({ admin, shop: session.shop });
+    const billingAdmin = await getShopLevelAdminClient({
+      shop: session.shop,
+      route: "locations.reporting",
+    });
+    const billing = await getBillingState({
+      admin: billingAdmin,
+      shop: session.shop,
+    });
     if (!isAccessibleBillingState(billing)) {
       throw new Response("An active ShopOps Studio plan is required.", {
         status: 402,
@@ -1116,7 +1124,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     request,
     session,
     supabase,
-    admin,
   });
   const shouldShowDebugInfo =
     url.searchParams.get("debug") === "1" && permissions.isAdmin;
@@ -1478,7 +1485,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.locations.reporting.action",
@@ -1497,8 +1504,8 @@ export async function action({ request }: ActionFunctionArgs) {
     } satisfies ReportingActionData;
   }
   const { limits } = await getFreshPlanLimits({
-    admin,
     shop: session.shop,
+    route: "locations.reporting.action",
   });
   const result = await supabase.rpc("select_reporting_locations", {
     p_shop_domain: session.shop,

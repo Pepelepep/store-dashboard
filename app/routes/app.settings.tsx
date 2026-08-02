@@ -15,6 +15,7 @@ import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { getEntitlementSnapshot } from "../lib/entitlements.server";
 import { consumePlanConfirmedFlash } from "../lib/flash.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
+import { getShopLevelAdminClient } from "../lib/shopify/shop-level-admin.server";
 import { authenticate } from "../shopify.server";
 import DataSyncPage, {
   action as dataSyncAction,
@@ -32,7 +33,7 @@ export async function loader(args: LoaderFunctionArgs) {
     return dataSyncLoader(args);
   }
 
-  const { admin, session } = await authenticate.admin(args.request);
+  const { session } = await authenticate.admin(args.request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.settings.plan",
@@ -44,7 +45,14 @@ export async function loader(args: LoaderFunctionArgs) {
     session,
     supabase,
   });
-  const billing = await getBillingState({ admin, shop: session.shop });
+  const billingAdmin = await getShopLevelAdminClient({
+    shop: session.shop,
+    route: "settings.plan",
+  });
+  const billing = await getBillingState({
+    admin: billingAdmin,
+    shop: session.shop,
+  });
   if (!isAccessibleBillingState(billing)) {
     throw new Response("An active ShopOps Studio plan is required.", {
       status: 402,
