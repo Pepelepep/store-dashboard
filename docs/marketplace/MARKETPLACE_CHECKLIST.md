@@ -101,9 +101,11 @@ Draft status: marketplace preparation checklist.
 
 - [x] Decide free, paid, beta, or trial launch strategy.
 - [x] Design pricing model.
-- [ ] Implement billing in a separate branch only.
-- [ ] Keep billing disabled until tested.
-- [ ] Add cancellation handling.
+- [x] Implement Shopify App Pricing and authoritative Partner API verification.
+- [x] Add active, trial, cancel-at-end, unavailable, and no-subscription handling.
+- [ ] Verify the Marketplace TOML client ID, Partner app GID, canonical `shopops-studio` handle, and hosted pricing URL all identify the same Shopify app registration in the pre-launch Render preview and final production.
+- [ ] Verify public prices/trials and private QA Pilot visibility in Shopify Partner Dashboard.
+- [ ] Complete the billing lifecycle QA matrix in `REVIEWER_FLOW.md`.
 - [x] Add billing reviewer instructions.
 - [ ] Confirm terms include pricing/refund language before paid launch.
 

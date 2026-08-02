@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 
 import type { EntitlementMembership } from "../../lib/entitlement-model";
+import { formatStoreDate } from "../../lib/dashboard/dashboard-metrics";
 import { AppButtonLink } from "../ui/AppButton";
 import { StatusBadge } from "../ui/StatusBadge";
 import {
@@ -32,7 +33,7 @@ function formatDate(value: string | null) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" }).format(date);
+  return formatStoreDate(value);
 }
 
 export function PlanSetup({ data }: { data: PlanSetupData }) {
@@ -163,6 +164,11 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
             </div>
           ) : null}
         </dl>
+        {!data.canManagePlan ? (
+          <p className="shopops-helper-text" style={{ marginBottom: 0 }}>
+            Only the Shopify store owner can change this plan in Shopify.
+          </p>
+        ) : null}
       </ContentCard>
 
       <div className="shopops-usage-grid">

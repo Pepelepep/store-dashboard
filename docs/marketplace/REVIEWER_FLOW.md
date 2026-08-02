@@ -50,9 +50,25 @@ Expected outcome:
 - Merchant lands in ShopOps Studio.
 - Requested scopes are `read_orders`, `read_all_orders`, `read_products`, `read_inventory`, and `read_locations`.
 - Public App Store builds do not request `read_users`.
-- If `BILLING_ENABLED=true` and the shop has no active Shopify managed subscription, the app shows the billing-required state for the ShopOps Studio plan at `$59.99/month` with a 14-day free trial.
-- For first submission, billing code is prepared but disabled by default with `BILLING_ENABLED=false` unless billing review is intentionally enabled.
+- The pre-launch Render preview and final production run with `BILLING_ENABLED=true`. A shop without an active recognized Shopify App Pricing subscription sees the owner-only hosted plan-selection action.
+- The pre-launch Render preview uses the same canonical `shopops-studio` Marketplace registration, client ID, Partner API app GID, and hosted pricing handle as the future public production app. The temporary Render URL is not a separate Shopify app identity.
+- Public choices are Solo at $19 USD/month, Growth at $49 USD/month, and Multi-location at $99 USD/month, each with a 14-day trial. QA Pilot is a no-charge private plan visible only to explicitly authorized QA stores.
+- A non-owner sees a clear store-owner action state and cannot choose or manage a plan.
 - If no synced data exists, the app should show first-run guidance and sync expectations.
+
+## Verify Billing Lifecycle
+
+1. As the Shopify store owner with no subscription, open any protected app route.
+2. Confirm ShopOps shows the plan-required state and opens Shopify's hosted pricing page.
+3. Select each plan in turn and approve it in Shopify.
+4. Confirm the return opens Settings > Plan & billing and shows a one-time `Plan confirmed` message, the authoritative current plan, subscription status, trial end date when applicable, and the exact reporting-location and ShopOps-user usage.
+5. Confirm Solo enforces 1 reporting location and 1 ShopOps user; Growth enforces 5 and 5; Multi-location enforces 10 and unlimited users. Downgrades retain existing data but require the owner/admin to reduce selected locations or active ShopOps access before reports reopen.
+6. Schedule cancellation and confirm the plan shows as canceling through the current cycle. After Shopify reports no active subscription, confirm protected routes return to plan selection.
+7. Cancel or alter a welcome-link return, retry a temporary Partner API failure, and replay a previously successful return. Confirm no query-string handle grants access without a matching current Partner API subscription.
+8. Uninstall and reinstall the app, complete OAuth, and confirm a shop without a current subscription returns to plan selection.
+9. As a non-owner admin, confirm Plan & billing is readable but plan management is explicitly restricted to the Shopify store owner.
+
+For pre-launch QA Pilot coverage, first authorize the test shop on that private plan in the canonical `shopops-studio` Marketplace registration. Verify that no unapproved shop or public pricing page exposes QA Pilot.
 
 ## Open Embedded App
 

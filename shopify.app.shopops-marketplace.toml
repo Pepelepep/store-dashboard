@@ -1,5 +1,5 @@
-# Marketplace Shopify app configuration for ShopOps Studio.
-# Dedicated to the public marketplace preview app.
+# Marketplace Shopify app configuration for the canonical ShopOps Studio registration.
+# The Render preview URL is temporary pre-launch hosting for this future production app.
 # Do not deploy this config to the current client production/staging apps.
 
 client_id = "751df93cb283cb05edc5b46b35de06be"
