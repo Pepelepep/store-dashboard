@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
 import { STAFF_ALIAS_TYPES } from "../staff-identity/staff-identity";
+import { resolveApprovedDuplicateAccess } from "./duplicate-access.server";
 import { resolveOwnerMaterializationIdentifiers } from "./owner-bootstrap";
 import {
   getCurrentShopifyUserIdentity as getCurrentUserIdentity,
@@ -44,6 +45,7 @@ export type PermissionContext = {
     | "owner"
     | "linked_shopify_user_id"
     | "verified_email_linked"
+    | "verified_email_reactivated"
     | "membership_revoked"
     | "membership_missing"
     | "email_unverified"
@@ -162,6 +164,8 @@ type IdentityBindingResult =
   | "not_attempted"
   | "bound"
   | "bound_alias_sync_pending"
+  | "consolidated_reactivation"
+  | "duplicate_access_needs_attention"
   | "identity_conflict"
   | "membership_not_bindable"
   | "storage_unavailable";
@@ -797,8 +801,44 @@ export async function getPermissionContext({
     membership = owner;
     accessReason = "owner";
   } else if (userIdMembership?.status === "disabled") {
-    membership = userIdMembership;
-    accessReason = "membership_revoked";
+    const ownerMembership = memberships.find(
+      (candidate) => candidate.isOwner && candidate.status === "active",
+    );
+    if (
+      identity.isEmailVerified &&
+      identity.email &&
+      identity.shopifyUserId &&
+      ownerMembership &&
+      emailMembership?.status === "active" &&
+      emailMembership.id !== userIdMembership.id &&
+      !emailMembership.shopifyUserId
+    ) {
+      bindingAttempted = true;
+      activationAttempted = true;
+      const resolution = await resolveApprovedDuplicateAccess({
+        ownerMembershipId: ownerMembership.id,
+        revokedMembershipId: userIdMembership.id,
+        shop: identity.shop,
+        shopifyUserId: identity.shopifyUserId,
+        supabase,
+        verifiedEmail: identity.email,
+        waitingMembershipId: emailMembership.id,
+      });
+      if (resolution.status === "resolved") {
+        membership = toMembership(resolution.membership);
+        accessReason = "verified_email_reactivated";
+        bindingResult = "consolidated_reactivation";
+      } else {
+        membership = userIdMembership;
+        needsAttention = true;
+        accessReason = "identity_conflict";
+        bindingResult = "duplicate_access_needs_attention";
+        await markIdentityNeedsAttention({ identity, supabase });
+      }
+    } else {
+      membership = userIdMembership;
+      accessReason = "membership_revoked";
+    }
   } else if (userIdMembership) {
     membership = userIdMembership;
     const synchronized = await synchronizeVerifiedEmail({
