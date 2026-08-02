@@ -1,35 +1,19 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
+import { STAFF_ALIAS_TYPES } from "../staff-identity/staff-identity";
 import { resolveOwnerMaterializationIdentifiers } from "./owner-bootstrap";
+import {
+  getCurrentShopifyUserIdentity as getCurrentUserIdentity,
+  normalizeShopOpsEmail,
+  type CurrentUserIdentity,
+  type ShopifySessionIdentitySource,
+} from "./shopops-access";
 
-type ShopifySessionLike = {
-  shop: string;
-  userId?: string | null;
-  email?: string | null;
-  firstName?: string | null;
-  lastName?: string | null;
-  accountOwner?: boolean | null;
-  onlineAccessInfo?: {
-    associated_user?: {
-      id?: number | string | null;
-      email?: string | null;
-      first_name?: string | null;
-      last_name?: string | null;
-      account_owner?: boolean | null;
-    } | null;
-  } | null;
-};
+export { getCurrentShopifyUserIdentity as getCurrentUserIdentity } from "./shopops-access";
+export type { CurrentUserIdentity } from "./shopops-access";
 
 export type DashboardRole = "owner" | "admin" | "manager" | "viewer";
-
-export type CurrentUserIdentity = {
-  shop: string;
-  email: string | null;
-  shopifyUserId: string | null;
-  displayName: string;
-  isShopifyAccountOwner: boolean;
-};
 
 export type DashboardMembership = {
   id: string;
@@ -50,7 +34,21 @@ export type PermissionContext = {
   isOwner: boolean;
   isAdmin: boolean;
   role: DashboardRole | null;
-  accessSource: "owner" | "membership" | "owner_setup_required" | "none";
+  accessSource:
+    | "owner"
+    | "membership"
+    | "owner_setup_required"
+    | "needs_attention"
+    | "none";
+  accessReason:
+    | "owner"
+    | "linked_shopify_user_id"
+    | "verified_email_linked"
+    | "membership_revoked"
+    | "membership_missing"
+    | "email_unverified"
+    | "identity_conflict";
+  needsAttention: boolean;
   allowedLocationIds: Set<string>;
 };
 
@@ -85,21 +83,12 @@ export class OwnerBootstrapError extends Error {
   }
 }
 
-function normalizeEmail(email: string | null | undefined) {
-  return email?.trim().toLowerCase() || null;
-}
-
-function normalizeShopifyUserId(userId: string | number | null | undefined) {
-  if (userId === undefined || userId === null) return null;
-  return String(userId).trim() || null;
-}
-
 function toMembership(row: MembershipRow): DashboardMembership {
   return {
     id: row.id,
     personId: row.person_id,
-    shopifyUserId: normalizeShopifyUserId(row.shopify_user_id),
-    userEmail: normalizeEmail(row.normalized_email),
+    shopifyUserId: row.shopify_user_id?.trim() || null,
+    userEmail: normalizeShopOpsEmail(row.normalized_email),
     displayName: row.display_name,
     role: row.role,
     status: row.status,
@@ -150,40 +139,369 @@ function logOwnerBootstrapFailure({
   });
 }
 
+function logAccessDecision({
+  route,
+  shop,
+  reason,
+  granted,
+}: {
+  route: string;
+  shop: string;
+  reason: PermissionContext["accessReason"];
+  granted: boolean;
+}) {
+  console.info("[shopops-access] authorization decision", {
+    route,
+    shop,
+    reason,
+    granted,
+  });
+}
+
+async function mapIdentityAlias({
+  supabase,
+  shop,
+  personId,
+  aliasType,
+  aliasValue,
+  now,
+}: {
+  supabase: SupabaseClient;
+  shop: string;
+  personId: string;
+  aliasType: string;
+  aliasValue: string;
+  now: string;
+}) {
+  const findExisting = () =>
+    supabase
+      .from("staff_identity_aliases")
+      .select("id, person_id")
+      .eq("shop_domain", shop)
+      .eq("alias_type", aliasType)
+      .eq("alias_value", aliasValue)
+      .maybeSingle();
+  let existing = await findExisting();
+  if (existing.error) return false;
+
+  if (!existing.data) {
+    const inserted = await supabase.from("staff_identity_aliases").insert({
+      shop_domain: shop,
+      person_id: personId,
+      alias_type: aliasType,
+      alias_value: aliasValue,
+      source: "authenticated_session",
+      review_status: "mapped",
+      first_seen_at: now,
+      last_seen_at: now,
+      updated_at: now,
+    });
+    if (!inserted.error) return true;
+    if (inserted.error.code !== "23505") return false;
+    existing = await findExisting();
+    if (existing.error || !existing.data) return false;
+  }
+
+  if (existing.data.person_id !== personId) return false;
+  const updated = await supabase
+    .from("staff_identity_aliases")
+    .update({
+      source: "authenticated_session",
+      review_status: "mapped",
+      last_seen_at: now,
+      updated_at: now,
+    })
+    .eq("shop_domain", shop)
+    .eq("id", existing.data.id)
+    .eq("person_id", personId);
+  return !updated.error;
+}
+
+async function markIdentityNeedsAttention({
+  identity,
+  supabase,
+}: {
+  identity: CurrentUserIdentity;
+  supabase: SupabaseClient;
+}) {
+  if (!identity.email && !identity.shopifyUserId) return;
+  const now = new Date().toISOString();
+  let personId: string | null = null;
+
+  if (identity.shopifyUserId) {
+    const alias = await supabase
+      .from("staff_identity_aliases")
+      .select("person_id")
+      .eq("shop_domain", identity.shop)
+      .eq("alias_type", STAFF_ALIAS_TYPES.shopifyAdminUserId)
+      .eq("alias_value", identity.shopifyUserId)
+      .maybeSingle();
+    if (!alias.error) personId = alias.data?.person_id ?? null;
+  }
+
+  if (!personId && identity.email) {
+    const person = await supabase
+      .from("staff_people")
+      .select("id, email")
+      .eq("shop_domain", identity.shop)
+      .ilike("email", identity.email)
+      .limit(20);
+    if (!person.error) {
+      personId =
+        (person.data ?? []).find(
+          (candidate) =>
+            normalizeShopOpsEmail(candidate.email) === identity.email,
+        )?.id ?? null;
+    }
+  }
+
+  if (!personId && identity.email) {
+    const created = await supabase
+      .from("staff_people")
+      .insert({
+        shop_domain: identity.shop,
+        display_name: identity.displayName,
+        email: identity.email,
+      })
+      .select("id")
+      .single();
+    if (!created.error) {
+      personId = created.data.id;
+    } else if (created.error.code === "23505") {
+      const existing = await supabase
+        .from("staff_people")
+        .select("id, email")
+        .eq("shop_domain", identity.shop)
+        .ilike("email", identity.email)
+        .limit(20);
+      if (!existing.error) {
+        personId =
+          (existing.data ?? []).find(
+            (candidate) =>
+              normalizeShopOpsEmail(candidate.email) === identity.email,
+          )?.id ?? null;
+      }
+    }
+  }
+
+  if (!personId || !identity.email) return;
+  const aliases = [
+    {
+      aliasType: STAFF_ALIAS_TYPES.email,
+      aliasValue: identity.email,
+    },
+    ...(identity.shopifyUserId
+      ? [
+          {
+            aliasType: STAFF_ALIAS_TYPES.shopifyAdminUserId,
+            aliasValue: identity.shopifyUserId,
+          },
+        ]
+      : []),
+  ];
+  for (const alias of aliases) {
+    const existing = await supabase
+      .from("staff_identity_aliases")
+      .select("id, person_id")
+      .eq("shop_domain", identity.shop)
+      .eq("alias_type", alias.aliasType)
+      .eq("alias_value", alias.aliasValue)
+      .maybeSingle();
+    if (existing.error) continue;
+    if (existing.data) {
+      await supabase
+        .from("staff_identity_aliases")
+        .update({
+          review_status: "pending",
+          last_seen_at: now,
+          updated_at: now,
+        })
+        .eq("shop_domain", identity.shop)
+        .eq("id", existing.data.id);
+      continue;
+    }
+    await supabase.from("staff_identity_aliases").insert({
+      shop_domain: identity.shop,
+      person_id: personId,
+      alias_type: alias.aliasType,
+      alias_value: alias.aliasValue,
+      source: "authenticated_session_attention",
+      review_status: "pending",
+      first_seen_at: now,
+      last_seen_at: now,
+      updated_at: now,
+    });
+  }
+}
+
+async function bindVerifiedMembership({
+  identity,
+  membership,
+  memberships,
+  supabase,
+}: {
+  identity: CurrentUserIdentity;
+  membership: DashboardMembership;
+  memberships: DashboardMembership[];
+  supabase: SupabaseClient;
+}) {
+  if (
+    !identity.isEmailVerified ||
+    !identity.email ||
+    !identity.shopifyUserId ||
+    !membership.personId ||
+    membership.status !== "active"
+  ) {
+    return null;
+  }
+  const userIdConflict = memberships.find(
+    (candidate) =>
+      candidate.id !== membership.id &&
+      candidate.shopifyUserId === identity.shopifyUserId,
+  );
+  if (userIdConflict) return null;
+
+  const now = new Date().toISOString();
+  for (const identityAlias of [
+    {
+      aliasType: STAFF_ALIAS_TYPES.shopifyAdminUserId,
+      aliasValue: identity.shopifyUserId,
+    },
+    {
+      aliasType: STAFF_ALIAS_TYPES.email,
+      aliasValue: identity.email,
+    },
+  ]) {
+    const linked = await mapIdentityAlias({
+      supabase,
+      shop: identity.shop,
+      personId: membership.personId,
+      aliasType: identityAlias.aliasType,
+      aliasValue: identityAlias.aliasValue,
+      now,
+    });
+    if (!linked) return null;
+  }
+
+  const updated = await supabase
+    .from("dashboard_memberships")
+    .update({ shopify_user_id: identity.shopifyUserId, updated_at: now })
+    .eq("shop_domain", identity.shop)
+    .eq("id", membership.id)
+    .eq("status", "active");
+  if (updated.error) return null;
+
+  await supabase
+    .from("user_location_access")
+    .update({ shopify_user_id: identity.shopifyUserId })
+    .eq("shop_domain", identity.shop)
+    .eq("membership_id", membership.id);
+
+  return { ...membership, shopifyUserId: identity.shopifyUserId };
+}
+
+async function synchronizeVerifiedEmail({
+  identity,
+  membership,
+  memberships,
+  supabase,
+}: {
+  identity: CurrentUserIdentity;
+  membership: DashboardMembership;
+  memberships: DashboardMembership[];
+  supabase: SupabaseClient;
+}) {
+  if (
+    !identity.isEmailVerified ||
+    !identity.email ||
+    identity.email === membership.userEmail
+  ) {
+    return { membership, needsAttention: false };
+  }
+  if (
+    memberships.some(
+      (candidate) =>
+        candidate.id !== membership.id &&
+        candidate.userEmail === identity.email,
+    )
+  ) {
+    return { membership, needsAttention: true };
+  }
+
+  if (membership.personId) {
+    const conflictingPerson = await supabase
+      .from("staff_people")
+      .select("id, email")
+      .eq("shop_domain", identity.shop)
+      .ilike("email", identity.email)
+      .neq("id", membership.personId)
+      .limit(20);
+    if (
+      conflictingPerson.error ||
+      (conflictingPerson.data ?? []).some(
+        (candidate) =>
+          normalizeShopOpsEmail(candidate.email) === identity.email,
+      )
+    ) {
+      return { membership, needsAttention: true };
+    }
+    const conflictingAlias = await supabase
+      .from("staff_identity_aliases")
+      .select("person_id")
+      .eq("shop_domain", identity.shop)
+      .eq("alias_type", STAFF_ALIAS_TYPES.email)
+      .eq("alias_value", identity.email)
+      .maybeSingle();
+    if (
+      conflictingAlias.error ||
+      (conflictingAlias.data?.person_id &&
+        conflictingAlias.data.person_id !== membership.personId)
+    ) {
+      return { membership, needsAttention: true };
+    }
+  }
+
+  const now = new Date().toISOString();
+  if (membership.personId) {
+    const person = await supabase
+      .from("staff_people")
+      .update({ email: identity.email, updated_at: now })
+      .eq("shop_domain", identity.shop)
+      .eq("id", membership.personId);
+    if (person.error) return { membership, needsAttention: true };
+    const aliasMapped = await mapIdentityAlias({
+      supabase,
+      shop: identity.shop,
+      personId: membership.personId,
+      aliasType: STAFF_ALIAS_TYPES.email,
+      aliasValue: identity.email,
+      now,
+    });
+    if (!aliasMapped) return { membership, needsAttention: true };
+  }
+  const updated = await supabase
+    .from("dashboard_memberships")
+    .update({ normalized_email: identity.email, updated_at: now })
+    .eq("shop_domain", identity.shop)
+    .eq("id", membership.id)
+    .eq("shopify_user_id", identity.shopifyUserId);
+  if (updated.error) return { membership, needsAttention: true };
+  await supabase
+    .from("user_location_access")
+    .update({ user_email: identity.email })
+    .eq("shop_domain", identity.shop)
+    .eq("membership_id", membership.id);
+  return {
+    membership: { ...membership, userEmail: identity.email },
+    needsAttention: false,
+  };
+}
+
 /**
  * Identity comes only from the server-verified Shopify session. Request query
  * parameters are deliberately ignored because Shopify authentication has
  * already verified and persisted these fields before this code runs.
  */
-export function getCurrentUserIdentity({
-  session,
-}: {
-  request?: Request;
-  session: ShopifySessionLike;
-}): CurrentUserIdentity {
-  const associatedUser = session.onlineAccessInfo?.associated_user;
-  const email = normalizeEmail(associatedUser?.email ?? session.email);
-  const shopifyUserId = normalizeShopifyUserId(
-    associatedUser?.id ?? session.userId,
-  );
-  const firstName = associatedUser?.first_name ?? session.firstName;
-  const lastName = associatedUser?.last_name ?? session.lastName;
-  const nameParts = [firstName, lastName]
-    .map((part) => part?.trim())
-    .filter(Boolean);
-
-  return {
-    shop: session.shop,
-    email,
-    shopifyUserId,
-    displayName:
-      nameParts.join(" ") || email || shopifyUserId || "Unknown user",
-    isShopifyAccountOwner: Boolean(
-      associatedUser?.account_owner ?? session.accountOwner,
-    ),
-  };
-}
-
 export async function materializeVerifiedOwner({
   identity,
   supabase,
@@ -213,7 +531,10 @@ export async function materializeVerifiedOwner({
         label: "Owner bootstrap memberships",
       });
       const identifiers = resolveOwnerMaterializationIdentifiers({
-        identity,
+        identity: {
+          shopifyUserId: identity.shopifyUserId,
+          email: identity.isEmailVerified ? identity.email : null,
+        },
         memberships: rows.map(toMembership),
       });
       if (!identifiers) {
@@ -261,7 +582,7 @@ export async function getPermissionContext({
   route,
 }: {
   request?: Request;
-  session: ShopifySessionLike;
+  session: ShopifySessionIdentitySource;
   supabase: SupabaseClient;
   route?: string;
 }): Promise<PermissionContext> {
@@ -283,22 +604,54 @@ export async function getPermissionContext({
   );
   const emailMembership = memberships.find(
     (candidate) =>
-      Boolean(identity.email) && candidate.userEmail === identity.email,
+      identity.isEmailVerified &&
+      Boolean(identity.email) &&
+      candidate.userEmail === identity.email,
   );
-  if (
-    !identity.isShopifyAccountOwner &&
-    userIdMembership &&
-    emailMembership &&
-    userIdMembership.id !== emailMembership.id
-  ) {
-    throw new Response(
-      "You don't have access to ShopOps Studio. Contact the store owner.",
-      { status: 403 },
-    );
+  let needsAttention = false;
+  let accessReason: PermissionContext["accessReason"];
+  let membership: DashboardMembership | null;
+  if (identity.isShopifyAccountOwner) {
+    membership = owner;
+    accessReason = "owner";
+  } else if (userIdMembership?.status === "disabled") {
+    membership = userIdMembership;
+    accessReason = "membership_revoked";
+  } else if (userIdMembership) {
+    membership = userIdMembership;
+    const synchronized = await synchronizeVerifiedEmail({
+      identity,
+      membership,
+      memberships,
+      supabase,
+    });
+    membership = synchronized.membership;
+    needsAttention = synchronized.needsAttention;
+    accessReason = needsAttention
+      ? "identity_conflict"
+      : "linked_shopify_user_id";
+  } else if (emailMembership?.status === "active") {
+    const linked = await bindVerifiedMembership({
+      identity,
+      membership: emailMembership,
+      memberships,
+      supabase,
+    });
+    membership = linked;
+    needsAttention = !linked;
+    accessReason = linked ? "verified_email_linked" : "identity_conflict";
+    if (!linked) await markIdentityNeedsAttention({ identity, supabase });
+  } else if (emailMembership?.status === "disabled") {
+    membership = emailMembership;
+    accessReason = "membership_revoked";
+  } else {
+    membership = null;
+    needsAttention = true;
+    accessReason = identity.isEmailVerified
+      ? "membership_missing"
+      : "email_unverified";
+    await markIdentityNeedsAttention({ identity, supabase });
   }
-  const membership = identity.isShopifyAccountOwner
-    ? owner
-    : (userIdMembership ?? emailMembership ?? null);
   const activeMembership = membership?.status === "active" ? membership : null;
 
   const allowedLocationIds = new Set<string>();
@@ -335,9 +688,18 @@ export async function getPermissionContext({
     ? "owner"
     : isActiveMember
       ? "membership"
-      : owner
-        ? "none"
-        : "owner_setup_required";
+      : needsAttention
+        ? "needs_attention"
+        : owner
+          ? "none"
+          : "owner_setup_required";
+
+  logAccessDecision({
+    route: route ?? "permission-context",
+    shop: identity.shop,
+    reason: accessReason,
+    granted: isActiveMember,
+  });
 
   return {
     identity,
@@ -348,35 +710,40 @@ export async function getPermissionContext({
     isAdmin,
     role: activeMembership?.role ?? null,
     accessSource,
+    accessReason,
+    needsAttention,
     allowedLocationIds,
   };
 }
 
 export async function assertDashboardAccess(args: {
   request?: Request;
-  session: ShopifySessionLike;
+  session: ShopifySessionIdentitySource;
   supabase: SupabaseClient;
   route?: string;
 }) {
   const permissions = await getPermissionContext(args);
   if (!permissions.hasOwner) {
+    logAccessDecision({
+      route: args.route ?? "dashboard-access",
+      shop: permissions.identity.shop,
+      reason: "membership_missing",
+      granted: false,
+    });
     throw new Response(
       "ShopOps Studio setup must be completed by the Shopify store owner.",
       { status: 403 },
     );
   }
   if (!permissions.isActiveMember) {
-    throw new Response(
-      "You don't have access to ShopOps Studio. Contact the store owner.",
-      { status: 403 },
-    );
+    throw new Response("ShopOps access required.", { status: 403 });
   }
   return permissions;
 }
 
 export async function assertAdminAccess(args: {
   request?: Request;
-  session: ShopifySessionLike;
+  session: ShopifySessionIdentitySource;
   supabase: SupabaseClient;
   route?: string;
 }) {
@@ -389,7 +756,7 @@ export async function assertAdminAccess(args: {
 
 export async function assertOwnerAccess(args: {
   request?: Request;
-  session: ShopifySessionLike;
+  session: ShopifySessionIdentitySource;
   supabase: SupabaseClient;
   route?: string;
 }) {

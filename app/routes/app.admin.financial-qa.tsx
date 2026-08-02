@@ -398,7 +398,7 @@ function formatDateTime(value: string) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   await ensureShopInitialized({
     route: "app.admin.financial-qa",
@@ -409,7 +409,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     request,
     session,
     supabase,
-    admin,
   });
   if (!permissions.isAdmin) {
     throw new Response("Forbidden: admin access required", { status: 403 });

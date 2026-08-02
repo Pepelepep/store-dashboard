@@ -19,6 +19,7 @@ import {
   type EntitlementMembership,
   type EntitlementSnapshot,
 } from "./entitlement-model";
+import { getShopLevelAdminClient } from "./shopify/shop-level-admin.server";
 
 export { summarizeEntitlements } from "./entitlement-model";
 export type {
@@ -27,8 +28,6 @@ export type {
   EntitlementMembership,
   EntitlementSnapshot,
 } from "./entitlement-model";
-
-type AdminGraphqlClient = Parameters<typeof getBillingState>[0]["admin"];
 
 type MembershipRow = {
   id: string;
@@ -142,12 +141,13 @@ export async function getEntitlementSnapshot({
 }
 
 export async function getFreshPlanLimits({
-  admin,
   shop,
+  route = "entitlements.plan-refresh",
 }: {
-  admin: AdminGraphqlClient;
   shop: string;
+  route?: string;
 }) {
+  const admin = await getShopLevelAdminClient({ shop, route });
   const billing = await refreshBillingState({ admin, shop });
   if (billing.state === "billing_unavailable") {
     throw new Response("Billing is temporarily unavailable. Please retry.", {
@@ -174,12 +174,10 @@ export async function assertReportingEntitlements({
   request,
   session,
   supabase,
-  admin,
 }: {
   request: Request;
   session: Parameters<typeof assertDashboardAccess>[0]["session"];
   supabase: SupabaseClient;
-  admin: AdminGraphqlClient;
 }): Promise<{
   permissions: PermissionContext;
   billing: BillingState;
@@ -189,6 +187,10 @@ export async function assertReportingEntitlements({
     request,
     session,
     supabase,
+  });
+  const admin = await getShopLevelAdminClient({
+    shop: session.shop,
+    route: "reporting-entitlements",
   });
   const billing = await getBillingState({ admin, shop: session.shop });
   const entitlements = await getEntitlementSnapshot({
