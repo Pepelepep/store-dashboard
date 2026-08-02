@@ -224,6 +224,33 @@ export function FormActions({
   );
 }
 
+export function FilterPills<T extends string>({
+  ariaLabel,
+  items,
+  onChange,
+  value,
+}: {
+  ariaLabel: string;
+  items: Array<{ label: ReactNode; value: T }>;
+  onChange: (value: T) => void;
+  value: T;
+}) {
+  return (
+    <div aria-label={ariaLabel} className="shopops-filter-pills" role="toolbar">
+      {items.map((item) => (
+        <button
+          aria-pressed={value === item.value}
+          key={item.value}
+          onClick={() => onChange(item.value)}
+          type="button"
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function InlineNotice({
   children,
   tone = "info",
@@ -328,7 +355,13 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-section-tabs { display: flex; gap: 8px; margin-bottom: 18px; overflow-x: auto; padding: 2px 2px 4px; scroll-snap-type: x proximity; scrollbar-color: #cbd5e1 transparent; scrollbar-width: thin; white-space: nowrap; }
   .shopops-section-tabs__item { background: var(--shopops-surface); border: 1px solid var(--shopops-border); border-radius: 10px; color: #374151; flex: 0 0 auto; font-size: 14px; font-weight: 750; min-height: 42px; padding: 10px 16px; scroll-snap-align: nearest; text-decoration: none; transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease; }
   .shopops-section-tabs__item:hover { background: #f1f5f9; border-color: #60a5fa; color: #172554; }
+  .shopops-section-tabs__item:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
   .shopops-section-tabs__item[aria-current="page"] { background: var(--shopops-accent-selected); border-color: var(--shopops-accent); box-shadow: inset 0 0 0 1px var(--shopops-accent); color: #163b7a; }
+  .shopops-filter-pills { display: flex; gap: 6px; overflow-x: auto; padding: 2px; white-space: nowrap; }
+  .shopops-filter-pills button { background: var(--shopops-surface); border: 1px solid var(--shopops-border); border-radius: 8px; color: #374151; cursor: pointer; flex: 0 0 auto; font-weight: 650; padding: 8px 11px; transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease; }
+  .shopops-filter-pills button:hover { background: #f1f5f9; border-color: #60a5fa; color: #172554; }
+  .shopops-filter-pills button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+  .shopops-filter-pills button[aria-pressed="true"] { background: var(--shopops-accent-selected); border-color: var(--shopops-accent); box-shadow: inset 0 0 0 1px var(--shopops-accent); color: #163b7a; font-weight: 750; }
   .shopops-content-card { background: var(--shopops-surface); border: 1px solid var(--shopops-border); border-radius: 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); margin-bottom: 20px; padding: 20px; }
   .shopops-content-card__header { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; margin-bottom: 16px; }
   .shopops-content-card__header h2 { font-size: 20px; line-height: 1.25; margin: 0; }

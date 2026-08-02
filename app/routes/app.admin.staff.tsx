@@ -12,10 +12,12 @@ import { Icon } from "@shopify/polaris";
 import { PersonIcon, PersonLockIcon } from "@shopify/polaris-icons";
 
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
+import { AppButton } from "../components/ui/AppButton";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { SectionTabs } from "../components/ui/SectionTabs";
 import {
   EmptyState,
+  FilterPills,
   InlineNotice,
   PageHeader,
   ShopOpsPage,
@@ -23,6 +25,7 @@ import {
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import { ensureActiveShopOpsPersonByEmail } from "../lib/auth/shopops-access.server";
 import {
+  getShopOpsAccessPresentation,
   getShopOpsAccessState,
   isValidShopOpsEmail,
   normalizeShopOpsEmail,
@@ -107,7 +110,6 @@ type LoaderData = {
 type ActionData = { ok: boolean; message: string };
 type Overlay =
   | "add"
-  | "add_access"
   | "pending"
   | "import"
   | "details"
@@ -186,13 +188,6 @@ function groupIdentityAliases(aliases: StaffAlias[]) {
   return [...groups.values()].sort((a, b) => a.value.localeCompare(b.value));
 }
 
-function accessStateLabel(state: ShopOpsAccessState) {
-  if (state === "pending") return "Pending first sign-in";
-  if (state === "active") return "Active";
-  if (state === "revoked") return "Revoked";
-  if (state === "archived") return "Archived";
-  return "Needs attention";
-}
 function blankMetric(): SellerMetric {
   return {
     lastOrderName: null,
@@ -216,6 +211,25 @@ function shopOpsRoleLabel(membership: MembershipRow) {
   if (membership.role === "admin") return "Admin";
   if (membership.role === "manager") return "Manager";
   return "Viewer";
+}
+
+function displayedShopOpsRole(profile: StaffProfile) {
+  if (profile.membership?.is_owner) return "Owner";
+  const presentation = getShopOpsAccessPresentation({
+    state: profile.accessState,
+    hasApprovedAccess: profile.membership?.status === "active",
+  });
+  if (!presentation.showConfiguredRole || !profile.membership) {
+    return "—";
+  }
+  return shopOpsRoleLabel(profile.membership);
+}
+
+function accessPresentation(profile: StaffProfile) {
+  return getShopOpsAccessPresentation({
+    state: profile.accessState,
+    hasApprovedAccess: profile.membership?.status === "active",
+  });
 }
 
 function hasIdentityAttention({
@@ -493,12 +507,12 @@ function friendlyAccessError(message?: string, planHandle?: string | null) {
   if (message?.includes("last_admin_required"))
     return "The last active ShopOps Admin cannot be removed or demoted.";
   if (message?.includes("active_staff_member_required"))
-    return "Restore this Staff profile before enabling dashboard access.";
+    return "Restore this person before enabling ShopOps access.";
   if (message?.includes("invalid_access_identity"))
     return "Enter a valid email address.";
   if (message?.includes("staff_email_ambiguous"))
     return "That email needs review before access can be granted.";
-  return "Dashboard access could not be saved. Nothing was changed.";
+  return "ShopOps access could not be saved. Nothing was changed.";
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -606,13 +620,12 @@ export async function action({ request }: ActionFunctionArgs) {
     };
   }
 
-  if (intent === "create_person" || intent === "create_from_alias") {
+  if (intent === "create_from_alias") {
     const displayName = text(data.get("display_name"));
     const email = normalizeShopOpsEmail(text(data.get("email")));
     if (!displayName)
       return { ok: false, message: "Display name is required." };
-    if (intent === "create_from_alias" && !aliasId)
-      return { ok: false, message: "POS seller is required." };
+    if (!aliasId) return { ok: false, message: "POS seller is required." };
     const created = await supabase
       .from("staff_people")
       .insert({ shop_domain: session.shop, display_name: displayName, email })
@@ -724,7 +737,7 @@ export async function action({ request }: ActionFunctionArgs) {
     ) {
       return {
         ok: false,
-        message: "Update the login email from Edit dashboard access.",
+        message: "Update the login email from Edit ShopOps access.",
       };
     }
     const result = await supabase
@@ -781,8 +794,8 @@ export async function action({ request }: ActionFunctionArgs) {
           ok: true,
           message:
             result.data === "deleted"
-              ? "Unused staff profile permanently deleted."
-              : "Staff archived. Access was removed and reporting history was preserved.",
+              ? "Unused person permanently deleted."
+              : "Person archived. ShopOps access was removed and reporting history was preserved.",
         };
   }
   if (intent === "restore_staff") {
@@ -792,7 +805,7 @@ export async function action({ request }: ActionFunctionArgs) {
     });
     return result.error
       ? { ok: false, message: result.error.message }
-      : { ok: true, message: "Staff restored." };
+      : { ok: true, message: "Person restored." };
   }
   if (intent === "remove_dashboard_access") {
     const target = await supabase
@@ -804,7 +817,7 @@ export async function action({ request }: ActionFunctionArgs) {
     if (target.error)
       return { ok: false, message: friendlyAccessError(target.error.message) };
     if (!target.data)
-      return { ok: true, message: "Dashboard access is already disabled." };
+      return { ok: true, message: "ShopOps access is already revoked." };
     const result = await supabase.rpc("disable_dashboard_membership", {
       p_shop_domain: session.shop,
       p_actor_membership_id: permissions.membership.id,
@@ -815,57 +828,106 @@ export async function action({ request }: ActionFunctionArgs) {
       : {
           ok: true,
           message:
-            "Dashboard access removed. Profile and POS sales were preserved.",
+            "ShopOps access revoked. Person, POS sales, and history were preserved.",
         };
   }
-  if (intent === "add_shopops_user") {
+  if (intent === "add_person") {
     const email = normalizeShopOpsEmail(text(data.get("email")));
     const displayName = text(data.get("display_name"));
     const role = text(data.get("role"));
-    if (!email || !isValidShopOpsEmail(email)) {
+    const salesAttribution = data.get("capability_sales") === "true";
+    const shopOpsAccess = data.get("capability_access") === "true";
+    if (!salesAttribution && !shopOpsAccess) {
+      return { ok: false, message: "Select at least one capability." };
+    }
+    if (email && !isValidShopOpsEmail(email)) {
       return { ok: false, message: "Enter a valid email address." };
     }
-    const { limits } = await getFreshPlanLimits({
-      shop: session.shop,
-      route: "people.add-shopops-user",
-    });
+    if (shopOpsAccess && !email) {
+      return { ok: false, message: "Email is required for ShopOps access." };
+    }
+    if (!email && !displayName) {
+      return {
+        ok: false,
+        message: "Enter an email or display name for this person.",
+      };
+    }
+
+    const plan = shopOpsAccess
+      ? await getFreshPlanLimits({
+          shop: session.shop,
+          route: "people.add-person",
+        })
+      : null;
     let person;
     try {
-      person = await ensureActiveShopOpsPersonByEmail({
-        supabase,
-        shop: session.shop,
-        email,
-        displayName,
-      });
+      if (email) {
+        person = await ensureActiveShopOpsPersonByEmail({
+          supabase,
+          shop: session.shop,
+          email,
+          displayName,
+        });
+      } else {
+        const created = await supabase
+          .from("staff_people")
+          .insert({
+            shop_domain: session.shop,
+            display_name: displayName,
+            email: null,
+          })
+          .select("id")
+          .single();
+        if (created.error) throw new Error(created.error.message);
+        person = {
+          personId: created.data.id,
+          email: null,
+          displayName,
+          restored: false,
+        };
+      }
     } catch (error) {
       return {
         ok: false,
         message: friendlyAccessError(
           error instanceof Error ? error.message : undefined,
-          limits.planHandle,
+          plan?.limits.planHandle,
         ),
       };
     }
+
+    if (!shopOpsAccess) {
+      return {
+        ok: true,
+        message: person.restored
+          ? "Person restored. Existing sales attribution and history were preserved."
+          : "Person added. Sales attribution can be linked to detected POS sellers without granting ShopOps access.",
+      };
+    }
+
     const result = await supabase.rpc("replace_dashboard_membership_access", {
       p_shop_domain: session.shop,
       p_actor_membership_id: permissions.membership.id,
       p_person_id: person.personId,
-      p_canonical_email: person.email,
+      p_canonical_email: person.email!,
       p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
       p_location_ids: data.getAll("location_ids").map(text).filter(Boolean),
       p_shopify_user_ids: [],
-      p_dashboard_user_limit: limits.dashboardUsers,
+      p_dashboard_user_limit: plan!.limits.dashboardUsers,
     });
     return result.error
       ? {
           ok: false,
-          message: friendlyAccessError(result.error.message, limits.planHandle),
+          message: friendlyAccessError(
+            result.error.message,
+            plan!.limits.planHandle,
+          ),
         }
       : {
           ok: true,
           message: person.restored
-            ? "ShopOps user restored. Access is pending their first sign-in."
-            : "ShopOps user added. Access is pending their first sign-in.",
+            ? "Person restored. ShopOps access is waiting for the first verified sign-in."
+            : "Person added. ShopOps access is waiting for the first verified sign-in.",
         };
   }
   if (intent === "save_dashboard_access") {
@@ -893,7 +955,7 @@ export async function action({ request }: ActionFunctionArgs) {
           ok: false,
           message: friendlyAccessError(result.error.message, limits.planHandle),
         }
-      : { ok: true, message: "Dashboard access saved." };
+      : { ok: true, message: "ShopOps access saved." };
   }
   return { ok: false, message: "Unknown staff action." };
 }
@@ -912,13 +974,14 @@ function Button({
   onClick?: () => void;
 }) {
   return (
-    <button
-      className={`staff-button ${primary ? "primary" : ""} ${danger ? "danger" : ""}`}
+    <AppButton
+      className="staff-button"
+      variant={danger ? "danger" : primary ? "primary" : "secondary"}
       type={type}
       onClick={onClick}
     >
       {children}
-    </button>
+    </AppButton>
   );
 }
 
@@ -1054,45 +1117,114 @@ function AccessForm({
   );
 }
 
-function AddShopOpsUserForm({ locations }: { locations: LocationRow[] }) {
+function AddPersonForm({
+  defaultCapability,
+  locations,
+}: {
+  defaultCapability: "sales" | "access";
+  locations: LocationRow[];
+}) {
+  const [salesAttribution, setSalesAttribution] = useState(
+    defaultCapability === "sales",
+  );
+  const [shopOpsAccess, setShopOpsAccess] = useState(
+    defaultCapability === "access",
+  );
+
   return (
     <Form method="post" className="form-stack">
-      <input type="hidden" name="intent" value="add_shopops_user" />
+      <input type="hidden" name="intent" value="add_person" />
       <label>
-        Email
-        <input name="email" type="email" required autoComplete="email" />
+        Email{" "}
+        <small>
+          {shopOpsAccess ? "Required for ShopOps access" : "Optional"}
+        </small>
+        <input
+          autoComplete="email"
+          name="email"
+          required={shopOpsAccess}
+          type="email"
+        />
       </label>
       <label>
         Display name <small>Optional</small>
         <input name="display_name" autoComplete="name" />
       </label>
-      <label>
-        ShopOps role
-        <select name="role" defaultValue="viewer">
-          <option value="viewer">Viewer</option>
-          <option value="manager">Manager</option>
-          <option value="admin">Admin</option>
-        </select>
-      </label>
       <fieldset>
-        <legend>Assigned reporting locations</legend>
-        {locations.map((location) => (
-          <label className="check" key={location.shopify_location_id}>
-            <input
-              type="checkbox"
-              name="location_ids"
-              value={location.shopify_location_id}
-            />
-            {location.name}
-          </label>
-        ))}
+        <legend>Capabilities</legend>
+        <label
+          aria-label="Sales attribution"
+          className="capability-option"
+          htmlFor="capability-sales"
+        >
+          <input
+            checked={salesAttribution}
+            id="capability-sales"
+            name="capability_sales"
+            onChange={(event) => setSalesAttribution(event.target.checked)}
+            type="checkbox"
+            value="true"
+          />
+          <span>
+            <b>Sales attribution</b>
+            <small>
+              Link detected POS sellers and preserve Sales by Staff history.
+            </small>
+          </span>
+        </label>
+        <label
+          aria-label="ShopOps access"
+          className="capability-option"
+          htmlFor="capability-access"
+        >
+          <input
+            checked={shopOpsAccess}
+            id="capability-access"
+            name="capability_access"
+            onChange={(event) => setShopOpsAccess(event.target.checked)}
+            type="checkbox"
+            value="true"
+          />
+          <span>
+            <b>ShopOps access</b>
+            <small>
+              Allow this person to open reports for assigned locations.
+            </small>
+          </span>
+        </label>
       </fieldset>
+      {shopOpsAccess ? (
+        <>
+          <label>
+            ShopOps role
+            <select name="role" defaultValue="viewer">
+              <option value="viewer">Viewer</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>Assigned reporting locations</legend>
+            {locations.map((location) => (
+              <label className="check" key={location.shopify_location_id}>
+                <input
+                  type="checkbox"
+                  name="location_ids"
+                  value={location.shopify_location_id}
+                />
+                {location.name}
+              </label>
+            ))}
+          </fieldset>
+        </>
+      ) : null}
       <p className="hint">
-        Sales attribution is optional and is not required for ShopOps access.
-        The user will be pending until their first verified sign-in.
+        {shopOpsAccess
+          ? "ShopOps access will wait for this person's first verified sign-in. Shopify identity details stay private."
+          : "A display name is required when no email is provided. ShopOps access is not granted."}
       </p>
       <Button primary type="submit">
-        Add ShopOps user
+        Add person
       </Button>
     </Form>
   );
@@ -1574,6 +1706,12 @@ export default function StaffPage() {
   const [menu, setMenu] = useState<string | null>(null);
   const selected =
     data.profiles.find((profile) => profile.id === selectedId) ?? null;
+  const selectedFilter = (tab === "access"
+    ? ["all", "active", "pending", "attention", "revoked", "archived"]
+    : ["all", "pos", "attention", "archived"]
+  ).includes(filter)
+    ? filter
+    : "all";
   const accessCounts = useMemo(
     () => ({
       all: data.profiles.length,
@@ -1602,27 +1740,32 @@ export default function StaffPage() {
           `${profile.display_name} ${profile.email ?? ""}`.toLowerCase();
         if (!query.includes(search.toLowerCase())) return false;
         if (tab === "access") {
-          if (filter === "all") return true;
-          if (filter === "active") return profile.accessState === "active";
-          if (filter === "pending") return profile.accessState === "pending";
-          if (filter === "attention")
+          if (selectedFilter === "all") return true;
+          if (selectedFilter === "active")
+            return profile.accessState === "active";
+          if (selectedFilter === "pending")
+            return profile.accessState === "pending";
+          if (selectedFilter === "attention")
             return profile.accessState === "needs_attention";
-          if (filter === "revoked") return profile.accessState === "revoked";
-          if (filter === "archived") return profile.accessState === "archived";
+          if (selectedFilter === "revoked")
+            return profile.accessState === "revoked";
+          if (selectedFilter === "archived")
+            return profile.accessState === "archived";
           return true;
         }
-        if (filter === "archived") return !profile.is_active;
+        if (selectedFilter === "all") return true;
+        if (selectedFilter === "archived") return !profile.is_active;
         if (!profile.is_active) return false;
-        if (tab === "attribution" && filter === "pos")
+        if (tab === "attribution" && selectedFilter === "pos")
           return profile.posMetrics.orderCount > 0;
-        if (filter === "attention")
+        if (selectedFilter === "attention")
           return (
             !profile.is_active ||
             (!profile.email && profile.dashboardAccess !== "No access")
           );
         return true;
       }),
-    [data.profiles, filter, search, tab],
+    [data.profiles, search, selectedFilter, tab],
   );
   const open = (next: Overlay, profile?: StaffProfile) => {
     setSelectedId(profile?.id ?? null);
@@ -1714,49 +1857,57 @@ export default function StaffPage() {
                 aria-label="Search by name or email"
               />
             </label>
-            <div className="filters">
-              {(tab === "access"
-                ? [
-                    ["all", `All (${accessCounts.all})`],
-                    ["active", `Active (${accessCounts.active})`],
-                    ["pending", `Pending (${accessCounts.pending})`],
-                    [
-                      "attention",
-                      `Needs attention (${accessCounts.attention})`,
-                    ],
-                    ["revoked", `Revoked (${accessCounts.revoked})`],
-                    ["archived", `Archived (${accessCounts.archived})`],
-                  ]
-                : [
-                    ["all", "All"],
-                    ["pos", "POS sellers"],
-                    ["attention", "Needs attention"],
-                    ["archived", "Archived"],
-                  ]
-              ).map(([value, label]) => (
-                <button
-                  type="button"
-                  aria-pressed={filter === value}
-                  onClick={() => setFilter(value)}
-                  key={value}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            {tab === "attribution" ? (
-              <Button primary onClick={() => open("add")}>
-                Add staff
-              </Button>
-            ) : (
-              <Button primary onClick={() => open("add_access")}>
-                Add ShopOps user
-              </Button>
-            )}
+            <FilterPills
+              ariaLabel={
+                (tab === "access" ? "ShopOps access" : "Sales attribution") +
+                " filters"
+              }
+              items={
+                tab === "access"
+                  ? [
+                      {
+                        value: "all",
+                        label: "All (" + accessCounts.all + ")",
+                      },
+                      {
+                        value: "active",
+                        label: "Active (" + accessCounts.active + ")",
+                      },
+                      {
+                        value: "pending",
+                        label: "Waiting (" + accessCounts.pending + ")",
+                      },
+                      {
+                        value: "attention",
+                        label:
+                          "Needs attention (" + accessCounts.attention + ")",
+                      },
+                      {
+                        value: "revoked",
+                        label: "Revoked (" + accessCounts.revoked + ")",
+                      },
+                      {
+                        value: "archived",
+                        label: "Archived (" + accessCounts.archived + ")",
+                      },
+                    ]
+                  : [
+                      { value: "all", label: "All" },
+                      { value: "pos", label: "POS sellers" },
+                      { value: "attention", label: "Needs attention" },
+                      { value: "archived", label: "Archived" },
+                    ]
+              }
+              onChange={setFilter}
+              value={selectedFilter}
+            />
+            <Button primary onClick={() => open("add")}>
+              Add person
+            </Button>
           </div>
           <div className={`staff-table ${tab}`}>
             <div className="table-head">
-              <span>{tab === "access" ? "Person" : "Staff profile"}</span>
+              <span>Person</span>
               <span>{tab === "access" ? "ShopOps role" : "POS sales"}</span>
               <span>{tab === "access" ? "ShopOps access" : "Locations"}</span>
               <span>{tab === "access" ? "Assigned locations" : "Status"}</span>
@@ -1820,11 +1971,13 @@ export default function StaffPage() {
                   {tab === "access" ? (
                     <span>
                       <StatusBadge
-                        variant={profile.membership ? "info" : "neutral"}
+                        variant={
+                          displayedShopOpsRole(profile) === "—"
+                            ? "neutral"
+                            : "info"
+                        }
                       >
-                        {profile.membership
-                          ? shopOpsRoleLabel(profile.membership)
-                          : "—"}
+                        {displayedShopOpsRole(profile)}
                       </StatusBadge>
                     </span>
                   ) : null}
@@ -1843,17 +1996,8 @@ export default function StaffPage() {
                   ) : null}
                   {tab === "access" ? (
                     <span>
-                      <StatusBadge
-                        variant={
-                          profile.accessState === "active"
-                            ? "success"
-                            : profile.accessState === "needs_attention" ||
-                                profile.accessState === "archived"
-                              ? "warning"
-                              : "neutral"
-                        }
-                      >
-                        {accessStateLabel(profile.accessState)}
+                      <StatusBadge variant={accessPresentation(profile).tone}>
+                        {accessPresentation(profile).label}
                       </StatusBadge>
                     </span>
                   ) : null}
@@ -1893,7 +2037,10 @@ export default function StaffPage() {
                             )
                           }
                         >
-                          View
+                          {tab === "access" &&
+                          profile.accessState === "needs_attention"
+                            ? "Review"
+                            : "View"}
                         </button>
                         {tab === "access" &&
                         !profile.membership?.is_owner &&
@@ -1921,7 +2068,9 @@ export default function StaffPage() {
                             type="button"
                             onClick={() => open("access", profile)}
                           >
-                            Grant access
+                            {profile.accessState === "revoked"
+                              ? "Re-enable access"
+                              : "Grant access"}
                           </button>
                         ) : null}
                         {tab === "access" &&
@@ -1930,6 +2079,12 @@ export default function StaffPage() {
                         profile.membership &&
                         profile.accessState !== "revoked" ? (
                           <>
+                            <button
+                              type="button"
+                              onClick={() => open("access", profile)}
+                            >
+                              Edit access
+                            </button>
                             <button
                               type="button"
                               onClick={() => open("access", profile)}
@@ -1943,6 +2098,17 @@ export default function StaffPage() {
                               Edit locations
                             </button>
                           </>
+                        ) : null}
+                        {tab === "access" &&
+                        !profile.membership?.is_owner &&
+                        (profile.accessState === "revoked" ||
+                          profile.accessState === "needs_attention") ? (
+                          <button
+                            type="button"
+                            onClick={() => open("remove", profile)}
+                          >
+                            Archive person
+                          </button>
                         ) : null}
                         {tab === "access" &&
                         !profile.membership?.is_owner &&
@@ -1968,7 +2134,7 @@ export default function StaffPage() {
                               type="button"
                               onClick={() => open("remove", profile)}
                             >
-                              Remove staff
+                              Archive person
                             </button>
                           ) : null
                         ) : tab === "attribution" ? (
@@ -1996,7 +2162,15 @@ export default function StaffPage() {
               <EmptyState
                 title={
                   tab === "access"
-                    ? `No ${filter === "all" ? "ShopOps users" : filter.replace("_", " ")} match this view.`
+                    ? `No ${
+                        selectedFilter === "all"
+                          ? "people"
+                          : selectedFilter === "pending"
+                            ? "people waiting for first sign-in"
+                            : selectedFilter === "attention"
+                              ? "people needing attention"
+                              : `${selectedFilter} people`
+                      } match this view.`
                     : "No people match these filters."
                 }
                 description="Try another search or filter."
@@ -2005,8 +2179,7 @@ export default function StaffPage() {
           </div>
           <footer className="roster-footer">
             <span>
-              {filtered.length} of {data.profiles.length}{" "}
-              {tab === "access" ? "people" : "staff"}
+              {filtered.length} of {data.profiles.length} people
             </span>
             {tab === "attribution" ? (
               <button type="button" onClick={() => open("import")}>
@@ -2024,31 +2197,12 @@ export default function StaffPage() {
           <div className="saving">Saving…</div>
         ) : null}
       </div>
-      {tab === "access" && overlay === "add_access" ? (
-        <OverlayPanel title="Add ShopOps user" onClose={() => setOverlay(null)}>
-          <AddShopOpsUserForm locations={data.locations} />
-        </OverlayPanel>
-      ) : null}
-      {tab === "attribution" && overlay === "add" ? (
-        <OverlayPanel title="Add staff" onClose={() => setOverlay(null)}>
-          <Form method="post" className="form-stack">
-            <input type="hidden" name="intent" value="create_person" />
-            <label>
-              Display name
-              <input name="display_name" required />
-            </label>
-            <label>
-              Email <small>Optional</small>
-              <input name="email" type="email" />
-            </label>
-            <p className="hint">
-              This creates a staff profile only. Dashboard access and POS sales
-              can be connected afterward.
-            </p>
-            <Button primary type="submit">
-              Add staff
-            </Button>
-          </Form>
+      {overlay === "add" ? (
+        <OverlayPanel title="Add person" onClose={() => setOverlay(null)}>
+          <AddPersonForm
+            defaultCapability={tab === "access" ? "access" : "sales"}
+            locations={data.locations}
+          />
         </OverlayPanel>
       ) : null}
       {overlay === "pending" ? (
@@ -2159,7 +2313,7 @@ export default function StaffPage() {
       ) : null}
       {selected && overlay === "remove" ? (
         <OverlayPanel
-          title="Remove staff"
+          title="Archive person"
           onClose={() => setOverlay("details")}
         >
           <div className="remove-confirmation">
@@ -2179,7 +2333,7 @@ export default function StaffPage() {
               <Button danger type="submit">
                 {selected.canHardDelete
                   ? "Permanently delete"
-                  : "Archive staff"}
+                  : "Archive person"}
               </Button>
             </Form>
           </div>
@@ -2217,7 +2371,13 @@ export default function StaffPage() {
       ) : null}
       {selected && overlay === "access" ? (
         <OverlayPanel
-          title={`${selected.membership && selected.accessState !== "revoked" ? "Edit" : "Grant"} ShopOps access`}
+          title={
+            selected.accessState === "revoked"
+              ? "Re-enable ShopOps access"
+              : selected.membership
+                ? "Edit ShopOps access"
+                : "Grant ShopOps access"
+          }
           onClose={() => setOverlay("details")}
         >
           <AccessForm profile={selected} locations={data.locations} />
@@ -2261,7 +2421,7 @@ export default function StaffPage() {
               <div>
                 <h3>ShopOps access</h3>
                 <p>
-                  <b>{accessStateLabel(selected.accessState)}</b>
+                  <b>{accessPresentation(selected).label}</b>
                   {selected.membership
                     ? ` · ${selected.email ?? "No login email"} · ${selected.dashboardAccess} · ${locationLabel(selected)}`
                     : ""}
@@ -2288,7 +2448,11 @@ export default function StaffPage() {
                 </Form>
               ) : (
                 <Button onClick={() => setOverlay("access")}>
-                  {selected.membership ? "Edit access" : "Grant access"}
+                  {selected.accessState === "revoked"
+                    ? "Re-enable access"
+                    : selected.membership
+                      ? "Edit access"
+                      : "Grant access"}
                 </Button>
               )}
             </section>
@@ -2355,7 +2519,7 @@ export default function StaffPage() {
             {selected.is_active && !selected.membership?.is_owner ? (
               <div className="detail-remove">
                 <Button danger onClick={() => setOverlay("remove")}>
-                  Remove staff
+                  Archive person
                 </Button>
               </div>
             ) : null}
@@ -2422,10 +2586,14 @@ const STAFF_LIFECYCLE_CSS = `
 .detail-remove{padding-top:18px}
 .remove-confirmation h3{margin-top:0}
 .remove-confirmation p{color:#454545;line-height:1.5}
+.capability-option{align-items:start!important;border:1px solid var(--shopops-border);border-radius:10px;display:grid!important;gap:10px!important;grid-template-columns:auto minmax(0,1fr);padding:12px}
+.capability-option:has(input:checked){background:var(--shopops-accent-soft);border-color:var(--shopops-accent)}
+.capability-option input{margin:2px 0 0;padding:0}
+.capability-option span{display:grid;gap:3px}.capability-option small{color:var(--shopops-muted);font-weight:400;line-height:1.4}
 .copy-value{align-items:center!important;display:flex!important;flex-direction:row!important;gap:7px}.copy-value button{background:transparent;border:0;color:#255aa8;cursor:pointer;font-size:12px;padding:0}.suggestion{background:#eef5ff;border-radius:9px;margin-top:14px;padding:12px}.suggestion>div:first-child{display:grid;gap:3px}.suggestion small{color:#516072}.identity-group{border-bottom:1px solid #ededed;display:grid;gap:5px;padding:10px 0}.identity-group>code{background:transparent;padding:0}.identity-group>span{color:#454545;font-size:13px}.identity-group details{padding:2px 0}.identity-group details>div{display:grid;gap:5px;margin-top:7px}
 `;
 
 const STAFF_CSS = `
-*{box-sizing:border-box}.staff-page{color:#202223}.staff-shell{max-width:none;margin:0}.staff-button{background:#fff;border:1px solid #c9cccf;border-radius:10px;color:#202223;cursor:pointer;font-weight:650;padding:9px 13px}.staff-button:hover{background:#f6f6f7}.staff-button.primary{background:var(--shopops-accent);border-color:var(--shopops-accent);color:#fff}.staff-button.primary:hover{background:var(--shopops-accent-strong)}.staff-button.danger{color:#b42318}.notice,.pending-notice{border-radius:12px;margin-bottom:14px;padding:12px 14px}.notice.success{background:#eaf7ef;color:#166534}.notice.error{background:#fff0f0;color:#b42318}.pending-notice{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;display:flex;justify-content:space-between}.pending-notice span{display:grid;gap:2px}.pending-notice small{color:#4b5563}.staff-section-copy{color:var(--shopops-muted);font-size:14px;margin:0 0 12px}.shopops-inline-notice+.roster{margin-top:14px}.roster{background:#fff;border:1px solid var(--shopops-border);border-radius:16px;box-shadow:0 1px 3px #0000000a;overflow:visible}.toolbar{align-items:center;border-bottom:1px solid #e8e8e8;display:flex;gap:14px;padding:14px}.toolbar>.staff-button{flex:0 0 auto;margin-left:auto}.search{align-items:center;border:1px solid #c9cccf;border-radius:8px;display:flex;min-width:260px;padding:0 10px}.search:focus-within{border-color:#2563eb;box-shadow:0 0 0 3px #bfdbfe}.search input{border:0;outline:0;padding:9px;width:100%}.filters{display:flex;gap:4px;overflow:auto}.filters button,.segmented button{background:transparent;border:0;border-radius:7px;cursor:pointer;padding:8px 11px;white-space:nowrap}.filters button[aria-pressed=true],.segmented button[aria-pressed=true]{background:var(--shopops-accent-soft);color:var(--shopops-accent-strong);font-weight:700}.table-head,.staff-row{align-items:center;display:grid;gap:16px;grid-template-columns:minmax(210px,1.5fr) 1fr .8fr 1fr .65fr 52px;padding:0 16px}.staff-table.attribution .table-head,.staff-table.attribution .staff-row,.staff-table.access .table-head,.staff-table.access .staff-row{grid-template-columns:minmax(210px,1.5fr) 1fr 1fr .65fr 86px}.table-head{background:#f7f7f7;color:#616161;font-size:12px;font-weight:700;min-height:38px;text-transform:uppercase}.staff-row{border-top:1px solid #ededed;cursor:pointer;min-height:68px}.staff-row:hover{background:#fafafa}.staff-row.owner-row{background:var(--shopops-accent-soft);cursor:default}.owner-access{display:grid;gap:5px}.owner-access small{color:var(--shopops-muted)}.owner-lock{align-items:center;color:var(--shopops-muted);display:flex;font-size:12px;font-weight:700;gap:5px}.owner-lock .Polaris-Icon{height:18px;margin:0;width:18px}.identity{display:grid;min-width:0}.identity b,.identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity small{color:#6d7175;margin-top:3px}.actions{position:relative}.icon-button{background:transparent;border:0;border-radius:7px;cursor:pointer;font-size:18px;padding:6px 8px}.icon-button:hover{background:#e8e8e8}.menu{background:#fff;border:1px solid #d8d8d8;border-radius:9px;box-shadow:0 8px 22px #0002;display:grid;min-width:160px;padding:5px;position:absolute;right:0;top:36px;z-index:4}.menu button{background:transparent;border:0;border-radius:6px;cursor:pointer;padding:8px;text-align:left;width:100%}.menu button:hover{background:#f1f1f1}.roster-footer{align-items:center;border-top:1px solid #ededed;color:#6d7175;display:flex;gap:18px;padding:12px 16px}.roster-footer button{background:transparent;border:0;color:#255aa8;cursor:pointer;margin-left:auto}.roster-footer button+button{margin-left:0}.staff-overlay{align-items:stretch;background:#0006;display:flex;inset:0;justify-content:flex-end;position:fixed;z-index:50}.staff-panel{background:#fff;box-shadow:-8px 0 32px #0002;max-width:92vw;overflow:auto;width:460px}.staff-panel.wide{width:760px}.staff-panel>header{align-items:center;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 22px;position:sticky;top:0;background:#fff;z-index:2}.staff-panel h2{font-size:20px;margin:0}.panel-body{padding:22px}.form-stack{display:grid;gap:16px}.form-stack label{display:grid;font-size:13px;font-weight:650;gap:6px}.form-stack input,.form-stack select,.upload input{border:1px solid #b7b9bb;border-radius:8px;font:inherit;padding:10px}.form-stack fieldset{border:0;margin:0;padding:0}.form-stack legend{font-size:13px;font-weight:650;margin-bottom:8px}.form-stack .check,.check{align-items:center;display:flex;font-weight:400;gap:8px;margin:8px 0}.form-stack .check input,.check input{margin:0}.hint{color:#6d7175;font-size:13px}.detail-sections{display:grid}.detail-sections>section{align-items:flex-start;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 0}.detail-sections h3{font-size:14px;margin:0 0 5px}.detail-sections p{color:#454545;margin:0}.detail-sections small{color:#6d7175;display:block;margin-top:5px}.detail-sections details{padding:18px 0}.detail-sections summary{cursor:pointer;font-weight:650}.advanced{display:grid;gap:8px;margin-top:12px}.advanced code{background:#f6f6f7;border-radius:7px;font-size:11px;overflow-wrap:anywhere;padding:9px}.seller-row{border-bottom:1px solid #e5e5e5;padding:18px 0}.seller-row:first-child{padding-top:0}.seller-facts{display:grid;gap:12px;grid-template-columns:repeat(3,1fr)}.seller-facts span{display:grid;font-size:14px}.seller-facts b{color:#6d7175;font-size:11px;margin-bottom:4px;text-transform:uppercase}.row-actions{display:flex;gap:8px;margin-top:15px}.assign-box{background:#f7f7f7;border-radius:10px;margin-top:15px;padding:15px}.assign-box h3{margin:0 0 10px}.segmented{background:#ededed;border-radius:9px;display:flex;margin-bottom:14px;padding:3px}.segmented button{flex:1}.query{background:#202223;border-radius:10px;color:#fff;margin:16px 0;overflow:auto;padding:14px}.query pre{font-size:12px;white-space:pre-wrap}.query .staff-button{float:right}.upload{display:grid;font-weight:650;gap:8px}.preview{border-top:1px solid #e5e5e5;margin-top:20px;padding-top:20px}.preview-counts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.preview-counts span{background:#f6f6f7;border-radius:8px;display:grid;font-size:12px;padding:10px}.preview-counts b{font-size:18px}.preview-row{align-items:center;border-bottom:1px solid #e5e5e5;display:grid;gap:10px;grid-template-columns:1fr auto;padding:14px 0}.preview-row>div{display:grid}.preview-row span,.preview-row small{color:#6d7175;font-size:13px}.preview-row select{border:1px solid #b7b9bb;border-radius:7px;padding:7px}.preview-row.warning{background:#fff8e6;padding-left:10px}.preview-row.muted{opacity:.7}.confirm{background:#eef5ff;border-radius:10px;margin-top:16px;padding:14px}.bulk-forms{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.remove-access{border-top:1px solid #e5e5e5;margin-top:22px;padding-top:18px}.pos-summary{text-align:center;padding:20px 0}.saving{background:#303030;border-radius:20px;bottom:18px;color:white;padding:9px 15px;position:fixed;right:18px}.error{color:#b42318}
+*{box-sizing:border-box}.staff-page{color:#202223}.staff-shell{max-width:none;margin:0}.notice,.pending-notice{border-radius:12px;margin-bottom:14px;padding:12px 14px}.notice.success{background:#eaf7ef;color:#166534}.notice.error{background:#fff0f0;color:#b42318}.pending-notice{align-items:center;background:#eef5ff;border:1px solid #c8dcfa;display:flex;justify-content:space-between}.pending-notice span{display:grid;gap:2px}.pending-notice small{color:#4b5563}.staff-section-copy{color:var(--shopops-muted);font-size:14px;margin:0 0 12px}.shopops-inline-notice+.roster{margin-top:14px}.roster{background:#fff;border:1px solid var(--shopops-border);border-radius:16px;box-shadow:0 1px 3px #0000000a;overflow:visible}.toolbar{align-items:center;border-bottom:1px solid #e8e8e8;display:flex;gap:14px;padding:14px}.toolbar>.staff-button{flex:0 0 auto;margin-left:auto}.search{align-items:center;border:1px solid #c9cccf;border-radius:8px;display:flex;min-width:260px;padding:0 10px}.search:focus-within{border-color:#2563eb;box-shadow:0 0 0 3px #bfdbfe}.search input{border:0;outline:0;padding:9px;width:100%}.segmented button{background:transparent;border:0;border-radius:7px;cursor:pointer;padding:8px 11px;white-space:nowrap}.segmented button[aria-pressed=true]{background:var(--shopops-accent-soft);color:var(--shopops-accent-strong);font-weight:700}.table-head,.staff-row{align-items:center;display:grid;gap:16px;grid-template-columns:minmax(210px,1.5fr) 1fr .8fr 1fr .65fr 52px;padding:0 16px}.staff-table.attribution .table-head,.staff-table.attribution .staff-row,.staff-table.access .table-head,.staff-table.access .staff-row{grid-template-columns:minmax(210px,1.5fr) 1fr 1fr .65fr 86px}.table-head{background:#f7f7f7;color:#616161;font-size:12px;font-weight:700;min-height:38px;text-transform:uppercase}.staff-row{border-top:1px solid #ededed;cursor:pointer;min-height:68px}.staff-row:hover{background:#fafafa}.staff-row.owner-row{background:var(--shopops-accent-soft);cursor:default}.owner-access{display:grid;gap:5px}.owner-access small{color:var(--shopops-muted)}.owner-lock{align-items:center;color:var(--shopops-muted);display:flex;font-size:12px;font-weight:700;gap:5px}.owner-lock .Polaris-Icon{height:18px;margin:0;width:18px}.identity{display:grid;min-width:0}.identity b,.identity small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity small{color:#6d7175;margin-top:3px}.actions{position:relative}.icon-button{background:transparent;border:0;border-radius:7px;cursor:pointer;font-size:18px;padding:6px 8px}.icon-button:hover{background:#e8e8e8}.menu{background:#fff;border:1px solid #d8d8d8;border-radius:9px;box-shadow:0 8px 22px #0002;display:grid;min-width:160px;padding:5px;position:absolute;right:0;top:36px;z-index:4}.menu button{background:transparent;border:0;border-radius:6px;cursor:pointer;padding:8px;text-align:left;width:100%}.menu button:hover{background:#f1f1f1}.roster-footer{align-items:center;border-top:1px solid #ededed;color:#6d7175;display:flex;gap:18px;padding:12px 16px}.roster-footer button{background:transparent;border:0;color:#255aa8;cursor:pointer;margin-left:auto}.roster-footer button+button{margin-left:0}.staff-overlay{align-items:stretch;background:#0006;display:flex;inset:0;justify-content:flex-end;position:fixed;z-index:50}.staff-panel{background:#fff;box-shadow:-8px 0 32px #0002;max-width:92vw;overflow:auto;width:460px}.staff-panel.wide{width:760px}.staff-panel>header{align-items:center;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 22px;position:sticky;top:0;background:#fff;z-index:2}.staff-panel h2{font-size:20px;margin:0}.panel-body{padding:22px}.form-stack{display:grid;gap:16px}.form-stack label{display:grid;font-size:13px;font-weight:650;gap:6px}.form-stack input,.form-stack select,.upload input{border:1px solid #b7b9bb;border-radius:8px;font:inherit;padding:10px}.form-stack fieldset{border:0;margin:0;padding:0}.form-stack legend{font-size:13px;font-weight:650;margin-bottom:8px}.form-stack .check,.check{align-items:center;display:flex;font-weight:400;gap:8px;margin:8px 0}.form-stack .check input,.check input{margin:0}.hint{color:#6d7175;font-size:13px}.detail-sections{display:grid}.detail-sections>section{align-items:flex-start;border-bottom:1px solid #e5e5e5;display:flex;justify-content:space-between;padding:18px 0}.detail-sections h3{font-size:14px;margin:0 0 5px}.detail-sections p{color:#454545;margin:0}.detail-sections small{color:#6d7175;display:block;margin-top:5px}.detail-sections details{padding:18px 0}.detail-sections summary{cursor:pointer;font-weight:650}.advanced{display:grid;gap:8px;margin-top:12px}.advanced code{background:#f6f6f7;border-radius:7px;font-size:11px;overflow-wrap:anywhere;padding:9px}.seller-row{border-bottom:1px solid #e5e5e5;padding:18px 0}.seller-row:first-child{padding-top:0}.seller-facts{display:grid;gap:12px;grid-template-columns:repeat(3,1fr)}.seller-facts span{display:grid;font-size:14px}.seller-facts b{color:#6d7175;font-size:11px;margin-bottom:4px;text-transform:uppercase}.row-actions{display:flex;gap:8px;margin-top:15px}.assign-box{background:#f7f7f7;border-radius:10px;margin-top:15px;padding:15px}.assign-box h3{margin:0 0 10px}.segmented{background:#ededed;border-radius:9px;display:flex;margin-bottom:14px;padding:3px}.segmented button{flex:1}.query{background:#202223;border-radius:10px;color:#fff;margin:16px 0;overflow:auto;padding:14px}.query pre{font-size:12px;white-space:pre-wrap}.query .staff-button{float:right}.upload{display:grid;font-weight:650;gap:8px}.preview{border-top:1px solid #e5e5e5;margin-top:20px;padding-top:20px}.preview-counts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.preview-counts span{background:#f6f6f7;border-radius:8px;display:grid;font-size:12px;padding:10px}.preview-counts b{font-size:18px}.preview-row{align-items:center;border-bottom:1px solid #e5e5e5;display:grid;gap:10px;grid-template-columns:1fr auto;padding:14px 0}.preview-row>div{display:grid}.preview-row span,.preview-row small{color:#6d7175;font-size:13px}.preview-row select{border:1px solid #b7b9bb;border-radius:7px;padding:7px}.preview-row.warning{background:#fff8e6;padding-left:10px}.preview-row.muted{opacity:.7}.confirm{background:#eef5ff;border-radius:10px;margin-top:16px;padding:14px}.bulk-forms{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.remove-access{border-top:1px solid #e5e5e5;margin-top:22px;padding-top:18px}.pos-summary{text-align:center;padding:20px 0}.saving{background:#303030;border-radius:20px;bottom:18px;color:white;padding:9px 15px;position:fixed;right:18px}.error{color:#b42318}
 @media(max-width:800px){.staff-page{padding:16px}.toolbar{align-items:stretch;flex-direction:column}.toolbar>.staff-button{margin-left:0;width:100%}.search{min-width:0}.table-head{display:none}.staff-row{grid-template-columns:1fr auto;gap:8px;padding:12px}.staff-row>span:not(.identity):not(.actions){font-size:12px}.actions{grid-column:2;grid-row:1}.roster-footer{align-items:flex-start;flex-direction:column}.roster-footer button{margin-left:0}.seller-facts,.preview-counts{grid-template-columns:repeat(2,1fr)}.preview-row{grid-template-columns:1fr}.staff-panel,.staff-panel.wide{max-width:100vw;width:100%}}
 `;

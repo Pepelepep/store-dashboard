@@ -158,6 +158,57 @@ function logAccessDecision({
   });
 }
 
+type IdentityBindingResult =
+  | "not_attempted"
+  | "bound"
+  | "bound_alias_sync_pending"
+  | "identity_conflict"
+  | "membership_not_bindable"
+  | "storage_unavailable";
+
+function membershipDiagnosticState(
+  membership: DashboardMembership | null | undefined,
+) {
+  if (!membership) return "missing";
+  if (membership.status === "disabled") return "revoked";
+  return membership.shopifyUserId ? "active" : "waiting";
+}
+
+function logFirstSignInResolution({
+  identity,
+  reason,
+  matchedByHiddenIdentity,
+  matchedByEmail,
+  membership,
+  bindingAttempted,
+  activationAttempted,
+  result,
+}: {
+  identity: CurrentUserIdentity;
+  reason: PermissionContext["accessReason"];
+  matchedByHiddenIdentity: boolean;
+  matchedByEmail: boolean;
+  membership: DashboardMembership | null | undefined;
+  bindingAttempted: boolean;
+  activationAttempted: boolean;
+  result: IdentityBindingResult;
+}) {
+  console.info("[shopops-access] first-sign-in resolution", {
+    shop: identity.shop,
+    reason,
+    associatedShopifyUserPresent: Boolean(identity.shopifyUserId),
+    verifiedAuthenticatedEmailPresent: Boolean(
+      identity.isEmailVerified && identity.email,
+    ),
+    matchedByHiddenIdentity,
+    matchedByEmail,
+    membershipState: membershipDiagnosticState(membership),
+    bindingAttempted,
+    activationAttempted,
+    result,
+  });
+}
+
 async function mapIdentityAlias({
   supabase,
   shop,
@@ -198,6 +249,27 @@ async function mapIdentityAlias({
     });
     if (!inserted.error) return true;
     if (inserted.error.code !== "23505") return false;
+    existing = await findExisting();
+    if (existing.error || !existing.data) return false;
+  }
+
+  if (existing.data.person_id === null) {
+    const claimed = await supabase
+      .from("staff_identity_aliases")
+      .update({
+        person_id: personId,
+        source: "authenticated_session",
+        review_status: "mapped",
+        last_seen_at: now,
+        updated_at: now,
+      })
+      .eq("shop_domain", shop)
+      .eq("id", existing.data.id)
+      .is("person_id", null)
+      .select("id, person_id")
+      .maybeSingle();
+    if (claimed.error) return false;
+    if (claimed.data?.person_id === personId) return true;
     existing = await findExisting();
     if (existing.error || !existing.data) return false;
   }
@@ -352,16 +424,123 @@ async function bindVerifiedMembership({
     !membership.personId ||
     membership.status !== "active"
   ) {
-    return null;
+    return {
+      membership: null,
+      bindingAttempted: false,
+      activationAttempted: false,
+      result: "membership_not_bindable" as const,
+    };
   }
   const userIdConflict = memberships.find(
     (candidate) =>
       candidate.id !== membership.id &&
       candidate.shopifyUserId === identity.shopifyUserId,
   );
-  if (userIdConflict) return null;
+  if (userIdConflict || membership.shopifyUserId) {
+    return {
+      membership: null,
+      bindingAttempted: true,
+      activationAttempted: false,
+      result: "identity_conflict" as const,
+    };
+  }
+
+  for (const identityAlias of [
+    {
+      aliasType: STAFF_ALIAS_TYPES.shopifyAdminUserId,
+      aliasValue: identity.shopifyUserId,
+    },
+    {
+      aliasType: STAFF_ALIAS_TYPES.email,
+      aliasValue: identity.email,
+    },
+  ]) {
+    const existing = await supabase
+      .from("staff_identity_aliases")
+      .select("person_id")
+      .eq("shop_domain", identity.shop)
+      .eq("alias_type", identityAlias.aliasType)
+      .eq("alias_value", identityAlias.aliasValue)
+      .maybeSingle();
+    if (existing.error) {
+      return {
+        membership: null,
+        bindingAttempted: true,
+        activationAttempted: false,
+        result: "storage_unavailable" as const,
+      };
+    }
+    if (
+      existing.data?.person_id &&
+      existing.data.person_id !== membership.personId
+    ) {
+      return {
+        membership: null,
+        bindingAttempted: true,
+        activationAttempted: false,
+        result: "identity_conflict" as const,
+      };
+    }
+  }
 
   const now = new Date().toISOString();
+  const activated = await supabase
+    .from("dashboard_memberships")
+    .update({
+      shopify_user_id: identity.shopifyUserId,
+      status: "active",
+      updated_at: now,
+    })
+    .eq("shop_domain", identity.shop)
+    .eq("id", membership.id)
+    .eq("status", "active")
+    .is("shopify_user_id", null)
+    .select(
+      "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
+    )
+    .maybeSingle();
+  if (activated.error) {
+    return {
+      membership: null,
+      bindingAttempted: true,
+      activationAttempted: true,
+      result:
+        activated.error.code === "23505"
+          ? ("identity_conflict" as const)
+          : ("storage_unavailable" as const),
+    };
+  }
+
+  let boundMembership = activated.data
+    ? toMembership(activated.data as MembershipRow)
+    : null;
+  if (!boundMembership) {
+    const concurrent = await supabase
+      .from("dashboard_memberships")
+      .select(
+        "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
+      )
+      .eq("shop_domain", identity.shop)
+      .eq("id", membership.id)
+      .maybeSingle();
+    if (
+      concurrent.error ||
+      concurrent.data?.status !== "active" ||
+      concurrent.data.shopify_user_id !== identity.shopifyUserId
+    ) {
+      return {
+        membership: null,
+        bindingAttempted: true,
+        activationAttempted: true,
+        result: concurrent.error
+          ? ("storage_unavailable" as const)
+          : ("identity_conflict" as const),
+      };
+    }
+    boundMembership = toMembership(concurrent.data as MembershipRow);
+  }
+
+  let aliasSyncSucceeded = true;
   for (const identityAlias of [
     {
       aliasType: STAFF_ALIAS_TYPES.shopifyAdminUserId,
@@ -380,24 +559,24 @@ async function bindVerifiedMembership({
       aliasValue: identityAlias.aliasValue,
       now,
     });
-    if (!linked) return null;
+    aliasSyncSucceeded &&= linked;
   }
 
-  const updated = await supabase
-    .from("dashboard_memberships")
-    .update({ shopify_user_id: identity.shopifyUserId, updated_at: now })
-    .eq("shop_domain", identity.shop)
-    .eq("id", membership.id)
-    .eq("status", "active");
-  if (updated.error) return null;
-
-  await supabase
+  const locationAccess = await supabase
     .from("user_location_access")
     .update({ shopify_user_id: identity.shopifyUserId })
     .eq("shop_domain", identity.shop)
     .eq("membership_id", membership.id);
 
-  return { ...membership, shopifyUserId: identity.shopifyUserId };
+  return {
+    membership: boundMembership,
+    bindingAttempted: true,
+    activationAttempted: true,
+    result:
+      aliasSyncSucceeded && !locationAccess.error
+        ? ("bound" as const)
+        : ("bound_alias_sync_pending" as const),
+  };
 }
 
 async function synchronizeVerifiedEmail({
@@ -611,6 +790,9 @@ export async function getPermissionContext({
   let needsAttention = false;
   let accessReason: PermissionContext["accessReason"];
   let membership: DashboardMembership | null;
+  let bindingAttempted = false;
+  let activationAttempted = false;
+  let bindingResult: IdentityBindingResult = "not_attempted";
   if (identity.isShopifyAccountOwner) {
     membership = owner;
     accessReason = "owner";
@@ -637,10 +819,17 @@ export async function getPermissionContext({
       memberships,
       supabase,
     });
-    membership = linked;
-    needsAttention = !linked;
-    accessReason = linked ? "verified_email_linked" : "identity_conflict";
-    if (!linked) await markIdentityNeedsAttention({ identity, supabase });
+    membership = linked.membership;
+    bindingAttempted = linked.bindingAttempted;
+    activationAttempted = linked.activationAttempted;
+    bindingResult = linked.result;
+    needsAttention = !linked.membership;
+    accessReason = linked.membership
+      ? "verified_email_linked"
+      : "identity_conflict";
+    if (!linked.membership) {
+      await markIdentityNeedsAttention({ identity, supabase });
+    }
   } else if (emailMembership?.status === "disabled") {
     membership = emailMembership;
     accessReason = "membership_revoked";
@@ -699,6 +888,16 @@ export async function getPermissionContext({
     shop: identity.shop,
     reason: accessReason,
     granted: isActiveMember,
+  });
+  logFirstSignInResolution({
+    identity,
+    reason: accessReason,
+    matchedByHiddenIdentity: Boolean(userIdMembership),
+    matchedByEmail: Boolean(emailMembership),
+    membership: membership ?? userIdMembership ?? emailMembership,
+    bindingAttempted,
+    activationAttempted,
+    result: bindingResult,
   });
 
   return {

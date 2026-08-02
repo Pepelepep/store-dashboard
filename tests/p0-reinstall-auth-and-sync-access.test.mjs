@@ -72,6 +72,7 @@ import {
 import { resolveOwnerMaterializationIdentifiers } from "../app/lib/auth/owner-bootstrap.ts";
 import {
   getCurrentShopifyUserIdentity,
+  getShopOpsAccessPresentation,
   getShopOpsAccessState,
   isValidShopOpsEmail,
   normalizeShopOpsEmail,
@@ -2508,11 +2509,25 @@ test("ShopOps access normalizes merchant email and requires verified Shopify ema
       },
     },
   });
+  const missingEmail = getCurrentShopifyUserIdentity({
+    session: {
+      shop,
+      onlineAccessInfo: {
+        associated_user: {
+          id: 9900,
+          email_verified: true,
+          account_owner: false,
+        },
+      },
+    },
+  });
 
   assert.equal(verified.email, "viewer@example.com");
   assert.equal(verified.shopifyUserId, "7788");
   assert.equal(verified.isEmailVerified, true);
   assert.equal(unverified.isEmailVerified, false);
+  assert.equal(missingEmail.email, null);
+  assert.equal(missingEmail.isEmailVerified, true);
 });
 
 test("ShopOps access states distinguish pending, active, revoked, archived, and attention", () => {
@@ -2561,6 +2576,32 @@ test("ShopOps access states distinguish pending, active, revoked, archived, and 
       shopifyUserId: null,
     }),
     "needs_attention",
+  );
+
+  assert.deepEqual(
+    getShopOpsAccessPresentation({
+      state: "pending",
+      hasApprovedAccess: true,
+    }),
+    {
+      label: "Waiting for first sign-in",
+      showConfiguredRole: true,
+      tone: "info",
+    },
+  );
+  assert.equal(
+    getShopOpsAccessPresentation({
+      state: "revoked",
+      hasApprovedAccess: false,
+    }).showConfiguredRole,
+    false,
+  );
+  assert.equal(
+    getShopOpsAccessPresentation({
+      state: "archived",
+      hasApprovedAccess: false,
+    }).label,
+    "Archived",
   );
 });
 
@@ -3029,10 +3070,8 @@ test("membership RPCs lock each shop and enforce owner, last-admin, archived-sta
     staffRoute,
     /Solo includes dashboard access for the store owner\. Upgrade to Growth to add another dashboard user\./,
   );
-  assert.match(
-    staffRoute,
-    /intent === "create_person" \|\| intent === "create_from_alias"/,
-  );
+  assert.match(staffRoute, /intent === "create_from_alias"/);
+  assert.match(staffRoute, /intent === "add_person"/);
   assert.match(staffRoute, /Dashboard access was not changed\./);
   assert.doesNotMatch(staffRoute, /replace_staff_dashboard_access/);
   assert.match(legacyRoute, /\/app\/people/);
@@ -3139,34 +3178,78 @@ test("People separates sales attribution from active ShopOps membership", () => 
     new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
     "utf8",
   );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const accessPresentation = readFileSync(
+    new URL("../app/lib/auth/shopops-access.ts", import.meta.url),
+    "utf8",
+  );
+  const appButton = readFileSync(
+    new URL("../app/components/ui/AppButton.tsx", import.meta.url),
+    "utf8",
+  );
+  const dashboardFilters = readFileSync(
+    new URL(
+      "../app/components/dashboard/DashboardFilters.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
 
   assert.match(people, /label: "Sales attribution"/);
   assert.match(people, /label: "ShopOps access"/);
+  assert.match(people, /<SectionTabs/);
   assert.match(
     people,
     /Manage who can open ShopOps Studio and which locations they can[\s\n]+view\./,
   );
   assert.match(people, /tab === "attribution" && data\.pending\.length/);
   assert.match(people, /tab === "access" \? "ShopOps role" : "POS sales"/);
-  assert.match(people, /Pending first sign-in/);
-  assert.match(people, /Needs attention/);
-  assert.match(people, /Revoked/);
+  assert.match(accessPresentation, /Waiting for first sign-in/);
+  assert.match(accessPresentation, /Needs attention/);
+  assert.match(accessPresentation, /Access revoked/);
   assert.match(people, /getFreshPlanLimits/);
   assert.match(people, /\.from\("dashboard_memberships"\)/);
   assert.match(people, /replace_dashboard_membership_access/);
   assert.match(people, /p_dashboard_user_limit/);
-  assert.match(people, /Add ShopOps user/);
-  assert.match(people, /intent" value="add_shopops_user"/);
-  assert.match(people, /Sales attribution is optional/);
-  assert.match(people, /p_shopify_user_ids: \[\]/);
+  assert.match(people, /function AddPersonForm/);
+  assert.match(people, /name="intent" value="add_person"/);
+  assert.match(people, /name="capability_sales"/);
+  assert.match(people, /name="capability_access"/);
   assert.match(
     people,
-    /\{tab === "attribution" \? \([\s\S]*?<Button primary[\s\S]*?Add staff/,
+    /defaultCapability=\{tab === "access" \? "access" : "sales"\}/,
   );
-  assert.match(people, /\{tab === "attribution" && overlay === "add" \? \(/);
-  assert.doesNotMatch(
-    people.slice(people.indexOf("<PageHeader"), people.indexOf("<SectionTabs")),
-    /Add staff/,
+  assert.match(people, /Email is required for ShopOps access\./);
+  assert.match(people, /if \(!shopOpsAccess\)/);
+  assert.match(people, /p_shopify_user_ids: \[\]/);
+  assert.match(people, /<Button primary onClick=\{\(\) => open\("add"\)\}>/);
+  assert.match(people, /Add person/);
+  assert.doesNotMatch(people, /Add staff|Add ShopOps user|add_shopops_user/);
+  assert.match(people, /displayedShopOpsRole/);
+  assert.match(people, /!presentation\.showConfiguredRole/);
+  assert.match(people, /<FilterPills/);
+  assert.match(people, /label: "Waiting \("/);
+  assert.match(people, /if \(selectedFilter === "all"\) return true/);
+  assert.match(
+    people,
+    /if \(selectedFilter === "all"\) return true;[\s\S]*?if \(selectedFilter === "archived"\) return !profile\.is_active/,
+  );
+  assert.match(people, /Re-enable access/);
+  assert.match(people, /Archive person/);
+
+  assert.match(people, /import \{ AppButton \}/);
+  assert.match(people, /variant=\{danger \? "danger" : primary \? "primary"/);
+  assert.match(dashboardFilters, /<AppButton[\s\S]*?variant="primary"/);
+  assert.match(
+    appButton,
+    /disabledBackground: "#e5e7eb"[\s\S]*?disabledColor: "#6b7280"/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-filter-pills button\[aria-pressed="true"\][^{]*\{[^}]*background: var\(--shopops-accent-selected\)[^}]*border-color: var\(--shopops-accent\)/,
   );
 });
 
@@ -3222,7 +3305,7 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
     "utf8",
   );
 
-  assert.match(people, /intent === "add_shopops_user"/);
+  assert.match(people, /intent === "add_person"/);
   assert.match(accessService, /\.from\("staff_people"\)/);
   assert.match(accessService, /\.ilike\("email", email\)/);
   assert.match(accessService, /STAFF_ALIAS_TYPES\.email/);
@@ -3232,23 +3315,60 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   assert.match(people, /disable_dashboard_membership/);
   assert.match(people, /archive_staff_with_dashboard_protection/);
   assert.match(people, /p_shopify_user_ids: \[\]/);
-  assert.match(people, /Pending first sign-in/);
+  assert.match(shopOpsAccess, /Waiting for first sign-in/);
   assert.match(people, /Grant access/);
   assert.match(people, /Edit role/);
   assert.match(people, /Edit locations/);
   assert.match(people, /Revoke access/);
   assert.match(people, />Restore</);
   assert.match(people, /if \(tab === "access"\) \{/);
-  assert.match(people, /if \(filter === "all"\) return true/);
+  assert.match(people, /if \(selectedFilter === "all"\) return true/);
 
   assert.match(shopOpsAccess, /associatedUser\?\.email_verified/);
   assert.match(permissions, /identity\.isEmailVerified &&/);
   assert.match(permissions, /bindVerifiedMembership/);
   assert.match(permissions, /shopify_user_id: identity\.shopifyUserId/);
+  assert.match(permissions, /\.is\("shopify_user_id", null\)/);
+  assert.match(permissions, /activated\.error\.code === "23505"/);
+  assert.match(permissions, /concurrent\.data\.shopify_user_id/);
+  assert.match(permissions, /existing\.data\.person_id === null/);
+  assert.match(permissions, /\.is\("person_id", null\)/);
+  assert.match(permissions, /bound_alias_sync_pending/);
+  assert.ok(
+    permissions.indexOf("const activated = await supabase") <
+      permissions.indexOf("let aliasSyncSucceeded = true"),
+    "the unique membership binding must be the primary atomic transition",
+  );
+  assert.ok(
+    permissions.indexOf("const linked = await bindVerifiedMembership") <
+      permissions.indexOf("export async function assertDashboardAccess"),
+    "waiting identity resolution must run before dashboard authorization",
+  );
   assert.match(permissions, /linked_shopify_user_id/);
   assert.match(permissions, /verified_email_linked/);
   assert.match(permissions, /email_unverified/);
   assert.match(permissions, /authenticated_session_attention/);
+  assert.match(permissions, /\[shopops-access\] first-sign-in resolution/);
+  for (const field of [
+    "associatedShopifyUserPresent",
+    "verifiedAuthenticatedEmailPresent",
+    "matchedByHiddenIdentity",
+    "matchedByEmail",
+    "membershipState",
+    "bindingAttempted",
+    "activationAttempted",
+    "result",
+  ]) {
+    assert.match(permissions, new RegExp(field));
+  }
+  const diagnosticLogger = permissions.slice(
+    permissions.indexOf("function logFirstSignInResolution"),
+    permissions.indexOf("async function mapIdentityAlias"),
+  );
+  assert.doesNotMatch(
+    diagnosticLogger,
+    /accessToken|idToken|sessionId|hmac|requestUrl|payload/,
+  );
   assert.ok(
     permissions.indexOf("else if (userIdMembership)") <
       permissions.indexOf('emailMembership?.status === "active"'),
@@ -3562,10 +3682,11 @@ test("Settings separates data freshness from scheduler state at the shared width
     sync,
     /Current data can still be up to date; the background scheduler has not completed a successful check on schedule\./,
   );
-  assert.match(
-    sync,
-    /\.sync-page--embedded \.sync-shell\{margin:0;max-width:none;width:100%\}/,
-  );
+  assert.match(sync, /className="sync-content"/);
+  assert.match(sync, /\.sync-content\{margin:0;width:100%\}/);
+  assert.doesNotMatch(sync, /sync-shell|margin:auto|max-width:1100px/);
+  assert.match(sync, /<AppButton disabled=\{isSubmitting\} type="submit">/);
+  assert.doesNotMatch(sync, /<button className="primary"/);
   assert.match(
     sync,
     /@media\(max-width:760px\)[\s\S]*?\.sync-page--embedded\{padding:0\}/,
