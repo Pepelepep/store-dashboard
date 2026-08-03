@@ -645,7 +645,7 @@ const estimatesDisabled = {
 test("COGS estimates are disabled by default and missing cost stays missing", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260726120000_add_shop_cogs_estimates.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260726120000_add_shop_cogs_estimates.sql",
       import.meta.url,
     ),
     "utf8",
@@ -1076,7 +1076,7 @@ test("merchant navigation is the exact role-aware five-section information archi
 test("COGS recompute functions and settings update are service-role-only", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260726120000_add_shop_cogs_estimates.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260726120000_add_shop_cogs_estimates.sql",
       import.meta.url,
     ),
     "utf8",
@@ -1178,7 +1178,7 @@ test("Product costs uses bounded SQL aggregation instead of loading order lines"
 test("Product-cost SQL provides summary, pagination, search, and exact count", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260727120000_add_product_cost_setup_aggregation.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260727120000_add_product_cost_setup_aggregation.sql",
       import.meta.url,
     ),
     "utf8",
@@ -1201,7 +1201,7 @@ test("Product-cost SQL provides summary, pagination, search, and exact count", (
 test("Product-cost aggregation RPCs are service-role-only", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260727120000_add_product_cost_setup_aggregation.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260727120000_add_product_cost_setup_aggregation.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3041,7 +3041,7 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
 test("membership RPCs lock each shop and enforce owner, last-admin, archived-staff, and concurrent capacity rules", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3100,7 +3100,7 @@ test("membership RPCs lock each shop and enforce owner, last-admin, archived-sta
 test("Shopify location state, reporting selection, report filters, and full sync remain separate", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3310,14 +3310,14 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   );
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
       import.meta.url,
     ),
     "utf8",
   );
   const identityMigration = readFileSync(
     new URL(
-      "../supabase/migrations/20260708200000_add_staff_identity_mapping.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260708200000_add_staff_identity_mapping.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3489,7 +3489,7 @@ test("revoked hidden identity consolidates one explicit waiting approval without
 test("canonical ShopOps access hardening rejects partial, orphan, duplicate, and cross-shop graphs", () => {
   const baseMigration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
       import.meta.url,
     ),
     "utf8",
@@ -4407,7 +4407,7 @@ test("primary filter reset key changes only with applied dashboard dimensions", 
 test("minimal completed and failed compliance events remain recordable after shop deletion", async () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260601_add_compliance_webhook_events.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260601_add_compliance_webhook_events.sql",
       import.meta.url,
     ),
     "utf8",

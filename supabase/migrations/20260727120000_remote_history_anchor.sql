@@ -1,0 +1,6 @@
+-- The remote Supabase migration history already contains version 20260727120000.
+-- The original SQL for that version is preserved unchanged in
+-- supabase/legacy-migrations/pre-baseline-20260802/.
+-- This active no-op anchor exists only to retain local/remote timestamp alignment.
+-- The following baseline contains the complete reviewed pre-August-2 public
+-- application schema, including the July 27 RPC definitions.
