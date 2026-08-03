@@ -6,6 +6,7 @@ import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { fetchAllSupabasePages } from "../lib/db/supabase-pagination.server";
 import { assertReportingEntitlements } from "../lib/entitlements.server";
+import { resolveReportingScope } from "../lib/auth/location-performance-access";
 import {
   ensureShopInitialized,
   logEmptyDataState,
@@ -236,7 +237,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase,
   });
   const { permissions, entitlements } = await assertReportingEntitlements({
+    deniedNotice: "dashboard_role",
+    deniedRedirectTo: "/app/locations",
     request,
+    requiredCapability: "view_dashboard",
+    route: "app.db-dashboard",
     session,
     supabase,
   });
@@ -295,31 +300,44 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
 
   const allLocations = locationsData as LocationRow[];
-  const locations = permissions.isAdmin
-    ? allLocations
-    : allLocations.filter((location) =>
-        permissions.allowedLocationIds.has(location.shopify_location_id),
-      );
-  const noAssignedLocations = !permissions.isAdmin && locations.length === 0;
   const requestedLocationId = url.searchParams.get("locationId");
+  const reportingScope = resolveReportingScope({
+    locations: allLocations,
+    permissions,
+    requestedLocationIds:
+      requestedLocationId && requestedLocationId !== "all"
+        ? [requestedLocationId]
+        : [],
+    route: "app.db-dashboard",
+    shop: session.shop,
+  });
+  const locations = reportingScope.accessibleLocations;
+  const selectedLocations = reportingScope.selectedLocations;
+  const selectedLocationIds = selectedLocations.map(
+    (location) => location.shopify_location_id,
+  );
   const selectedLocation =
-    locations.find(
-      (location) => location.shopify_location_id === requestedLocationId,
-    ) ??
-    locations[0] ??
-    null;
-  const selectedLocationId = selectedLocation?.shopify_location_id ?? null;
-  const selectedLocationName = selectedLocation?.name ?? null;
+    selectedLocations.length === 1 ? selectedLocations[0] : null;
+  const selectedLocationId = selectedLocation?.shopify_location_id ?? "all";
+  const selectedLocationName = selectedLocation
+    ? selectedLocation.name
+    : reportingScope.hasAllLocations
+      ? "All locations"
+      : "All assigned locations";
+  const noAssignedLocations = locations.length === 0;
+  const canManageSync = permissions.capabilities.manage_sync;
 
   const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
-    await supabase
-      .from("sync_runs")
-      .select("finished_at")
-      .eq("shop_domain", session.shop)
-      .eq("status", "success")
-      .order("finished_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    canManageSync
+      ? await supabase
+          .from("sync_runs")
+          .select("finished_at")
+          .eq("shop_domain", session.shop)
+          .eq("status", "success")
+          .order("finished_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : { data: null, error: null };
 
   if (lastSuccessfulSyncError) {
     throw new Error(
@@ -337,57 +355,65 @@ export async function loader({ request }: LoaderFunctionArgs) {
     products,
     expenses,
   ] = await Promise.all([
-    fetchAllSupabasePages<SyncRunRow>({
-      label: "Sync history",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("sync_runs")
-          .select("id, sync_type, status, started_at, finished_at, details")
-          .eq("shop_domain", session.shop)
-          .in("status", ["success", "error"])
-          .order("finished_at", { ascending: false, nullsFirst: false })
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: SyncRunRow[] | null;
-          error: { message: string } | null;
-        }>,
-    }),
-    fetchAllSupabasePages<SyncJobRow>({
-      label: "Sync jobs",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("sync_jobs")
-          .select(
-            "id, job_type, status, current_step, created_at, started_at, updated_at, finished_at, details",
-          )
-          .eq("shop_domain", session.shop)
-          .in("status", ["success", "error"])
-          .order("updated_at", { ascending: false })
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: SyncJobRow[] | null;
-          error: { message: string } | null;
-        }>,
-    }),
-    fetchAllSupabasePages<WebhookFailureRow>({
-      label: "Webhook failures",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("webhook_events")
-          .select("id, topic, status, attempt_count, received_at, processed_at")
-          .eq("shop_domain", session.shop)
-          .eq("status", "error")
-          .order("processed_at", { ascending: false, nullsFirst: false })
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: WebhookFailureRow[] | null;
-          error: { message: string } | null;
-        }>,
-    }),
-    selectedLocationId
+    canManageSync
+      ? fetchAllSupabasePages<SyncRunRow>({
+          label: "Sync history",
+          getRowKey: (row) => row.id,
+          fetchPage: (from, to) =>
+            supabase
+              .from("sync_runs")
+              .select("id, sync_type, status, started_at, finished_at, details")
+              .eq("shop_domain", session.shop)
+              .in("status", ["success", "error"])
+              .order("finished_at", { ascending: false, nullsFirst: false })
+              .order("id", { ascending: true })
+              .range(from, to) as unknown as PromiseLike<{
+              data: SyncRunRow[] | null;
+              error: { message: string } | null;
+            }>,
+        })
+      : Promise.resolve([]),
+    canManageSync
+      ? fetchAllSupabasePages<SyncJobRow>({
+          label: "Sync jobs",
+          getRowKey: (row) => row.id,
+          fetchPage: (from, to) =>
+            supabase
+              .from("sync_jobs")
+              .select(
+                "id, job_type, status, current_step, created_at, started_at, updated_at, finished_at, details",
+              )
+              .eq("shop_domain", session.shop)
+              .in("status", ["success", "error"])
+              .order("updated_at", { ascending: false })
+              .order("id", { ascending: true })
+              .range(from, to) as unknown as PromiseLike<{
+              data: SyncJobRow[] | null;
+              error: { message: string } | null;
+            }>,
+        })
+      : Promise.resolve([]),
+    canManageSync
+      ? fetchAllSupabasePages<WebhookFailureRow>({
+          label: "Webhook failures",
+          getRowKey: (row) => row.id,
+          fetchPage: (from, to) =>
+            supabase
+              .from("webhook_events")
+              .select(
+                "id, topic, status, attempt_count, received_at, processed_at",
+              )
+              .eq("shop_domain", session.shop)
+              .eq("status", "error")
+              .order("processed_at", { ascending: false, nullsFirst: false })
+              .order("id", { ascending: true })
+              .range(from, to) as unknown as PromiseLike<{
+              data: WebhookFailureRow[] | null;
+              error: { message: string } | null;
+            }>,
+        })
+      : Promise.resolve([]),
+    selectedLocationIds.length > 0
       ? fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
           label: "Dashboard order lines",
           getRowKey: (row) => row.id,
@@ -396,7 +422,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
               .from("order_lines")
               .select(orderLinesSelect)
               .eq("shop_domain", session.shop)
-              .eq("retail_location_id", selectedLocationId)
+              .in("retail_location_id", selectedLocationIds)
               .gte("created_at_shopify", startDateUtc)
               .lt("created_at_shopify", endExclusiveUtc)
               .order("created_at_shopify", { ascending: false })
@@ -407,7 +433,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
             }>,
         })
       : Promise.resolve([]),
-    selectedLocationId
+    selectedLocationIds.length > 0
       ? fetchAllSupabasePages<InventoryLevelDbRow & { id: string }>({
           label: "Inventory levels",
           getRowKey: (row) => row.id,
@@ -418,7 +444,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
                 "id, shopify_location_id, shopify_variant_id, inventory_item_id, sku, available, tracked",
               )
               .eq("shop_domain", session.shop)
-              .eq("shopify_location_id", selectedLocationId)
+              .in("shopify_location_id", selectedLocationIds)
               .order("id", { ascending: true })
               .range(from, to) as unknown as PromiseLike<{
               data: Array<InventoryLevelDbRow & { id: string }> | null;
@@ -482,7 +508,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
   const syncFailureBanner = getSyncFailureBannerState({
     resolution: syncFailureState,
-    canAdmin: permissions.isAdmin,
+    canAdmin: permissions.capabilities.manage_sync,
   });
 
   const staffAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
@@ -611,16 +637,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
     (sum, row) => sum + Number(row.available ?? 0),
     0,
   );
-  const expensesToDate = computeExpensesForRange({
-    expenses,
-    selectedLocationId,
-    selectedDays,
-    startDate,
-    endDate,
-    activeLocationIds: allLocations.map(
-      (location) => location.shopify_location_id,
-    ),
-  });
+  const activeLocationIds = allLocations.map(
+    (location) => location.shopify_location_id,
+  );
+  const expensesToDate =
+    selectedLocationIds.length > 0
+      ? selectedLocationIds.reduce(
+          (sum, locationId) =>
+            sum +
+            (computeExpensesForRange({
+              expenses,
+              selectedLocationId: locationId,
+              selectedDays,
+              startDate,
+              endDate,
+              activeLocationIds,
+            }) ?? 0),
+          0,
+        )
+      : null;
   const { grossProfit, grossMarginPct, netProfit } = calculateReportedProfit({
     netSales: revenue,
     knownCogs: cogs,
@@ -704,6 +739,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     locations,
     selectedLocationId,
+    selectedLocationIds,
     selectedLocationName,
     selectedStaff,
     selectedVendor,
@@ -714,21 +750,32 @@ export async function loader({ request }: LoaderFunctionArgs) {
     preservedSearchParams,
     lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
     readiness: {
-      canAdmin: permissions.isAdmin,
-      activeLocationsCount: allLocations.length,
+      canAdmin: permissions.capabilities.manage_settings,
+      activeLocationsCount: locations.length,
       accessibleLocationsCount: locations.length,
-      selectedLocationsCount: selectedLocationId ? 1 : 0,
+      selectedLocationsCount: selectedLocationIds.length,
       orderLinesForSelectedPeriod: orderLines.length,
-      productsCount: products.length,
+      productsCount: permissions.capabilities.manage_costs
+        ? products.length
+        : 0,
       inventoryRowsCount: inventoryRows.length,
       syncFailureBanner,
       noAssignedLocations,
-      onboarding: {
-        selectReportingLocations: entitlements.activeReportingLocations > 0,
-        addProductCosts: variants.some((variant) => variant.unit_cost !== null),
-        addOperatingExpenses: expenses.some((expense) => expense.is_active),
-        reviewDashboardAccess: entitlements.owner?.status === "active",
-      },
+      onboarding: permissions.capabilities.manage_settings
+        ? {
+            selectReportingLocations: entitlements.activeReportingLocations > 0,
+            addProductCosts: variants.some(
+              (variant) => variant.unit_cost !== null,
+            ),
+            addOperatingExpenses: expenses.some((expense) => expense.is_active),
+            reviewDashboardAccess: entitlements.owner?.status === "active",
+          }
+        : {
+            selectReportingLocations: true,
+            addProductCosts: true,
+            addOperatingExpenses: true,
+            reviewDashboardAccess: true,
+          },
     },
     selectedDays,
     financialMetricsVersion,
@@ -818,6 +865,7 @@ export default function DbDashboardPage() {
     shop,
     locations,
     selectedLocationId,
+    selectedLocationIds,
     selectedLocationName,
     selectedStaff,
     selectedVendor,
@@ -840,7 +888,7 @@ export default function DbDashboardPage() {
   const drilldownResetKey = buildDrilldownResetKey({
     startDate,
     endDate,
-    locationIds: selectedLocationId ? [selectedLocationId] : [],
+    locationIds: selectedLocationIds,
     staff: selectedStaff,
     vendor: selectedVendor,
   });
@@ -947,7 +995,7 @@ export default function DbDashboardPage() {
         preservedSearchParams={preservedSearchParams}
         lastSuccessfulSync={lastSuccessfulSync}
         selectedDays={selectedDays}
-        locationAccessRestricted={!readiness.canAdmin && locations.length === 1}
+        locationAccessRestricted={!readiness.canAdmin}
       />
 
       {showOnboarding ? (

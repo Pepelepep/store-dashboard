@@ -9,9 +9,10 @@ import {
   type BillingState,
 } from "./billing.server";
 import {
-  assertDashboardAccess,
+  assertCapabilityAccess,
   type PermissionContext,
 } from "./auth/permissions.server";
+import type { ShopOpsCapability } from "./auth/role-capabilities";
 import { fetchAllSupabasePages } from "./db/supabase-pagination.server";
 import {
   summarizeEntitlements,
@@ -171,20 +172,32 @@ function buildPlanResolutionPath(request: Request) {
 }
 
 export async function assertReportingEntitlements({
+  deniedNotice,
+  deniedRedirectTo,
   request,
+  requiredCapability,
+  route,
   session,
   supabase,
 }: {
+  deniedNotice?: string;
+  deniedRedirectTo?: string;
   request: Request;
-  session: Parameters<typeof assertDashboardAccess>[0]["session"];
+  requiredCapability: ShopOpsCapability;
+  route: string;
+  session: Parameters<typeof assertCapabilityAccess>[0]["session"];
   supabase: SupabaseClient;
 }): Promise<{
   permissions: PermissionContext;
   billing: BillingState;
   entitlements: EntitlementSnapshot;
 }> {
-  const permissions = await assertDashboardAccess({
+  const permissions = await assertCapabilityAccess({
+    capability: requiredCapability,
+    deniedNotice,
+    deniedRedirectTo,
     request,
+    route,
     session,
     supabase,
   });
@@ -200,7 +213,7 @@ export async function assertReportingEntitlements({
   });
 
   if (entitlements.resolutionRequired) {
-    if (permissions.isAdmin) {
+    if (permissions.capabilities.manage_settings) {
       throw redirect(buildPlanResolutionPath(request));
     }
     throw new Response(

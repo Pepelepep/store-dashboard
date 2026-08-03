@@ -209,6 +209,7 @@ export type DashboardLoaderData = {
   shop: string;
   locations: LocationRow[];
   selectedLocationId: string | null;
+  selectedLocationIds: string[];
   selectedLocationName: string | null;
   selectedStaff: string;
   selectedVendor: string;

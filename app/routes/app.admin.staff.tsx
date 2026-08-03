@@ -22,7 +22,7 @@ import {
   PageHeader,
   ShopOpsPage,
 } from "../components/ui/ShopOpsPage";
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import {
   loadCanonicalShopAccess,
   type CanonicalAccessIntegrityIssue,
@@ -56,6 +56,14 @@ import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
 import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
 import { getFreshPlanLimits } from "../lib/entitlements.server";
+import {
+  ASSIGNABLE_SHOP_OPS_ROLES,
+  SHOP_OPS_ROLE_DEFINITIONS,
+  isAssignableShopOpsRole,
+  normalizeShopOpsAccessConfiguration,
+  type AssignableShopOpsRole,
+  type ShopOpsRole,
+} from "../lib/auth/role-capabilities";
 
 type PermissionRow = {
   membership_id: string | null;
@@ -76,7 +84,7 @@ type MembershipRow = {
   normalized_email: string | null;
   shopify_user_id: string | null;
   display_name: string;
-  role: "owner" | "admin" | "manager" | "viewer";
+  role: ShopOpsRole;
   status: "active" | "disabled";
   is_owner: boolean;
 };
@@ -220,10 +228,14 @@ function accessStatus(membership: MembershipRow | null) {
 }
 
 function shopOpsRoleLabel(membership: MembershipRow) {
-  if (membership.is_owner) return "Owner";
-  if (membership.role === "admin") return "Admin";
-  if (membership.role === "manager") return "Manager";
-  return "Viewer";
+  return SHOP_OPS_ROLE_DEFINITIONS[membership.role].label;
+}
+
+function getSubmittedAccessConfiguration(data: FormData) {
+  return normalizeShopOpsAccessConfiguration({
+    role: text(data.get("role")),
+    locationIds: data.getAll("location_ids").map(text),
+  });
 }
 
 function displayedShopOpsRole(profile: StaffProfile) {
@@ -358,7 +370,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const loaderPermissions = await assertAdminAccess({
+  const loaderPermissions = await assertCapabilityAccess({
+    capability: "manage_people",
     request,
     session,
     supabase,
@@ -617,7 +630,13 @@ export async function action({ request }: ActionFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const permissions = await assertAdminAccess({ request, session, supabase });
+  const permissions = await assertCapabilityAccess({
+    capability: "manage_people",
+    request,
+    route: "app.admin.staff.action",
+    session,
+    supabase,
+  });
   if (!permissions.membership) {
     throw new Response("Dashboard membership is required.", { status: 403 });
   }
@@ -936,9 +955,11 @@ export async function action({ request }: ActionFunctionArgs) {
   if (intent === "add_person") {
     const email = normalizeShopOpsEmail(text(data.get("email")));
     const displayName = text(data.get("display_name"));
-    const role = text(data.get("role"));
     const salesAttribution = data.get("capability_sales") === "true";
     const shopOpsAccess = data.get("capability_access") === "true";
+    const accessConfiguration = shopOpsAccess
+      ? getSubmittedAccessConfiguration(data)
+      : null;
     if (!salesAttribution && !shopOpsAccess) {
       return { ok: false, message: "Select at least one capability." };
     }
@@ -947,6 +968,13 @@ export async function action({ request }: ActionFunctionArgs) {
     }
     if (shopOpsAccess && !email) {
       return { ok: false, message: "Email is required for ShopOps access." };
+    }
+    if (shopOpsAccess && !accessConfiguration) {
+      return {
+        ok: false,
+        message:
+          "Choose a valid ShopOps role and assign at least one location to a Location viewer or Reporting manager.",
+      };
     }
     if (!email && !displayName) {
       return {
@@ -969,8 +997,8 @@ export async function action({ request }: ActionFunctionArgs) {
         p_person_id: null,
         p_canonical_email: email!,
         p_display_name: displayName || email!,
-        p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
-        p_location_ids: data.getAll("location_ids").map(text).filter(Boolean),
+        p_role: accessConfiguration!.role,
+        p_location_ids: accessConfiguration!.locationIds,
         p_dashboard_user_limit: plan!.limits.dashboardUsers,
         p_restore_archived: true,
       });
@@ -1044,9 +1072,16 @@ export async function action({ request }: ActionFunctionArgs) {
       };
     }
     const email = normalizeShopOpsEmail(text(data.get("email")));
-    const role = text(data.get("role"));
+    const accessConfiguration = getSubmittedAccessConfiguration(data);
     if (!personId || !email || !isValidShopOpsEmail(email)) {
       return { ok: false, message: "Enter a valid email address." };
+    }
+    if (!accessConfiguration) {
+      return {
+        ok: false,
+        message:
+          "Choose a valid ShopOps role and assign at least one location to a Location viewer or Reporting manager.",
+      };
     }
     const { limits } = await getFreshPlanLimits({
       shop: session.shop,
@@ -1058,8 +1093,8 @@ export async function action({ request }: ActionFunctionArgs) {
       p_person_id: personId,
       p_canonical_email: email,
       p_display_name: null,
-      p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
-      p_location_ids: data.getAll("location_ids").map(text).filter(Boolean),
+      p_role: accessConfiguration.role,
+      p_location_ids: accessConfiguration.locationIds,
       p_dashboard_user_limit: limits.dashboardUsers,
       p_restore_archived: false,
     });
@@ -1159,6 +1194,47 @@ function OverlayPanel({
   );
 }
 
+function ShopOpsRoleSelector({
+  idPrefix,
+  onChange,
+  value,
+}: {
+  idPrefix: string;
+  onChange: (role: AssignableShopOpsRole) => void;
+  value: AssignableShopOpsRole;
+}) {
+  return (
+    <fieldset>
+      <legend>ShopOps role</legend>
+      {ASSIGNABLE_SHOP_OPS_ROLES.map((role) => {
+        const definition = SHOP_OPS_ROLE_DEFINITIONS[role];
+        const id = `${idPrefix}-${role}`;
+        return (
+          <label
+            aria-label={definition.label}
+            className="capability-option"
+            htmlFor={id}
+            key={role}
+          >
+            <input
+              checked={value === role}
+              id={id}
+              name="role"
+              onChange={() => onChange(role)}
+              type="radio"
+              value={role}
+            />
+            <span>
+              <b>{definition.label}</b>
+              <small>{definition.description}</small>
+            </span>
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
+
 function AccessForm({
   profile,
   locations,
@@ -1166,6 +1242,13 @@ function AccessForm({
   profile: StaffProfile;
   locations: LocationRow[];
 }) {
+  const configuredRole = profile.membership?.role ?? "";
+  const initialRole: AssignableShopOpsRole = isAssignableShopOpsRole(
+    configuredRole,
+  )
+    ? configuredRole
+    : "viewer";
+  const [role, setRole] = useState<AssignableShopOpsRole>(initialRole);
   if (profile.membership?.is_owner) {
     return (
       <p className="hint">
@@ -1174,10 +1257,6 @@ function AccessForm({
       </p>
     );
   }
-  const role = profile.membership?.role ?? "viewer";
-  const allLocations = profile.permissions.some(
-    (row) => row.shopify_location_id === "*",
-  );
   return (
     <Form method="post" className="form-stack">
       <input
@@ -1199,34 +1278,41 @@ function AccessForm({
           defaultValue={profile.email ?? ""}
         />
       </label>
-      <label>
-        ShopOps role
-        <select name="role" defaultValue={role}>
-          <option value="viewer">Viewer</option>
-          <option value="manager">Manager</option>
-          <option value="admin">Admin</option>
-        </select>
-      </label>
-      <fieldset>
-        <legend>Accessible locations</legend>
-        {locations.map((location) => (
-          <label className="check" key={location.shopify_location_id}>
-            <input
-              type="checkbox"
-              name="location_ids"
-              value={location.shopify_location_id}
-              defaultChecked={
-                allLocations ||
-                profile.permissions.some(
+      <ShopOpsRoleSelector
+        idPrefix={`edit-role-${profile.id}`}
+        onChange={setRole}
+        value={role}
+      />
+      {SHOP_OPS_ROLE_DEFINITIONS[role].capabilities.all_locations ? (
+        <div className="assign-box">
+          <b>All reporting locations</b>
+          <p className="hint">
+            Admins can access and manage reporting across all configured
+            locations.
+          </p>
+        </div>
+      ) : (
+        <fieldset aria-required="true">
+          <legend>Assigned locations</legend>
+          <p className="hint">
+            This user will only see reporting data for the selected locations.
+          </p>
+          {locations.map((location) => (
+            <label className="check" key={location.shopify_location_id}>
+              <input
+                type="checkbox"
+                name="location_ids"
+                value={location.shopify_location_id}
+                defaultChecked={profile.permissions.some(
                   (row) =>
                     row.shopify_location_id === location.shopify_location_id,
-                )
-              }
-            />
-            {location.name}
-          </label>
-        ))}
-      </fieldset>
+                )}
+              />
+              {location.name}
+            </label>
+          ))}
+        </fieldset>
+      )}
       <p className="hint">
         On first sign-in, ShopOps securely links this email to the authenticated
         Shopify user in the background.
@@ -1251,6 +1337,7 @@ function AddPersonForm({
   const [shopOpsAccess, setShopOpsAccess] = useState(
     defaultCapability === "access",
   );
+  const [role, setRole] = useState<AssignableShopOpsRole>("viewer");
 
   return (
     <Form method="post" className="form-stack">
@@ -1316,27 +1403,38 @@ function AddPersonForm({
       </fieldset>
       {shopOpsAccess ? (
         <>
-          <label>
-            ShopOps role
-            <select name="role" defaultValue="viewer">
-              <option value="viewer">Viewer</option>
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-            </select>
-          </label>
-          <fieldset>
-            <legend>Assigned reporting locations</legend>
-            {locations.map((location) => (
-              <label className="check" key={location.shopify_location_id}>
-                <input
-                  type="checkbox"
-                  name="location_ids"
-                  value={location.shopify_location_id}
-                />
-                {location.name}
-              </label>
-            ))}
-          </fieldset>
+          <ShopOpsRoleSelector
+            idPrefix="add-person-role"
+            onChange={setRole}
+            value={role}
+          />
+          {SHOP_OPS_ROLE_DEFINITIONS[role].capabilities.all_locations ? (
+            <div className="assign-box">
+              <b>All reporting locations</b>
+              <p className="hint">
+                Admins can access and manage reporting across all configured
+                locations.
+              </p>
+            </div>
+          ) : (
+            <fieldset aria-required="true">
+              <legend>Assigned locations</legend>
+              <p className="hint">
+                This user will only see reporting data for the selected
+                locations.
+              </p>
+              {locations.map((location) => (
+                <label className="check" key={location.shopify_location_id}>
+                  <input
+                    type="checkbox"
+                    name="location_ids"
+                    value={location.shopify_location_id}
+                  />
+                  {location.name}
+                </label>
+              ))}
+            </fieldset>
+          )}
         </>
       ) : null}
       <p className="hint">
@@ -1895,6 +1993,13 @@ export default function StaffPage() {
   };
   const locationLabel = (profile: StaffProfile) => {
     if (profile.hasAccessIntegrityIssue) return "Needs repair";
+    if (
+      profile.membership &&
+      SHOP_OPS_ROLE_DEFINITIONS[profile.membership.role].capabilities
+        .all_locations
+    ) {
+      return "All locations";
+    }
     const names = [
       ...new Set(
         profile.permissions.map((row) => row.location_name).filter(Boolean),
@@ -2535,7 +2640,11 @@ export default function StaffPage() {
           }
           onClose={() => setOverlay("details")}
         >
-          <AccessForm profile={selected} locations={data.locations} />
+          <AccessForm
+            key={selected.id}
+            profile={selected}
+            locations={data.locations}
+          />
           {selected.dashboardAccess !== "No access" &&
           !selected.membership?.is_owner ? (
             <Form method="post" className="remove-access">

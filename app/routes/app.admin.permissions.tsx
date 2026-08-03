@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
 
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { authenticate } from "../shopify.server";
 
@@ -14,7 +14,13 @@ function peopleAccessPath(request: Request) {
 async function requireAccessAndRedirect(request: Request) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
-  await assertAdminAccess({ request, session, supabase });
+  await assertCapabilityAccess({
+    capability: "manage_people",
+    request,
+    route: "app.admin.permissions",
+    session,
+    supabase,
+  });
   throw redirect(peopleAccessPath(request));
 }
 

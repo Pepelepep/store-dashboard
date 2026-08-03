@@ -49,7 +49,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       supabase,
       route: "billing-required",
     });
-    if (!permissions.isOwner) {
+    if (!permissions.capabilities.manage_billing) {
       console.error("[owner-bootstrap] controlled failure", {
         route: "billing-required",
         shop: session.shop,

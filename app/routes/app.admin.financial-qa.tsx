@@ -405,14 +405,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const { permissions } = await assertReportingEntitlements({
+  await assertReportingEntitlements({
     request,
+    requiredCapability: "view_data_quality",
+    route: "app.admin.financial-qa",
     session,
     supabase,
   });
-  if (!permissions.isAdmin) {
-    throw new Response("Forbidden: admin access required", { status: 403 });
-  }
 
   const url = new URL(request.url);
   const defaults = getDefaultDateRange();

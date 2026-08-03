@@ -5,7 +5,7 @@ import { SettingsIcon } from "@shopify/polaris-icons";
 import { PlanSetup, type PlanSetupData } from "../components/setup/PlanSetup";
 import { SectionTabs } from "../components/ui/SectionTabs";
 import { PageHeader, ShopOpsPage } from "../components/ui/ShopOpsPage";
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import {
   buildHostedPricingUrl,
   getBillingState,
@@ -40,8 +40,10 @@ export async function loader(args: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const permissions = await assertAdminAccess({
+  const permissions = await assertCapabilityAccess({
+    capability: "manage_settings",
     request: args.request,
+    route: "app.settings.plan",
     session,
     supabase,
   });

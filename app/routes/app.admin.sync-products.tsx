@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
 
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
@@ -15,7 +15,13 @@ async function redirectToSyncCenter(request: Request) {
     supabase,
   });
 
-  await assertAdminAccess({ request, session, supabase });
+  await assertCapabilityAccess({
+    capability: "manage_sync",
+    request,
+    route: "app.admin.sync-products",
+    session,
+    supabase,
+  });
 
   const url = new URL(request.url);
 

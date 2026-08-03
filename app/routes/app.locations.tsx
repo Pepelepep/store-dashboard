@@ -44,15 +44,12 @@ import {
   getFreshPlanLimits,
   type EntitlementLocation,
 } from "../lib/entitlements.server";
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import {
   getBillingState,
   isAccessibleBillingState,
 } from "../lib/billing.server";
-import {
-  getAccessibleLocationRows,
-  hasNoAssignedLocationAccess,
-} from "../lib/auth/location-performance-access";
+import { resolveReportingScope } from "../lib/auth/location-performance-access";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { fetchAllSupabasePages } from "../lib/db/supabase-pagination.server";
 import {
@@ -205,6 +202,8 @@ type SortKey =
 type LoaderData = {
   view: "performance";
   canManageReportingLocations: boolean;
+  canManageSync: boolean;
+  dashboardAccessNotice: boolean;
   locations: LocationRow[];
   selectedLocationIds: string[];
   selectedStaff: string;
@@ -1092,7 +1091,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   });
   const url = new URL(request.url);
   if (url.searchParams.get("tab") === "reporting") {
-    await assertAdminAccess({ request, session, supabase });
+    await assertCapabilityAccess({
+      capability: "manage_settings",
+      request,
+      route: "app.locations.reporting",
+      session,
+      supabase,
+    });
     const billingAdmin = await getShopLevelAdminClient({
       shop: session.shop,
       route: "locations.reporting",
@@ -1122,11 +1127,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const { permissions } = await assertReportingEntitlements({
     request,
+    requiredCapability: "view_locations",
+    route: "app.locations",
     session,
     supabase,
   });
   const shouldShowDebugInfo =
-    url.searchParams.get("debug") === "1" && permissions.isAdmin;
+    url.searchParams.get("debug") === "1" &&
+    permissions.capabilities.manage_settings;
   const preservedSearchParams = Array.from(url.searchParams.entries())
     .filter(
       ([name]) =>
@@ -1187,32 +1195,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
         error: { message: string } | null;
       }>,
   });
-  const accessibleLocations = getAccessibleLocationRows({
+  const reportingScope = resolveReportingScope({
     locations: allLocations,
-    isAdmin: permissions.isAdmin,
-    allowedLocationIds: permissions.allowedLocationIds,
+    permissions,
+    requestedLocationIds,
+    route: "app.locations",
+    shop: session.shop,
   });
-
-  if (
-    hasNoAssignedLocationAccess({
-      activeLocationCount: allLocations.length,
-      accessibleLocationCount: accessibleLocations.length,
-      isAdmin: permissions.isAdmin,
-    })
-  ) {
-    throw new Response("Forbidden: no location access configured", {
-      status: 403,
-    });
-  }
-
-  const selectedLocations =
-    requestedLocationIds.size > 0
-      ? accessibleLocations.filter((location) =>
-          requestedLocationIds.has(location.shopify_location_id),
-        )
-      : accessibleLocations;
-  const safeSelectedLocations =
-    selectedLocations.length > 0 ? selectedLocations : accessibleLocations;
+  const accessibleLocations = reportingScope.accessibleLocations;
+  const safeSelectedLocations = reportingScope.selectedLocations;
   const selectedLocationIds = safeSelectedLocations.map(
     (location) => location.shopify_location_id,
   );
@@ -1223,6 +1214,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       selectedLocationIdSet.has(location.shopify_location_id),
     );
   const shouldFilterOrderLinesByLocation = true;
+  const canManageSync = permissions.capabilities.manage_sync;
 
   const [orderLinesResult, expenses] = await Promise.all([
     selectedLocationIds.length > 0
@@ -1256,14 +1248,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ]);
 
   const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
-    await supabase
-      .from("sync_runs")
-      .select("finished_at")
-      .eq("shop_domain", session.shop)
-      .eq("status", "success")
-      .order("finished_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    canManageSync
+      ? await supabase
+          .from("sync_runs")
+          .select("finished_at")
+          .eq("shop_domain", session.shop)
+          .eq("status", "success")
+          .order("finished_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : { data: null, error: null };
   if (lastSuccessfulSyncError) {
     throw new Error(
       `Latest successful sync could not be loaded: ${lastSuccessfulSyncError.message}`,
@@ -1458,7 +1452,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     view: "performance",
-    canManageReportingLocations: permissions.isAdmin,
+    canManageReportingLocations: permissions.capabilities.manage_settings,
+    canManageSync,
+    dashboardAccessNotice:
+      url.searchParams.get("access_notice") === "dashboard_role",
     locations: accessibleLocations,
     selectedLocationIds,
     selectedStaff,
@@ -1473,7 +1470,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     period,
     financialMetricsVersion,
     kpis,
-    hasOperatingExpenses: expenses.length > 0,
+    hasOperatingExpenses: Array.from(selectedExpensesByLocation.values()).some(
+      (amount) => amount > 0,
+    ),
     locationRows: metrics.rows,
     trendRows: trend.rows,
     revenueByVendor,
@@ -1492,7 +1491,13 @@ export async function action({ request }: ActionFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const permissions = await assertAdminAccess({ request, session, supabase });
+  const permissions = await assertCapabilityAccess({
+    capability: "manage_settings",
+    request,
+    route: "app.locations.reporting.action",
+    session,
+    supabase,
+  });
   if (!permissions.membership) {
     throw new Response("Dashboard membership is required.", { status: 403 });
   }
@@ -2968,7 +2973,9 @@ export default function LocationsPage() {
 function LocationPerformancePage({ data }: { data: LoaderData }) {
   const location = useLocation();
   const navigation = useNavigation();
-  const dataSyncPath = getDataSyncPath(location.search);
+  const dataSyncPath = data.canManageSync
+    ? getDataSyncPath(location.search)
+    : null;
   const {
     locations,
     selectedLocationIds,
@@ -2999,6 +3006,9 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
     isApplyingFilters && navigation.formData?.get("preset") === "today";
   const [activeDrilldowns, setActiveDrilldowns] =
     useState<ActiveLocationDrilldowns>({});
+  const allLocationsLabel = data.canManageReportingLocations
+    ? "All locations"
+    : "All assigned locations";
   const drilldownResetKey = buildDrilldownResetKey({
     startDate,
     endDate,
@@ -3016,7 +3026,7 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
   }, [drilldownResetKey]);
   const allLocationsSelected = draftLocationIds.length === locations.length;
   const locationSummary = allLocationsSelected
-    ? "All locations"
+    ? allLocationsLabel
     : draftLocationIds.length === 1
       ? locations.find(
           (location) => location.shopify_location_id === draftLocationIds[0],
@@ -3250,10 +3260,22 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
         }
       `}</style>
       <PageHeader
-        description="Review location performance and choose which locations appear in ShopOps."
+        description={
+          data.canManageReportingLocations
+            ? "Review location performance and choose which locations appear in ShopOps."
+            : "Review performance for assigned reporting locations."
+        }
         icon={LocationIcon}
         title="Locations"
       />
+      {data.dashboardAccessNotice ? (
+        <PageNotice
+          cta={{ to: "/app/locations", label: "View locations" }}
+          title="Dashboard access is not included"
+          message="Your ShopOps role provides access to assigned locations only."
+          tone="info"
+        />
+      ) : null}
       <SectionTabs
         activeTab="performance"
         ariaLabel="Locations sections"
@@ -3382,7 +3404,7 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
                   {allLocationsSelected ? (
                     <span aria-hidden="true">✓</span>
                   ) : null}
-                  All locations
+                  {allLocationsLabel}
                 </button>
                 {locations.map((location) => (
                   <label
@@ -3479,10 +3501,16 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
           title="Your data is being prepared"
           message="No locations have synced yet. Location reports appear after Shopify data sync completes."
           bullets={[
-            "Open Sync Status to confirm whether locations, products, inventory, and orders have synced.",
+            data.canManageSync
+              ? "Open Sync Status to confirm whether locations, products, inventory, and orders have synced."
+              : "Ask an Admin to confirm whether Shopify data has synced.",
             "Location reporting becomes useful once Shopify data is available.",
           ]}
-          cta={{ to: dataSyncPath, label: "Open Sync Status" }}
+          cta={
+            dataSyncPath
+              ? { to: dataSyncPath, label: "Open Sync Status" }
+              : undefined
+          }
           tone="info"
         />
       ) : isDataPreparing ? (
@@ -3493,7 +3521,11 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
             "Location comparisons populate after successful sync runs create sales rows.",
             "ShopOps Studio uses synced Shopify data to report sales, margins, inventory, staff attribution, expenses, refunds, returns, and sync health.",
           ]}
-          cta={{ to: dataSyncPath, label: "Open Sync Status" }}
+          cta={
+            dataSyncPath
+              ? { to: dataSyncPath, label: "Open Sync Status" }
+              : undefined
+          }
           tone="info"
         />
       ) : hasNoSalesForRange ? (
@@ -3501,9 +3533,11 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
           title="No sales for this date range."
           guidance="Try another date range or confirm sync status."
           action={
-            <AppButtonLink compact to={dataSyncPath} variant="secondary">
-              Open Sync Status
-            </AppButtonLink>
+            dataSyncPath ? (
+              <AppButtonLink compact to={dataSyncPath} variant="secondary">
+                Open Sync Status
+              </AppButtonLink>
+            ) : undefined
           }
         />
       ) : null}

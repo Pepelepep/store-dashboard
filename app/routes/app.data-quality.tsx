@@ -178,14 +178,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  const { permissions } = await assertReportingEntitlements({
+  await assertReportingEntitlements({
     request,
+    requiredCapability: "view_data_quality",
+    route: "app.data-quality",
     session,
     supabase,
   });
-  if (!permissions.isAdmin) {
-    throw new Response("Forbidden: admin access required", { status: 403 });
-  }
   const url = new URL(request.url);
   const preservedSearch = url.search;
   const errors: string[] = [];
@@ -201,21 +200,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (locationsError) errors.push(locationsError.message);
 
   const allLocations = (locationsData ?? []) as LocationRow[];
-  const accessibleLocations = permissions.isAdmin
-    ? allLocations
-    : allLocations.filter((location) =>
-        permissions.allowedLocationIds.has(location.shopify_location_id),
-      );
-
-  if (
-    !permissions.isAdmin &&
-    allLocations.length > 0 &&
-    accessibleLocations.length === 0
-  ) {
-    throw new Response("Forbidden: no location access configured", {
-      status: 403,
-    });
-  }
+  const accessibleLocations = allLocations;
 
   const accessibleLocationIds = accessibleLocations.map(
     (location) => location.shopify_location_id,

@@ -14,7 +14,7 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { AppButton } from "../components/ui/AppButton";
 import { ContentCard } from "../components/ui/ShopOpsPage";
 import { StatusBadge } from "../components/ui/StatusBadge";
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import { formatStoreDateTime } from "../lib/dashboard/dashboard-metrics";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
@@ -176,7 +176,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  await assertAdminAccess({ request, session, supabase });
+  await assertCapabilityAccess({
+    capability: "manage_sync",
+    request,
+    route: "app.admin.sync",
+    session,
+    supabase,
+  });
   const viewAllActivity = url.searchParams.get("activity") === "all";
   const page = Math.max(
     0,
@@ -258,7 +264,13 @@ export async function action({ request }: ActionFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  await assertAdminAccess({ request, session, supabase });
+  await assertCapabilityAccess({
+    capability: "manage_sync",
+    request,
+    route: "app.admin.sync.action",
+    session,
+    supabase,
+  });
   const data = await request.formData();
   const intent = String(data.get("intent") ?? "");
   if (intent === "process_queue") {
