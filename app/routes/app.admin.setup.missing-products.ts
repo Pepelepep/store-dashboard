@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { loadMissingProductCostsPage } from "../lib/financial/cogs-setup.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
@@ -14,7 +14,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     shop: session.shop,
     supabase,
   });
-  await assertAdminAccess({ request, session, supabase });
+  await assertCapabilityAccess({
+    capability: "manage_costs",
+    request,
+    route: "app.admin.setup.missing-products",
+    session,
+    supabase,
+  });
 
   const url = new URL(request.url);
 

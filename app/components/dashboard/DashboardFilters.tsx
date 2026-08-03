@@ -37,6 +37,9 @@ export function DashboardFilters({
 }) {
   const navigation = useNavigation();
   const canSwitchLocation = locations.length > 1;
+  const allLocationsLabel = locationAccessRestricted
+    ? "All assigned locations"
+    : "All locations";
   const [hasUnsavedFilters, setHasUnsavedFilters] = useState(false);
   const [startDateValue, setStartDateValue] = useState(startDate);
   const [endDateValue, setEndDateValue] = useState(endDate);
@@ -119,6 +122,7 @@ export function DashboardFilters({
             defaultValue={selectedLocationId ?? ""}
             onChange={() => setHasUnsavedFilters(true)}
           >
+            <option value="all">{allLocationsLabel}</option>
             {locations.map((location) => (
               <option
                 key={location.shopify_location_id}

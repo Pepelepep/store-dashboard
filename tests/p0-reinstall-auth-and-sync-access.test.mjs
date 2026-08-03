@@ -34,10 +34,14 @@ import {
 } from "../app/lib/compliance/compliance-webhooks.server.ts";
 import { validateExpenseMonthRange } from "../app/lib/financial/expense-validation.ts";
 import { getRecentOrderChips } from "../app/lib/dashboard/recent-order-flags.ts";
+import { resolveReportingScope } from "../app/lib/auth/location-performance-access.ts";
 import {
-  getAccessibleLocationRows,
-  hasNoAssignedLocationAccess,
-} from "../app/lib/auth/location-performance-access.ts";
+  ASSIGNABLE_SHOP_OPS_ROLES,
+  SHOP_OPS_ROLE_DEFINITIONS,
+  getShopOpsDefaultPath,
+  getShopOpsNavigation,
+  normalizeShopOpsAccessConfiguration,
+} from "../app/lib/auth/role-capabilities.ts";
 import { buildDrilldownResetKey } from "../app/lib/dashboard/drilldown-reset-key.ts";
 import { reconcileTrendRowsWithCashRefunds } from "../app/lib/dashboard/location-trend-reconciliation.ts";
 import { limitRankedBreakdownRows } from "../app/lib/dashboard/ranked-breakdown.ts";
@@ -1027,7 +1031,7 @@ test("estimate preview changes without persistence", () => {
   });
 });
 
-test("merchant navigation is the exact role-aware five-section information architecture", () => {
+test("merchant navigation is the exact capability-aware information architecture", () => {
   const costsRoute = readFileSync(
     new URL("../app/routes/app.admin.setup.tsx", import.meta.url),
     "utf8",
@@ -1037,40 +1041,309 @@ test("merchant navigation is the exact role-aware five-section information archi
     "utf8",
   );
 
-  assert.match(costsRoute, /assertAdminAccess/);
-  const menu = appRoute.slice(
-    appRoute.indexOf("<ui-nav-menu>"),
-    appRoute.indexOf("</ui-nav-menu>"),
+  assert.deepEqual(
+    getShopOpsNavigation("viewer").map((item) => item.label),
+    ["Locations"],
   );
-  const labels = [...menu.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/g)].map((match) =>
-    match[1].trim(),
+  assert.deepEqual(
+    getShopOpsNavigation("manager").map((item) => item.label),
+    ["Dashboard", "Locations"],
   );
-  assert.deepEqual(labels, [
+  const operationalNavigation = [
     "Dashboard",
     "Locations",
     "Costs",
     "People",
+    "Data quality",
+    "Data sync",
     "Settings",
-  ]);
+  ];
+  assert.deepEqual(
+    getShopOpsNavigation("admin").map((item) => item.label),
+    operationalNavigation,
+  );
+  assert.deepEqual(
+    getShopOpsNavigation("owner").map((item) => item.label),
+    operationalNavigation,
+  );
+  assert.equal(getShopOpsDefaultPath("viewer"), "/app/locations");
+  for (const role of ["manager", "admin", "owner"]) {
+    assert.equal(getShopOpsDefaultPath(role), "/app/db-dashboard");
+  }
+  assert.match(costsRoute, /capability: "manage_costs"/);
+  assert.match(appRoute, /getShopOpsNavigation\(permissions\.role\)/);
+  assert.match(appRoute, /navigationItems\.map\(\(item\) =>/);
   for (const removedLabel of [
     ">Setup<",
     ">Staff<",
-    ">Data sync<",
     ">Plan<",
     ">Location Performance<",
   ]) {
     assert.equal(appRoute.includes(removedLabel), false);
   }
-  assert.match(
-    appRoute,
-    /<a href=\{`\/app\/locations\$\{navigationSearch\}`\}>/,
+});
+
+test("ShopOps roles use one exact merchant-facing capability matrix", () => {
+  const expectedCapabilities = {
+    viewer: {
+      view_dashboard: false,
+      view_locations: true,
+      assigned_locations: true,
+      manage_people: false,
+      manage_costs: false,
+      view_data_quality: false,
+      manage_sync: false,
+      manage_settings: false,
+      manage_billing: false,
+      all_locations: false,
+    },
+    manager: {
+      view_dashboard: true,
+      view_locations: true,
+      assigned_locations: true,
+      manage_people: false,
+      manage_costs: false,
+      view_data_quality: false,
+      manage_sync: false,
+      manage_settings: false,
+      manage_billing: false,
+      all_locations: false,
+    },
+    admin: {
+      view_dashboard: true,
+      view_locations: true,
+      assigned_locations: false,
+      manage_people: true,
+      manage_costs: true,
+      view_data_quality: true,
+      manage_sync: true,
+      manage_settings: true,
+      manage_billing: false,
+      all_locations: true,
+    },
+    owner: {
+      view_dashboard: true,
+      view_locations: true,
+      assigned_locations: false,
+      manage_people: true,
+      manage_costs: true,
+      view_data_quality: true,
+      manage_sync: true,
+      manage_settings: true,
+      manage_billing: true,
+      all_locations: true,
+    },
+  };
+
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(SHOP_OPS_ROLE_DEFINITIONS).map(([role, definition]) => [
+        role,
+        definition.capabilities,
+      ]),
+    ),
+    expectedCapabilities,
   );
-  for (const path of ["costs", "people", "settings"]) {
+  assert.equal(SHOP_OPS_ROLE_DEFINITIONS.viewer.label, "Location viewer");
+  assert.equal(
+    SHOP_OPS_ROLE_DEFINITIONS.viewer.description,
+    "View performance for assigned locations only.",
+  );
+  assert.equal(SHOP_OPS_ROLE_DEFINITIONS.manager.label, "Reporting manager");
+  assert.equal(
+    SHOP_OPS_ROLE_DEFINITIONS.manager.description,
+    "View the Dashboard and performance for assigned locations.",
+  );
+  assert.equal(
+    SHOP_OPS_ROLE_DEFINITIONS.admin.description,
+    "Manage reporting, people, costs, synchronization, and settings. Billing remains owner-only.",
+  );
+  assert.deepEqual(ASSIGNABLE_SHOP_OPS_ROLES, ["viewer", "manager", "admin"]);
+  assert.equal(ASSIGNABLE_SHOP_OPS_ROLES.includes("owner"), false);
+});
+
+test("ShopOps access configuration requires assignments only for scoped roles", () => {
+  assert.equal(
+    normalizeShopOpsAccessConfiguration({ role: "viewer", locationIds: [] }),
+    null,
+  );
+  assert.equal(
+    normalizeShopOpsAccessConfiguration({ role: "manager", locationIds: [] }),
+    null,
+  );
+  assert.deepEqual(
+    normalizeShopOpsAccessConfiguration({
+      role: "manager",
+      locationIds: ["location-a", "location-a", " location-b "],
+    }),
+    { role: "manager", locationIds: ["location-a", "location-b"] },
+  );
+  assert.deepEqual(
+    normalizeShopOpsAccessConfiguration({
+      role: "admin",
+      locationIds: ["location-a"],
+    }),
+    { role: "admin", locationIds: [] },
+  );
+  assert.equal(
+    normalizeShopOpsAccessConfiguration({
+      role: "owner",
+      locationIds: ["location-a"],
+    }),
+    null,
+  );
+});
+
+test("shared reporting scope cannot be expanded by client location IDs", () => {
+  const locations = [
+    { shopify_location_id: "location-a", name: "A" },
+    { shopify_location_id: "location-b", name: "B" },
+    { shopify_location_id: "location-c", name: "C" },
+  ];
+  const viewer = resolveReportingScope({
+    locations,
+    permissions: {
+      allowedLocationIds: new Set(["location-b"]),
+      capabilities: SHOP_OPS_ROLE_DEFINITIONS.viewer.capabilities,
+    },
+    route: "test.viewer",
+    shop,
+  });
+  const manager = resolveReportingScope({
+    locations,
+    permissions: {
+      allowedLocationIds: new Set(["location-a", "location-c"]),
+      capabilities: SHOP_OPS_ROLE_DEFINITIONS.manager.capabilities,
+    },
+    route: "test.manager",
+    shop,
+  });
+  const admin = resolveReportingScope({
+    locations,
+    permissions: {
+      allowedLocationIds: new Set(),
+      capabilities: SHOP_OPS_ROLE_DEFINITIONS.admin.capabilities,
+    },
+    route: "test.admin",
+    shop,
+  });
+
+  assert.deepEqual(viewer.accessibleLocations, [locations[1]]);
+  assert.deepEqual(viewer.selectedLocations, [locations[1]]);
+  assert.deepEqual(manager.accessibleLocations, [locations[0], locations[2]]);
+  assert.deepEqual(manager.selectedLocations, [locations[0], locations[2]]);
+  assert.deepEqual(admin.accessibleLocations, locations);
+  assert.deepEqual(admin.selectedLocations, locations);
+
+  let denied;
+  try {
+    resolveReportingScope({
+      locations,
+      permissions: {
+        allowedLocationIds: new Set(["location-b"]),
+        capabilities: SHOP_OPS_ROLE_DEFINITIONS.viewer.capabilities,
+      },
+      requestedLocationIds: ["location-a"],
+      route: "test.viewer-query",
+      shop,
+    });
+  } catch (error) {
+    denied = error;
+  }
+  assert.equal(denied instanceof Response, true);
+  assert.equal(denied.status, 403);
+  assert.equal(
+    denied.headers.get("X-ShopOps-Denial-Reason"),
+    "location_restricted",
+  );
+});
+
+test("direct route guards and reporting queries derive from canonical capabilities", () => {
+  const source = (path) =>
+    readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+  const guardedRoutes = [
+    ["app/routes/app.db-dashboard.tsx", 'requiredCapability: "view_dashboard"'],
+    ["app/routes/app.locations.tsx", 'requiredCapability: "view_locations"'],
+    ["app/routes/app.admin.staff.tsx", 'capability: "manage_people"'],
+    ["app/routes/app.admin.setup.tsx", 'capability: "manage_costs"'],
+    [
+      "app/routes/app.data-quality.tsx",
+      'requiredCapability: "view_data_quality"',
+    ],
+    [
+      "app/routes/app.admin.financial-qa.tsx",
+      'requiredCapability: "view_data_quality"',
+    ],
+    ["app/routes/app.admin.sync.tsx", 'capability: "manage_sync"'],
+    ["app/routes/app.settings.tsx", 'capability: "manage_settings"'],
+  ];
+  for (const [path, guard] of guardedRoutes) {
+    assert.match(source(path), new RegExp(guard));
+  }
+
+  const dashboard = source("app/routes/app.db-dashboard.tsx");
+  const locationsRoute = source("app/routes/app.locations.tsx");
+  const permissions = source("app/lib/auth/permissions.server.ts");
+  const scope = source("app/lib/auth/location-performance-access.ts");
+  const billingComplete = source("app/routes/app.billing.complete.tsx");
+
+  assert.match(dashboard, /deniedRedirectTo: "\/app\/locations"/);
+  assert.match(dashboard, /resolveReportingScope\(/);
+  assert.match(locationsRoute, /resolveReportingScope\(/);
+  assert.match(dashboard, /\.in\("retail_location_id", selectedLocationIds\)/);
+  assert.match(dashboard, /\.in\("shopify_location_id", selectedLocationIds\)/);
+  assert.match(
+    dashboard,
+    /selectedLocationIds\.reduce\([\s\S]*?computeExpensesForRange/,
+  );
+  assert.match(
+    dashboard,
+    /onboarding: permissions\.capabilities\.manage_settings/,
+  );
+  assert.match(billingComplete, /assertOwnerAccess/);
+  assert.match(permissions, /capability: "manage_billing"/);
+  assert.match(permissions, /X-ShopOps-Denial-Reason": "role_restricted"/);
+  assert.match(scope, /X-ShopOps-Denial-Reason": "location_restricted"/);
+  assert.match(permissions, /ShopOps access required\./);
+});
+
+test("People access UX presents merchant roles and canonical location scope", () => {
+  const people = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+
+  for (const text of [
+    "Assigned locations",
+    "This user will only see reporting data for the selected locations.",
+    "All reporting locations",
+  ]) {
     assert.match(
-      appRoute,
-      new RegExp(`\\{canAdmin \\? \\([\\s\\S]*?\\/app\\/${path}`),
+      people,
+      new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
     );
   }
+  assert.match(
+    people,
+    /Admins can access and manage reporting across all configured\s+locations\./,
+  );
+  assert.match(people, /ASSIGNABLE_SHOP_OPS_ROLES\.map/);
+  assert.match(people, /definition\.label/);
+  assert.match(people, /definition\.description/);
+  assert.match(people, /capabilities\.all_locations \? \(/);
+  assert.match(people, /normalizeShopOpsAccessConfiguration/);
+  assert.match(people, /return "All locations"/);
+  assert.match(locations, /Dashboard access is not included/);
+  assert.match(
+    locations,
+    /Your ShopOps role provides access to assigned locations only\./,
+  );
+  assert.match(locations, /label: "View locations"/);
+  assert.doesNotMatch(people, /<option value="owner">/);
 });
 
 test("COGS recompute functions and settings update are service-role-only", () => {
@@ -1294,7 +1567,7 @@ test("missing-product table uses a bounded fetcher with pagination", () => {
   assert.match(component, />\s*Previous\s*</);
   assert.match(component, />\s*Next\s*</);
   assert.match(component, /position: "sticky"/);
-  assert.match(resourceRoute, /assertAdminAccess/);
+  assert.match(resourceRoute, /capability: "manage_costs"/);
   assert.match(resourceRoute, /loadMissingProductCostsPage/);
 });
 
@@ -2887,52 +3160,6 @@ test("POS merchant modal has automatic attribution state and no diagnostics", ()
 });
 
 test("Locations performance remains role-filtered while reporting management is admin-only", () => {
-  const locations = [
-    { shopify_location_id: "location-a", name: "A" },
-    { shopify_location_id: "location-b", name: "B" },
-    { shopify_location_id: "location-c", name: "C" },
-  ];
-
-  const adminRows = getAccessibleLocationRows({
-    locations,
-    isAdmin: true,
-    allowedLocationIds: new Set(),
-  });
-  const managerRows = getAccessibleLocationRows({
-    locations,
-    isAdmin: false,
-    allowedLocationIds: new Set(["location-a", "location-c"]),
-  });
-  const viewerRows = getAccessibleLocationRows({
-    locations,
-    isAdmin: false,
-    allowedLocationIds: new Set(["location-b"]),
-  });
-  const noLocationRows = getAccessibleLocationRows({
-    locations,
-    isAdmin: false,
-    allowedLocationIds: new Set(),
-  });
-
-  assert.deepEqual(adminRows, locations);
-  assert.deepEqual(
-    managerRows.map((row) => row.shopify_location_id),
-    ["location-a", "location-c"],
-  );
-  assert.deepEqual(
-    viewerRows.map((row) => row.shopify_location_id),
-    ["location-b"],
-  );
-  assert.deepEqual(noLocationRows, []);
-  assert.equal(
-    hasNoAssignedLocationAccess({
-      activeLocationCount: locations.length,
-      accessibleLocationCount: noLocationRows.length,
-      isAdmin: false,
-    }),
-    true,
-  );
-
   const locationRoute = readFileSync(
     new URL("../app/routes/app.locations.tsx", import.meta.url),
     "utf8",
@@ -2942,11 +3169,12 @@ test("Locations performance remains role-filtered while reporting management is 
     "utf8",
   );
   assert.match(locationRoute, /assertReportingEntitlements/);
-  assert.match(locationRoute, /assertAdminAccess/);
+  assert.match(locationRoute, /requiredCapability: "view_locations"/);
   assert.match(
     locationRoute,
-    /url\.searchParams\.get\("tab"\) === "reporting"[\s\S]*?assertAdminAccess/,
+    /url\.searchParams\.get\("tab"\) === "reporting"[\s\S]*?capability: "manage_settings"/,
   );
+  assert.match(locationRoute, /resolveReportingScope\(/);
   assert.match(locationRoute, /value: "performance", label: "Performance"/);
   assert.match(
     locationRoute,
@@ -2954,13 +3182,7 @@ test("Locations performance remains role-filtered while reporting management is 
   );
   assert.match(locationRoute, /select_reporting_locations/);
   assert.match(locationRoute, /getFreshPlanLimits/);
-  assert.match(
-    appShell,
-    /<a href=\{`\/app\/locations\$\{navigationSearch\}`\}>Locations<\/a>/,
-  );
-  assert.ok(
-    appShell.indexOf("/app/locations") < appShell.indexOf("{canAdmin ? ("),
-  );
+  assert.match(appShell, /getShopOpsNavigation\(permissions\.role\)/);
 });
 
 test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-decoding bypass", () => {
@@ -3946,10 +4168,7 @@ test("Dashboard and Locations share compact filters and compact empty sales noti
   assert.match(dashboardFilters, /Restricted by your ShopOps access\./);
   assert.match(locations, /Restricted by your ShopOps access\./);
   assert.doesNotMatch(dashboardFilters, /disabled=\{!canSwitchLocation\}/);
-  assert.match(
-    dashboard,
-    /locationAccessRestricted=\{!readiness\.canAdmin && locations\.length === 1\}/,
-  );
+  assert.match(dashboard, /locationAccessRestricted=\{!readiness\.canAdmin\}/);
   assert.match(presentation, /\.shopops-report-filter-grid \{/);
   assert.match(presentation, /\.shopops-report-filter-control \{/);
   assert.match(presentation, /export function CompactEmptyDataNotice/);

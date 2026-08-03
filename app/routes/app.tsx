@@ -22,6 +22,10 @@ import {
 import { requireBillingAccess } from "../lib/billing.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { getShopLevelAdminClient } from "../lib/shopify/shop-level-admin.server";
+import {
+  getShopOpsDefaultPath,
+  getShopOpsNavigation,
+} from "../lib/auth/role-capabilities";
 
 import { authenticate } from "../shopify.server";
 
@@ -41,6 +45,21 @@ function isBillingRoutePath(pathname: string) {
   return (
     pathname === "/app/billing-required" || pathname === "/app/billing/complete"
   );
+}
+
+function getNavigationHref({
+  href,
+  navigationSearchParams,
+  tab,
+}: {
+  href: string;
+  navigationSearchParams: URLSearchParams;
+  tab?: "plan" | "sync";
+}) {
+  const searchParams = new URLSearchParams(navigationSearchParams);
+  if (tab) searchParams.set("tab", tab);
+  const search = searchParams.toString();
+  return `${href}${search ? `?${search}` : ""}`;
 }
 
 export const middleware: MiddlewareFunction[] = [
@@ -98,7 +117,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (isBillingRoutePath(url.pathname)) {
     return {
       apiKey: process.env.SHOPIFY_API_KEY ?? "",
-      canAdmin: false,
+      defaultPath: "/app/db-dashboard",
+      navigationItems: [],
       accessState: "allowed" as const,
       accessIdentity: {
         shop: session.shop,
@@ -127,7 +147,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY ?? "",
-    canAdmin: permissions.isAdmin,
+    defaultPath: permissions.role
+      ? getShopOpsDefaultPath(permissions.role)
+      : "/app/db-dashboard",
+    navigationItems: getShopOpsNavigation(permissions.role),
     accessState,
     accessIdentity: {
       shop: permissions.identity.shop,
@@ -137,13 +160,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export default function App() {
-  const { apiKey, canAdmin, accessState, accessIdentity } =
+  const { apiKey, defaultPath, navigationItems, accessState, accessIdentity } =
     useLoaderData<typeof loader>();
   const location = useLocation();
   const navigationSearchParams = new URLSearchParams(location.search);
   navigationSearchParams.delete("tab");
-  const navigationQuery = navigationSearchParams.toString();
-  const navigationSearch = navigationQuery ? `?${navigationQuery}` : "";
   const isBillingRoute = isBillingRoutePath(location.pathname);
 
   return (
@@ -194,19 +215,19 @@ export default function App() {
       ) : (
         <>
           <ui-nav-menu>
-            <a href={`/app/db-dashboard${navigationSearch}`} rel="home">
-              Dashboard
-            </a>
-            <a href={`/app/locations${navigationSearch}`}>Locations</a>
-            {canAdmin ? (
-              <a href={`/app/costs${navigationSearch}`}>Costs</a>
-            ) : null}
-            {canAdmin ? (
-              <a href={`/app/people${navigationSearch}`}>People</a>
-            ) : null}
-            {canAdmin ? (
-              <a href={`/app/settings${navigationSearch}`}>Settings</a>
-            ) : null}
+            {navigationItems.map((item) => (
+              <a
+                href={getNavigationHref({
+                  href: item.href,
+                  navigationSearchParams,
+                  tab: "tab" in item ? item.tab : undefined,
+                })}
+                key={`${item.href}:${"tab" in item ? item.tab : ""}`}
+                rel={item.href === defaultPath ? "home" : undefined}
+              >
+                {item.label}
+              </a>
+            ))}
           </ui-nav-menu>
 
           <Outlet />

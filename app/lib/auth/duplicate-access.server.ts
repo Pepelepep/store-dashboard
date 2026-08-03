@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
 import { STAFF_ALIAS_TYPES } from "../staff-identity/staff-identity";
 import { normalizeShopOpsEmail } from "./shopops-access";
+import { hasShopOpsCapability } from "./role-capabilities";
 
 type MembershipRow = {
   id: string;
@@ -348,7 +349,10 @@ export async function resolveApprovedDuplicateAccess({
         .filter((value): value is string => Boolean(value && value !== "*")),
     ),
   ];
-  if (waitingMembership.role !== "admin" && locationIds.length === 0) {
+  if (
+    hasShopOpsCapability(waitingMembership.role, "assigned_locations") &&
+    locationIds.length === 0
+  ) {
     return {
       status: "needs_attention",
       reason: "invalid_access_configuration",

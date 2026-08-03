@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { redirect } from "react-router";
 
 import { STAFF_ALIAS_TYPES } from "../staff-identity/staff-identity";
 import {
@@ -9,6 +10,12 @@ import {
 import { resolveApprovedDuplicateAccess } from "./duplicate-access.server";
 import { resolveOwnerMaterializationIdentifiers } from "./owner-bootstrap";
 import {
+  getShopOpsCapabilities,
+  type ShopOpsCapability,
+  type ShopOpsCapabilitySet,
+  type ShopOpsRole,
+} from "./role-capabilities";
+import {
   getCurrentShopifyUserIdentity as getCurrentUserIdentity,
   normalizeShopOpsEmail,
   type CurrentUserIdentity,
@@ -18,7 +25,7 @@ import {
 export { getCurrentShopifyUserIdentity as getCurrentUserIdentity } from "./shopops-access";
 export type { CurrentUserIdentity } from "./shopops-access";
 
-export type DashboardRole = "owner" | "admin" | "manager" | "viewer";
+export type DashboardRole = ShopOpsRole;
 
 export type DashboardMembership = {
   id: string;
@@ -39,6 +46,7 @@ export type PermissionContext = {
   isOwner: boolean;
   isAdmin: boolean;
   role: DashboardRole | null;
+  capabilities: ShopOpsCapabilitySet;
   accessSource:
     | "owner"
     | "membership"
@@ -145,6 +153,25 @@ function logAccessDecision({
     route,
     shop,
     reason,
+    granted,
+  });
+}
+
+function logCapabilityDecision({
+  route,
+  shop,
+  capability,
+  granted,
+}: {
+  route: string;
+  shop: string;
+  capability: ShopOpsCapability;
+  granted: boolean;
+}) {
+  console.info("[shopops-access] capability decision", {
+    route,
+    shop,
+    capability,
     granted,
   });
 }
@@ -727,8 +754,9 @@ export async function getPermissionContext({
 
   const isActiveMember = Boolean(activeMembership);
   const isOwner = Boolean(activeMembership?.isOwner);
-  const isAdmin =
-    isActiveMember && (isOwner || activeMembership?.role === "admin");
+  const role = isOwner ? "owner" : (activeMembership?.role ?? null);
+  const capabilities = getShopOpsCapabilities(role);
+  const isAdmin = isActiveMember && capabilities.manage_people;
   const accessSource: PermissionContext["accessSource"] = isOwner
     ? "owner"
     : isActiveMember
@@ -763,7 +791,8 @@ export async function getPermissionContext({
     isActiveMember,
     isOwner,
     isAdmin,
-    role: activeMembership?.role ?? null,
+    role,
+    capabilities,
     accessSource,
     accessReason,
     needsAttention,
@@ -771,12 +800,59 @@ export async function getPermissionContext({
   };
 }
 
-export async function assertDashboardAccess(args: {
+type PermissionAssertionArgs = {
   request?: Request;
   session: ShopifySessionIdentitySource;
   supabase: SupabaseClient;
   route?: string;
+};
+
+export async function assertCapabilityAccess({
+  capability,
+  deniedNotice,
+  deniedRedirectTo,
+  ...args
+}: PermissionAssertionArgs & {
+  capability: ShopOpsCapability;
+  deniedNotice?: string;
+  deniedRedirectTo?: string;
 }) {
+  const permissions = await assertDashboardAccess(args);
+  const granted = permissions.capabilities[capability];
+  logCapabilityDecision({
+    route: args.route ?? "capability-access",
+    shop: permissions.identity.shop,
+    capability,
+    granted,
+  });
+  if (granted) return permissions;
+
+  if (deniedRedirectTo && args.request) {
+    const url = new URL(args.request.url);
+    url.pathname = deniedRedirectTo;
+    for (const parameter of [
+      "locationId",
+      "locations",
+      "startDate",
+      "endDate",
+      "preset",
+      "period",
+      "staff",
+      "vendor",
+    ]) {
+      url.searchParams.delete(parameter);
+    }
+    if (deniedNotice) url.searchParams.set("access_notice", deniedNotice);
+    throw redirect(`${url.pathname}${url.search}`);
+  }
+
+  throw new Response("This ShopOps access does not include this page.", {
+    status: 403,
+    headers: { "X-ShopOps-Denial-Reason": "role_restricted" },
+  });
+}
+
+export async function assertDashboardAccess(args: PermissionAssertionArgs) {
   const permissions = await getPermissionContext(args);
   if (!permissions.hasOwner) {
     logAccessDecision({
@@ -796,36 +872,12 @@ export async function assertDashboardAccess(args: {
   return permissions;
 }
 
-export async function assertAdminAccess(args: {
-  request?: Request;
-  session: ShopifySessionIdentitySource;
-  supabase: SupabaseClient;
-  route?: string;
-}) {
-  const permissions = await assertDashboardAccess(args);
-  if (!permissions.isAdmin) {
-    throw new Response("Forbidden: admin access required", { status: 403 });
-  }
-  return permissions;
-}
-
-export async function assertOwnerAccess(args: {
-  request?: Request;
-  session: ShopifySessionIdentitySource;
-  supabase: SupabaseClient;
-  route?: string;
-}) {
+export async function assertOwnerAccess(args: PermissionAssertionArgs) {
   const identity = getCurrentUserIdentity({ session: args.session });
   if (!identity.isShopifyAccountOwner) {
     throw new Response("Forbidden: Shopify store owner access required", {
       status: 403,
     });
   }
-  const permissions = await assertDashboardAccess(args);
-  if (!permissions.isOwner) {
-    throw new Response("Forbidden: store owner access required", {
-      status: 403,
-    });
-  }
-  return permissions;
+  return assertCapabilityAccess({ ...args, capability: "manage_billing" });
 }

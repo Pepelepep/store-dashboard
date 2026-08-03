@@ -16,7 +16,7 @@ import { CalculatorIcon } from "@shopify/polaris-icons";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
-import { assertAdminAccess } from "../lib/auth/permissions.server";
+import { assertCapabilityAccess } from "../lib/auth/permissions.server";
 import {
   ensureShopInitialized,
   logEmptyDataState,
@@ -160,7 +160,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     supabase,
   });
 
-  await assertAdminAccess({ request, session, supabase });
+  await assertCapabilityAccess({
+    capability: "manage_costs",
+    request,
+    route: "app.admin.setup",
+    session,
+    supabase,
+  });
   const [
     { data: locationsData, error: locationsError },
     { data: expensesData, error: expensesError },
@@ -256,7 +262,13 @@ export async function action({ request }: ActionFunctionArgs) {
     supabase,
   });
 
-  await assertAdminAccess({ request, session, supabase });
+  await assertCapabilityAccess({
+    capability: "manage_costs",
+    request,
+    route: "app.admin.setup.action",
+    session,
+    supabase,
+  });
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "save");
