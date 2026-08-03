@@ -1,7 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
 import { STAFF_ALIAS_TYPES } from "../staff-identity/staff-identity";
+import {
+  loadCanonicalMembershipLocationAccess,
+  loadCanonicalMembershipRows,
+  type CanonicalMembershipRow,
+} from "./canonical-access.server";
 import { resolveApprovedDuplicateAccess } from "./duplicate-access.server";
 import { resolveOwnerMaterializationIdentifiers } from "./owner-bootstrap";
 import {
@@ -54,23 +58,7 @@ export type PermissionContext = {
   allowedLocationIds: Set<string>;
 };
 
-type MembershipRow = {
-  id: string;
-  person_id: string | null;
-  shopify_user_id: string | null;
-  normalized_email: string | null;
-  display_name: string;
-  role: DashboardRole;
-  status: "active" | "disabled";
-  is_owner: boolean;
-};
-
-type PermissionRow = {
-  id: string;
-  shopify_location_id: string | null;
-  can_view: boolean | null;
-  can_manage: boolean | null;
-};
+type MembershipRow = CanonicalMembershipRow;
 
 export class OwnerBootstrapError extends Error {
   readonly reason:
@@ -85,7 +73,19 @@ export class OwnerBootstrapError extends Error {
   }
 }
 
-function toMembership(row: MembershipRow): DashboardMembership {
+function toMembership(
+  row: Pick<
+    CanonicalMembershipRow,
+    | "id"
+    | "person_id"
+    | "shopify_user_id"
+    | "normalized_email"
+    | "display_name"
+    | "role"
+    | "status"
+    | "is_owner"
+  >,
+): DashboardMembership {
   return {
     id: row.id,
     personId: row.person_id,
@@ -107,21 +107,10 @@ async function loadMembershipRows({
   supabase: SupabaseClient;
   label: string;
 }) {
-  return fetchAllSupabasePages<MembershipRow>({
+  return loadCanonicalMembershipRows({
     label,
-    getRowKey: (row) => row.id,
-    fetchPage: (from, to) =>
-      supabase
-        .from("dashboard_memberships")
-        .select(
-          "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
-        )
-        .eq("shop_domain", shop)
-        .order("id", { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{
-        data: MembershipRow[] | null;
-        error: { message: string } | null;
-      }>,
+    shop,
+    supabase,
   });
 }
 
@@ -163,7 +152,6 @@ function logAccessDecision({
 type IdentityBindingResult =
   | "not_attempted"
   | "bound"
-  | "bound_alias_sync_pending"
   | "consolidated_reactivation"
   | "duplicate_access_needs_attention"
   | "identity_conflict"
@@ -211,86 +199,6 @@ function logFirstSignInResolution({
     activationAttempted,
     result,
   });
-}
-
-async function mapIdentityAlias({
-  supabase,
-  shop,
-  personId,
-  aliasType,
-  aliasValue,
-  now,
-}: {
-  supabase: SupabaseClient;
-  shop: string;
-  personId: string;
-  aliasType: string;
-  aliasValue: string;
-  now: string;
-}) {
-  const findExisting = () =>
-    supabase
-      .from("staff_identity_aliases")
-      .select("id, person_id")
-      .eq("shop_domain", shop)
-      .eq("alias_type", aliasType)
-      .eq("alias_value", aliasValue)
-      .maybeSingle();
-  let existing = await findExisting();
-  if (existing.error) return false;
-
-  if (!existing.data) {
-    const inserted = await supabase.from("staff_identity_aliases").insert({
-      shop_domain: shop,
-      person_id: personId,
-      alias_type: aliasType,
-      alias_value: aliasValue,
-      source: "authenticated_session",
-      review_status: "mapped",
-      first_seen_at: now,
-      last_seen_at: now,
-      updated_at: now,
-    });
-    if (!inserted.error) return true;
-    if (inserted.error.code !== "23505") return false;
-    existing = await findExisting();
-    if (existing.error || !existing.data) return false;
-  }
-
-  if (existing.data.person_id === null) {
-    const claimed = await supabase
-      .from("staff_identity_aliases")
-      .update({
-        person_id: personId,
-        source: "authenticated_session",
-        review_status: "mapped",
-        last_seen_at: now,
-        updated_at: now,
-      })
-      .eq("shop_domain", shop)
-      .eq("id", existing.data.id)
-      .is("person_id", null)
-      .select("id, person_id")
-      .maybeSingle();
-    if (claimed.error) return false;
-    if (claimed.data?.person_id === personId) return true;
-    existing = await findExisting();
-    if (existing.error || !existing.data) return false;
-  }
-
-  if (existing.data.person_id !== personId) return false;
-  const updated = await supabase
-    .from("staff_identity_aliases")
-    .update({
-      source: "authenticated_session",
-      review_status: "mapped",
-      last_seen_at: now,
-      updated_at: now,
-    })
-    .eq("shop_domain", shop)
-    .eq("id", existing.data.id)
-    .eq("person_id", personId);
-  return !updated.error;
 }
 
 async function markIdentityNeedsAttention({
@@ -449,137 +357,55 @@ async function bindVerifiedMembership({
     };
   }
 
-  for (const identityAlias of [
-    {
-      aliasType: STAFF_ALIAS_TYPES.shopifyAdminUserId,
-      aliasValue: identity.shopifyUserId,
-    },
-    {
-      aliasType: STAFF_ALIAS_TYPES.email,
-      aliasValue: identity.email,
-    },
-  ]) {
-    const existing = await supabase
-      .from("staff_identity_aliases")
-      .select("person_id")
-      .eq("shop_domain", identity.shop)
-      .eq("alias_type", identityAlias.aliasType)
-      .eq("alias_value", identityAlias.aliasValue)
-      .maybeSingle();
-    if (existing.error) {
-      return {
-        membership: null,
-        bindingAttempted: true,
-        activationAttempted: false,
-        result: "storage_unavailable" as const,
-      };
-    }
-    if (
-      existing.data?.person_id &&
-      existing.data.person_id !== membership.personId
-    ) {
-      return {
-        membership: null,
-        bindingAttempted: true,
-        activationAttempted: false,
-        result: "identity_conflict" as const,
-      };
-    }
-  }
-
-  const now = new Date().toISOString();
-  const activated = await supabase
-    .from("dashboard_memberships")
-    .update({
-      shopify_user_id: identity.shopifyUserId,
-      status: "active",
-      updated_at: now,
-    })
-    .eq("shop_domain", identity.shop)
-    .eq("id", membership.id)
-    .eq("status", "active")
-    .is("shopify_user_id", null)
-    .select(
-      "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
-    )
-    .maybeSingle();
+  const activated = await supabase.rpc("bind_verified_shopops_identity", {
+    p_shop_domain: identity.shop,
+    p_membership_id: membership.id,
+    p_person_id: membership.personId,
+    p_shopify_user_id: identity.shopifyUserId,
+    p_verified_email: identity.email,
+  });
   if (activated.error) {
     return {
       membership: null,
       bindingAttempted: true,
       activationAttempted: true,
       result:
-        activated.error.code === "23505"
+        activated.error.code === "23505" ||
+        activated.error.message.includes("identity_in_use")
           ? ("identity_conflict" as const)
           : ("storage_unavailable" as const),
     };
   }
 
-  let boundMembership = activated.data
-    ? toMembership(activated.data as MembershipRow)
-    : null;
-  if (!boundMembership) {
-    const concurrent = await supabase
-      .from("dashboard_memberships")
-      .select(
-        "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
-      )
-      .eq("shop_domain", identity.shop)
-      .eq("id", membership.id)
-      .maybeSingle();
-    if (
-      concurrent.error ||
-      concurrent.data?.status !== "active" ||
-      concurrent.data.shopify_user_id !== identity.shopifyUserId
-    ) {
-      return {
-        membership: null,
-        bindingAttempted: true,
-        activationAttempted: true,
-        result: concurrent.error
-          ? ("storage_unavailable" as const)
-          : ("identity_conflict" as const),
-      };
-    }
-    boundMembership = toMembership(concurrent.data as MembershipRow);
-  }
-
-  let aliasSyncSucceeded = true;
-  for (const identityAlias of [
-    {
-      aliasType: STAFF_ALIAS_TYPES.shopifyAdminUserId,
-      aliasValue: identity.shopifyUserId,
-    },
-    {
-      aliasType: STAFF_ALIAS_TYPES.email,
-      aliasValue: identity.email,
-    },
-  ]) {
-    const linked = await mapIdentityAlias({
-      supabase,
-      shop: identity.shop,
-      personId: membership.personId,
-      aliasType: identityAlias.aliasType,
-      aliasValue: identityAlias.aliasValue,
-      now,
-    });
-    aliasSyncSucceeded &&= linked;
-  }
-
-  const locationAccess = await supabase
-    .from("user_location_access")
-    .update({ shopify_user_id: identity.shopifyUserId })
+  const bound = await supabase
+    .from("dashboard_memberships")
+    .select(
+      "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
+    )
     .eq("shop_domain", identity.shop)
-    .eq("membership_id", membership.id);
+    .eq("id", membership.id)
+    .maybeSingle();
+  if (
+    bound.error ||
+    !bound.data ||
+    bound.data.status !== "active" ||
+    bound.data.shopify_user_id !== identity.shopifyUserId
+  ) {
+    return {
+      membership: null,
+      bindingAttempted: true,
+      activationAttempted: true,
+      result: bound.error
+        ? ("storage_unavailable" as const)
+        : ("identity_conflict" as const),
+    };
+  }
 
   return {
-    membership: boundMembership,
+    membership: toMembership(bound.data as MembershipRow),
     bindingAttempted: true,
     activationAttempted: true,
-    result:
-      aliasSyncSucceeded && !locationAccess.error
-        ? ("bound" as const)
-        : ("bound_alias_sync_pending" as const),
+    result: "bound" as const,
   };
 }
 
@@ -644,36 +470,17 @@ async function synchronizeVerifiedEmail({
     }
   }
 
-  const now = new Date().toISOString();
-  if (membership.personId) {
-    const person = await supabase
-      .from("staff_people")
-      .update({ email: identity.email, updated_at: now })
-      .eq("shop_domain", identity.shop)
-      .eq("id", membership.personId);
-    if (person.error) return { membership, needsAttention: true };
-    const aliasMapped = await mapIdentityAlias({
-      supabase,
-      shop: identity.shop,
-      personId: membership.personId,
-      aliasType: STAFF_ALIAS_TYPES.email,
-      aliasValue: identity.email,
-      now,
-    });
-    if (!aliasMapped) return { membership, needsAttention: true };
+  if (!membership.personId || !identity.shopifyUserId) {
+    return { membership, needsAttention: true };
   }
-  const updated = await supabase
-    .from("dashboard_memberships")
-    .update({ normalized_email: identity.email, updated_at: now })
-    .eq("shop_domain", identity.shop)
-    .eq("id", membership.id)
-    .eq("shopify_user_id", identity.shopifyUserId);
+  const updated = await supabase.rpc("bind_verified_shopops_identity", {
+    p_shop_domain: identity.shop,
+    p_membership_id: membership.id,
+    p_person_id: membership.personId,
+    p_shopify_user_id: identity.shopifyUserId,
+    p_verified_email: identity.email,
+  });
   if (updated.error) return { membership, needsAttention: true };
-  await supabase
-    .from("user_location_access")
-    .update({ user_email: identity.email })
-    .eq("shop_domain", identity.shop)
-    .eq("membership_id", membership.id);
   return {
     membership: { ...membership, userEmail: identity.email },
     needsAttention: false,
@@ -885,21 +692,30 @@ export async function getPermissionContext({
 
   const allowedLocationIds = new Set<string>();
   if (activeMembership && !activeMembership.isOwner) {
-    const accessRows = await fetchAllSupabasePages<PermissionRow>({
-      label: "Dashboard location access",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("user_location_access")
-          .select("id, shopify_location_id, can_view, can_manage")
-          .eq("shop_domain", session.shop)
-          .eq("membership_id", activeMembership.id)
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: PermissionRow[] | null;
-          error: { message: string } | null;
-        }>,
-    });
+    const membershipSnapshot = membershipRows.find(
+      (row) => row.id === activeMembership.id,
+    );
+    // Identity-binding and duplicate-resolution RPCs may have committed after
+    // membershipRows was loaded. Overlay their verified result so this same
+    // request evaluates the freshly canonicalized location rows correctly.
+    const canonicalMembership = membershipSnapshot
+      ? {
+          ...membershipSnapshot,
+          person_id: activeMembership.personId,
+          shopify_user_id: activeMembership.shopifyUserId,
+          normalized_email: activeMembership.userEmail,
+          display_name: activeMembership.displayName,
+          role: activeMembership.role,
+          status: activeMembership.status,
+          is_owner: activeMembership.isOwner,
+        }
+      : null;
+    const accessRows = canonicalMembership
+      ? await loadCanonicalMembershipLocationAccess({
+          membership: canonicalMembership,
+          supabase,
+        })
+      : [];
 
     for (const row of accessRows) {
       if (!row.shopify_location_id || row.shopify_location_id === "*") continue;

@@ -26,6 +26,8 @@
     "vite": "vite",
     "sync:local": "vite-node ./scripts/local-refresh.ts",
     "cron:maintenance": "node ./scripts/run-maintenance-tick.mjs",
+    "shopops:access-audit": "node ./scripts/shopops-access-maintenance.mjs audit",
+    "shopops:access-repair": "node ./scripts/shopops-access-maintenance.mjs repair",
     "typecheck": "react-router typegen && tsc --noEmit"
   },
   "type": "module",

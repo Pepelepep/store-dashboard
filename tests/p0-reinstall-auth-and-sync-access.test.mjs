@@ -77,6 +77,11 @@ import {
   isValidShopOpsEmail,
   normalizeShopOpsEmail,
 } from "../app/lib/auth/shopops-access.ts";
+import {
+  buildAccessAudit,
+  maskEmail,
+  parseAccessMaintenanceArgs,
+} from "../scripts/shopops-access-maintenance.mjs";
 
 const shop = "shopops-fresh-qa.myshopify.com";
 
@@ -640,7 +645,7 @@ const estimatesDisabled = {
 test("COGS estimates are disabled by default and missing cost stays missing", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260726120000_add_shop_cogs_estimates.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260726120000_add_shop_cogs_estimates.sql",
       import.meta.url,
     ),
     "utf8",
@@ -1071,7 +1076,7 @@ test("merchant navigation is the exact role-aware five-section information archi
 test("COGS recompute functions and settings update are service-role-only", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260726120000_add_shop_cogs_estimates.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260726120000_add_shop_cogs_estimates.sql",
       import.meta.url,
     ),
     "utf8",
@@ -1173,7 +1178,7 @@ test("Product costs uses bounded SQL aggregation instead of loading order lines"
 test("Product-cost SQL provides summary, pagination, search, and exact count", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260727120000_add_product_cost_setup_aggregation.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260727120000_add_product_cost_setup_aggregation.sql",
       import.meta.url,
     ),
     "utf8",
@@ -1196,7 +1201,7 @@ test("Product-cost SQL provides summary, pagination, search, and exact count", (
 test("Product-cost aggregation RPCs are service-role-only", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260727120000_add_product_cost_setup_aggregation.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260727120000_add_product_cost_setup_aggregation.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3036,13 +3041,20 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
 test("membership RPCs lock each shop and enforce owner, last-admin, archived-staff, and concurrent capacity rules", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
       import.meta.url,
     ),
     "utf8",
   );
   const staffRoute = readFileSync(
     new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const canonicalMigration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260802120000_canonical_shopops_access.sql",
+      import.meta.url,
+    ),
     "utf8",
   );
   const legacyRoute = readFileSync(
@@ -3063,7 +3075,7 @@ test("membership RPCs lock each shop and enforce owner, last-admin, archived-sta
   assert.match(migration, /people\.is_active = true/);
   assert.match(migration, /expand migration can be applied safely/);
   assert.match(staffRoute, /getFreshPlanLimits/);
-  assert.match(staffRoute, /replace_dashboard_membership_access/);
+  assert.match(staffRoute, /grant_or_update_shopops_access/);
   assert.match(staffRoute, /disable_dashboard_membership/);
   assert.match(staffRoute, /archive_staff_with_dashboard_protection/);
   assert.match(
@@ -3074,6 +3086,12 @@ test("membership RPCs lock each shop and enforce owner, last-admin, archived-sta
   assert.match(staffRoute, /intent === "add_person"/);
   assert.match(staffRoute, /Dashboard access was not changed\./);
   assert.doesNotMatch(staffRoute, /replace_staff_dashboard_access/);
+  assert.match(canonicalMigration, /grant_or_update_shopops_access/);
+  assert.match(canonicalMigration, /p_restore_archived boolean/);
+  assert.match(
+    canonicalMigration,
+    /Location configuration is deliberately preserved/,
+  );
   assert.match(legacyRoute, /\/app\/people/);
   assert.match(legacyRoute, /url\.searchParams\.set\("tab", "access"\)/);
   assert.doesNotMatch(legacyRoute, /\.rpc\(/);
@@ -3082,7 +3100,7 @@ test("membership RPCs lock each shop and enforce owner, last-admin, archived-sta
 test("Shopify location state, reporting selection, report filters, and full sync remain separate", () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3211,8 +3229,8 @@ test("People separates sales attribution from active ShopOps membership", () => 
   assert.match(accessPresentation, /Needs attention/);
   assert.match(accessPresentation, /Access revoked/);
   assert.match(people, /getFreshPlanLimits/);
-  assert.match(people, /\.from\("dashboard_memberships"\)/);
-  assert.match(people, /replace_dashboard_membership_access/);
+  assert.match(people, /loadCanonicalShopAccess/);
+  assert.match(people, /grant_or_update_shopops_access/);
   assert.match(people, /p_dashboard_user_limit/);
   assert.match(people, /function AddPersonForm/);
   assert.match(people, /name="intent" value="add_person"/);
@@ -3223,8 +3241,8 @@ test("People separates sales attribution from active ShopOps membership", () => 
     /defaultCapability=\{tab === "access" \? "access" : "sales"\}/,
   );
   assert.match(people, /Email is required for ShopOps access\./);
-  assert.match(people, /if \(!shopOpsAccess\)/);
-  assert.match(people, /p_shopify_user_ids: \[\]/);
+  assert.match(people, /if \(shopOpsAccess\)/);
+  assert.doesNotMatch(people, /p_shopify_user_ids/);
   assert.match(people, /<Button primary onClick=\{\(\) => open\("add"\)\}>/);
   assert.match(people, /Add person/);
   assert.doesNotMatch(people, /Add staff|Add ShopOps user|add_shopops_user/);
@@ -3292,14 +3310,14 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   );
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
       import.meta.url,
     ),
     "utf8",
   );
   const identityMigration = readFileSync(
     new URL(
-      "../supabase/migrations/20260708200000_add_staff_identity_mapping.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260708200000_add_staff_identity_mapping.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3311,10 +3329,10 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   assert.match(accessService, /STAFF_ALIAS_TYPES\.email/);
   assert.match(accessService, /created\.error\?\.code === "23505"/);
   assert.match(accessService, /restore_archived_staff/);
-  assert.match(people, /replace_dashboard_membership_access/);
+  assert.match(people, /grant_or_update_shopops_access/);
   assert.match(people, /disable_dashboard_membership/);
   assert.match(people, /archive_staff_with_dashboard_protection/);
-  assert.match(people, /p_shopify_user_ids: \[\]/);
+  assert.doesNotMatch(people, /p_shopify_user_ids/);
   assert.match(shopOpsAccess, /Waiting for first sign-in/);
   assert.match(people, /Grant access/);
   assert.match(people, /Edit role/);
@@ -3327,18 +3345,13 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   assert.match(shopOpsAccess, /associatedUser\?\.email_verified/);
   assert.match(permissions, /identity\.isEmailVerified &&/);
   assert.match(permissions, /bindVerifiedMembership/);
-  assert.match(permissions, /shopify_user_id: identity\.shopifyUserId/);
-  assert.match(permissions, /\.is\("shopify_user_id", null\)/);
+  assert.match(permissions, /bind_verified_shopops_identity/);
+  assert.match(permissions, /p_shopify_user_id: identity\.shopifyUserId/);
   assert.match(permissions, /activated\.error\.code === "23505"/);
-  assert.match(permissions, /concurrent\.data\.shopify_user_id/);
-  assert.match(permissions, /existing\.data\.person_id === null/);
-  assert.match(permissions, /\.is\("person_id", null\)/);
-  assert.match(permissions, /bound_alias_sync_pending/);
-  assert.ok(
-    permissions.indexOf("const activated = await supabase") <
-      permissions.indexOf("let aliasSyncSucceeded = true"),
-    "the unique membership binding must be the primary atomic transition",
-  );
+  assert.doesNotMatch(permissions, /existing\.data\.person_id === null/);
+  assert.doesNotMatch(permissions, /\.is\("person_id", null\)/);
+  assert.doesNotMatch(permissions, /bound_alias_sync_pending/);
+  assert.doesNotMatch(permissions, /let aliasSyncSucceeded/);
   assert.ok(
     permissions.indexOf("const linked = await bindVerifiedMembership") <
       permissions.indexOf("export async function assertDashboardAccess"),
@@ -3363,7 +3376,7 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   }
   const diagnosticLogger = permissions.slice(
     permissions.indexOf("function logFirstSignInResolution"),
-    permissions.indexOf("async function mapIdentityAlias"),
+    permissions.indexOf("async function markIdentityNeedsAttention"),
   );
   assert.doesNotMatch(
     diagnosticLogger,
@@ -3413,7 +3426,7 @@ test("revoked hidden identity consolidates one explicit waiting approval without
   );
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      "../supabase/migrations/20260802120000_canonical_shopops_access.sql",
       import.meta.url,
     ),
     "utf8",
@@ -3440,38 +3453,21 @@ test("revoked hidden identity consolidates one explicit waiting approval without
   assert.match(consolidation, /thirdAccessClaim/);
   assert.match(consolidation, /hasAttributedIdentity && !allowAttributedMerge/);
   assert.match(consolidation, /reason: "attribution_conflict"/);
-  assert.match(consolidation, /p_person_id: boundPerson\.id/);
-  assert.match(consolidation, /p_role: waitingMembership\.role/);
-  assert.match(consolidation, /p_location_ids: locationIds/);
-  assert.match(consolidation, /p_shopify_user_ids: \[shopifyUserId\]/);
-  assert.match(consolidation, /p_dashboard_user_limit: null/);
-  assert.match(consolidation, /rollbackClaim/);
+  assert.match(consolidation, /resolve_duplicate_shopops_access/);
+  assert.match(consolidation, /p_owner_membership_id: ownerMembership\.id/);
+  assert.match(consolidation, /p_revoked_membership_id: revokedMembership\.id/);
+  assert.match(consolidation, /p_waiting_membership_id: waitingMembership\.id/);
+  assert.match(consolidation, /p_allow_attributed_merge: allowAttributedMerge/);
+  assert.doesNotMatch(consolidation, /rollbackClaim/);
   assert.match(consolidation, /isCanonicalResolvedMembership/);
-  assert.match(consolidation, /waitForCanonicalResolution/);
-  assert.match(consolidation, /const replacementCommitted =/);
+  assert.doesNotMatch(consolidation, /\.update\(|\.delete\(\)/);
   assert.match(
-    consolidation,
-    /\.eq\("updated_at", waitingMembership\.updated_at\)/,
+    migration,
+    /CREATE OR REPLACE FUNCTION public\.resolve_duplicate_shopops_access/,
   );
-  assert.match(consolidation, /\.eq\("status", "active"\)/);
-  assert.match(consolidation, /\.is\("shopify_user_id", null\)/);
-  assert.match(
-    consolidation,
-    /\.from\("staff_identity_aliases"\)[\s\S]*?\.update\(\{ person_id: boundPerson\.id/,
-  );
-  assert.doesNotMatch(
-    consolidation,
-    /\.from\("staff_identity_aliases"\)[\s\S]{0,80}?\.delete\(\)/,
-  );
-  assert.ok(
-    consolidation.indexOf('rpc("replace_dashboard_membership_access"') <
-      consolidation.indexOf('.from("dashboard_memberships")\n    .delete()'),
-    "canonical access must be committed before the duplicate waiting membership is removed",
-  );
-  assert.match(
-    consolidation,
-    /\.from\("staff_people"\)[\s\S]*?\.delete\(\)[\s\S]*?waitingPerson\.id/,
-  );
+  assert.match(migration, /UPDATE public\.staff_identity_aliases/);
+  assert.match(migration, /DELETE FROM public\.dashboard_memberships/);
+  assert.match(migration, /DELETE FROM public\.staff_people/);
 
   assert.match(people, /duplicateAccessConflict/);
   assert.match(people, /Resolve duplicate access/);
@@ -3484,10 +3480,342 @@ test("revoked hidden identity consolidates one explicit waiting approval without
   );
   assert.doesNotMatch(people, /Shopify user ID/);
 
-  assert.match(migration, /dashboard_memberships_shop_person_uidx/);
-  assert.match(migration, /dashboard_memberships_shop_email_uidx/);
-  assert.match(migration, /dashboard_memberships_shop_user_id_uidx/);
+  assert.match(migration, /dashboard_memberships_shop_person_fkey/);
+  assert.match(migration, /user_location_access_shop_membership_fkey/);
+  assert.match(migration, /user_location_access_membership_required_check/);
   assert.match(migration, /pg_advisory_xact_lock/);
+});
+
+test("canonical ShopOps access hardening rejects partial, orphan, duplicate, and cross-shop graphs", () => {
+  const baseMigration = readFileSync(
+    new URL(
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260731120000_dashboard_memberships_and_reporting_locations.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260802120000_canonical_shopops_access.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const resolver = readFileSync(
+    new URL("../app/lib/auth/canonical-access.server.ts", import.meta.url),
+    "utf8",
+  );
+  const people = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const permissions = readFileSync(
+    new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /dashboard_memberships_person_required_check/);
+  assert.match(migration, /user_location_access_membership_required_check/);
+  assert.match(
+    migration,
+    /FOREIGN KEY \(shop_domain, membership_id\)[\s\S]*?REFERENCES public\.dashboard_memberships \(shop_domain, id\)/,
+  );
+  assert.match(
+    migration,
+    /FOREIGN KEY \(shop_domain, person_id\)[\s\S]*?REFERENCES public\.staff_people \(shop_domain, id\)/,
+  );
+  assert.match(migration, /NOT VALID/g);
+  assert.match(baseMigration, /dashboard_memberships_shop_person_uidx/);
+  assert.match(baseMigration, /dashboard_memberships_shop_email_uidx/);
+  assert.match(baseMigration, /dashboard_memberships_shop_user_id_uidx/);
+  assert.match(resolver, /missing_membership_reference/);
+  assert.match(resolver, /membership_not_in_shop/);
+  assert.match(resolver, /person_mismatch/);
+  assert.match(resolver, /email_mismatch/);
+  assert.match(resolver, /hidden_identity_mismatch/);
+  assert.match(resolver, /canonicalLocationAccess\.push/);
+  assert.match(people, /loadCanonicalShopAccess/);
+  assert.match(people, /row\.membership_id === membership\.id/);
+  assert.match(people, /hasAccessIntegrityIssue/);
+  assert.match(people, /Repair access/);
+  assert.match(people, /Only the store owner can repair ShopOps access/);
+  assert.doesNotMatch(people, /data\.get\("membership_id"\)/);
+  assert.match(permissions, /loadCanonicalMembershipLocationAccess/);
+  assert.match(permissions, /const membershipSnapshot = membershipRows\.find/);
+  assert.match(permissions, /shopify_user_id: activeMembership\.shopifyUserId/);
+});
+
+test("ShopOps grant, owner, bind, revoke, archive, and duplicate operations have transactional lifecycle semantics", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260802120000_canonical_shopops_access.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const people = readFileSync(
+    new URL("../app/routes/app.admin.staff.tsx", import.meta.url),
+    "utf8",
+  );
+  const permissions = readFileSync(
+    new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  for (const rpc of [
+    "materialize_dashboard_owner",
+    "grant_or_update_shopops_access",
+    "bind_verified_shopops_identity",
+    "resolve_duplicate_shopops_access",
+    "update_shopops_person_profile",
+    "repair_shopops_access_integrity",
+  ]) {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${rpc}`));
+  }
+  const grant = migration.slice(
+    migration.indexOf("FUNCTION public.grant_or_update_shopops_access"),
+    migration.indexOf("FUNCTION public.disable_dashboard_membership"),
+  );
+  assert.ok(
+    grant.indexOf("INSERT INTO public.dashboard_memberships") <
+      grant.indexOf("INSERT INTO public.user_location_access"),
+  );
+  assert.match(grant, /p_person_id uuid/);
+  assert.match(grant, /p_restore_archived boolean/);
+  assert.match(grant, /dashboard_identity_ambiguous/);
+  assert.match(grant, /dashboard_plan_capacity/);
+  assert.match(grant, /DELETE FROM public\.user_location_access/);
+  assert.match(grant, /INSERT INTO public\.user_location_access/);
+  const revoke = migration.slice(
+    migration.indexOf("FUNCTION public.disable_dashboard_membership"),
+    migration.indexOf(
+      "FUNCTION public.archive_staff_with_dashboard_protection",
+    ),
+  );
+  assert.match(revoke, /SET status = 'disabled'/);
+  assert.doesNotMatch(revoke, /DELETE FROM public\.user_location_access/);
+  const archive = migration.slice(
+    migration.indexOf(
+      "FUNCTION public.archive_staff_with_dashboard_protection",
+    ),
+    migration.indexOf("FUNCTION public.bind_verified_shopops_identity"),
+  );
+  assert.match(archive, /SET status = 'disabled'/);
+  assert.doesNotMatch(archive, /DELETE FROM public\.user_location_access/);
+  const owner = migration.slice(
+    migration.indexOf("FUNCTION public.materialize_dashboard_owner"),
+    migration.indexOf("FUNCTION public.grant_or_update_shopops_access"),
+  );
+  assert.match(owner, /INSERT INTO public\.staff_people/);
+  assert.match(owner, /INSERT INTO public\.dashboard_memberships/);
+  assert.match(owner, /shopify_location_id, location_name/);
+  assert.match(owner, /'\*', 'All reporting locations'/);
+  const repair = migration.slice(
+    migration.indexOf("FUNCTION public.repair_shopops_access_integrity"),
+    migration.indexOf("REVOKE ALL ON FUNCTION"),
+  );
+  assert.doesNotMatch(repair, /DELETE FROM public\.staff_identity_aliases/);
+  assert.doesNotMatch(repair, /order_lines|orders|staff_pos_seller_metrics/);
+  const addPerson = people.slice(
+    people.indexOf('if (intent === "add_person")'),
+    people.indexOf('intent === "save_dashboard_access"'),
+  );
+  assert.ok(
+    addPerson.indexOf('rpc("grant_or_update_shopops_access"') <
+      addPerson.indexOf("let person"),
+    "the ShopOps branch must commit through the RPC before sales-only person creation",
+  );
+  assert.match(permissions, /rpc\("bind_verified_shopops_identity"/);
+  assert.doesNotMatch(permissions, /let aliasSyncSucceeded/);
+  assert.match(people, /rpc\("update_shopops_person_profile"/);
+});
+
+test("access maintenance is read-only by default, masks identities, and plans the demo repair idempotently", () => {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  const maintenance = readFileSync(
+    new URL("../scripts/shopops-access-maintenance.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.equal(
+    packageJson.scripts["shopops:access-audit"],
+    "node ./scripts/shopops-access-maintenance.mjs audit",
+  );
+  assert.equal(
+    packageJson.scripts["shopops:access-repair"],
+    "node ./scripts/shopops-access-maintenance.mjs repair",
+  );
+  assert.deepEqual(
+    parseAccessMaintenanceArgs([
+      "--shop",
+      "shopops-demo.myshopify.com",
+      "--email",
+      "Pierre.Paul.Quilichini@outlook.fr",
+    ]),
+    {
+      shop: "shopops-demo.myshopify.com",
+      email: "pierre.paul.quilichini@outlook.fr",
+      apply: false,
+      confirmProduction: false,
+    },
+  );
+  assert.equal(
+    maskEmail("pierre.paul.quilichini@outlook.fr"),
+    "p***@outlook.fr",
+  );
+  assert.match(maintenance, /command === "audit" \|\| !args\.apply/);
+  assert.match(maintenance, /--confirm-production/);
+  assert.match(maintenance, /repair_shopops_access_integrity/);
+  assert.doesNotMatch(maintenance, /console\.log\([^)]*shopify_user_id/);
+
+  const report = buildAccessAudit({
+    shop: "shopops-demo.myshopify.com",
+    email: "pierre.paul.quilichini@outlook.fr",
+    people: [
+      {
+        id: "person-outlook",
+        shop_domain: "shopops-demo.myshopify.com",
+        email: "pierre.paul.quilichini@outlook.fr",
+        is_active: true,
+      },
+    ],
+    memberships: [],
+    access: [
+      {
+        membership_id: "hidden-owner-membership",
+        person_id: null,
+        user_email: null,
+        role: "admin",
+        shopify_location_id: "*",
+        location_name: "All reporting locations",
+      },
+      {
+        membership_id: "hidden-viewer-membership",
+        person_id: "person-outlook",
+        user_email: "pierre.paul.quilichini@outlook.fr",
+        role: "viewer",
+        shopify_location_id: "location-laval",
+        location_name: "Laval Store",
+      },
+    ],
+  });
+  assert.equal(report.mode, "read-only audit");
+  assert.equal(report.targetEmail, "p***@outlook.fr");
+  assert.deepEqual(report.expectedAfter.targetLocations, ["Laval Store"]);
+  assert.equal(report.expectedAfter.targetRole, "viewer");
+  assert.equal(report.expectedAfter.ownerMemberships, 1);
+  assert.equal(report.expectedAfter.targetMemberships, 1);
+  assert.ok(report.proposedWrites.length > 0);
+  const serialized = JSON.stringify(report);
+  for (const rawId of [
+    "hidden-owner-membership",
+    "hidden-viewer-membership",
+    "person-outlook",
+    "location-laval",
+  ]) {
+    assert.doesNotMatch(serialized, new RegExp(rawId));
+  }
+
+  const canonical = buildAccessAudit({
+    shop: "shopops-demo.myshopify.com",
+    email: "pierre.paul.quilichini@outlook.fr",
+    people: [
+      {
+        id: "owner-person",
+        shop_domain: "shopops-demo.myshopify.com",
+        email: "owner@example.com",
+        is_active: true,
+      },
+      {
+        id: "viewer-person",
+        shop_domain: "shopops-demo.myshopify.com",
+        email: "pierre.paul.quilichini@outlook.fr",
+        is_active: true,
+      },
+    ],
+    memberships: [
+      {
+        id: "owner-membership",
+        shop_domain: "shopops-demo.myshopify.com",
+        person_id: "owner-person",
+        normalized_email: "owner@example.com",
+        shopify_user_id: "private-owner-binding",
+        role: "owner",
+        status: "active",
+        is_owner: true,
+      },
+      {
+        id: "viewer-membership",
+        shop_domain: "shopops-demo.myshopify.com",
+        person_id: "viewer-person",
+        normalized_email: "pierre.paul.quilichini@outlook.fr",
+        shopify_user_id: null,
+        role: "viewer",
+        status: "active",
+        is_owner: false,
+      },
+    ],
+    access: [
+      {
+        membership_id: "owner-membership",
+        person_id: "owner-person",
+        user_email: "owner@example.com",
+        role: "admin",
+        shopify_location_id: "*",
+        location_name: "All reporting locations",
+      },
+      {
+        membership_id: "viewer-membership",
+        person_id: "viewer-person",
+        user_email: "pierre.paul.quilichini@outlook.fr",
+        role: "viewer",
+        shopify_location_id: "location-laval",
+        location_name: "Laval Store",
+      },
+    ],
+  });
+  assert.deepEqual(canonical.proposedWrites, []);
+
+  const hiddenMismatch = buildAccessAudit({
+    shop: "shopops-demo.myshopify.com",
+    email: null,
+    people: [
+      {
+        id: "owner-person",
+        shop_domain: "shopops-demo.myshopify.com",
+        email: "owner@example.com",
+        is_active: true,
+      },
+    ],
+    memberships: [
+      {
+        id: "owner-membership",
+        shop_domain: "shopops-demo.myshopify.com",
+        person_id: "owner-person",
+        normalized_email: "owner@example.com",
+        shopify_user_id: "canonical-private-binding",
+        role: "owner",
+        status: "active",
+        is_owner: true,
+      },
+    ],
+    access: [
+      {
+        membership_id: "owner-membership",
+        person_id: "owner-person",
+        user_email: "owner@example.com",
+        shopify_user_id: "different-private-binding",
+        role: "admin",
+        shopify_location_id: "*",
+        location_name: "All reporting locations",
+      },
+    ],
+  });
+  assert.equal(
+    hiddenMismatch.before.integrityIssues.hidden_identity_mismatch,
+    1,
+  );
 });
 
 test("Dashboard onboarding is compact, admin-only, and disappears when complete", () => {
@@ -3950,7 +4278,7 @@ test("merchant pages share the ShopOps presentation layer without editable owner
   assert.match(ownerRow, /PersonLockIcon/);
   assert.doesNotMatch(ownerRow, /<button|<select/);
   assert.match(people, /open\("access", profile\)/);
-  assert.match(people, /replace_dashboard_membership_access/);
+  assert.match(people, /grant_or_update_shopops_access/);
 
   assert.match(costs, /title="Costs"/);
   assert.match(costs, /label="Configured monthly amount"/);
@@ -4079,7 +4407,7 @@ test("primary filter reset key changes only with applied dashboard dimensions", 
 test("minimal completed and failed compliance events remain recordable after shop deletion", async () => {
   const migration = readFileSync(
     new URL(
-      "../supabase/migrations/20260601_add_compliance_webhook_events.sql",
+      "../supabase/legacy-migrations/pre-baseline-20260802/20260601_add_compliance_webhook_events.sql",
       import.meta.url,
     ),
     "utf8",
