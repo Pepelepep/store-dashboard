@@ -24,6 +24,10 @@ import {
 } from "../components/ui/ShopOpsPage";
 import { assertAdminAccess } from "../lib/auth/permissions.server";
 import {
+  loadCanonicalShopAccess,
+  type CanonicalAccessIntegrityIssue,
+} from "../lib/auth/canonical-access.server";
+import {
   findDuplicateAccessCandidate,
   resolveApprovedDuplicateAccess,
 } from "../lib/auth/duplicate-access.server";
@@ -98,10 +102,12 @@ type StaffProfile = StaffPersonRow & {
   posMetrics: SellerMetric;
   canHardDelete: boolean;
   duplicateAccessConflict: boolean;
+  hasAccessIntegrityIssue: boolean;
 };
 type LoaderData = {
   shop: string;
   canResolveDuplicateAccess: boolean;
+  canRepairAccess: boolean;
   profiles: StaffProfile[];
   pending: StaffAlias[];
   deferred: StaffAlias[];
@@ -266,6 +272,24 @@ function hasIdentityAttention({
   });
 }
 
+function integrityIssueMatchesPerson({
+  issue,
+  membership,
+  person,
+}: {
+  issue: CanonicalAccessIntegrityIssue;
+  membership: MembershipRow | null;
+  person: StaffPersonRow;
+}) {
+  const email = normalizeShopOpsEmail(person.email);
+  return Boolean(
+    issue.personId === person.id ||
+    issue.membershipPersonId === person.id ||
+    (membership && issue.membershipId === membership.id) ||
+    (email && issue.userEmail === email),
+  );
+}
+
 function getDuplicateAccessWaitingPersonIds({
   aliases,
   memberships,
@@ -342,8 +366,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const [
     peopleResult,
     aliasesResult,
-    permissionsResult,
-    membershipsResult,
+    canonicalAccess,
     locationsResult,
     metricsResult,
     setupResult,
@@ -363,18 +386,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       )
       .eq("shop_domain", session.shop)
       .order("last_seen_at", { ascending: false, nullsFirst: false }),
-    supabase
-      .from("user_location_access")
-      .select(
-        "membership_id, person_id, user_email, shopify_user_id, role, shopify_location_id, location_name",
-      )
-      .eq("shop_domain", session.shop),
-    supabase
-      .from("dashboard_memberships")
-      .select(
-        "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
-      )
-      .eq("shop_domain", session.shop),
+    loadCanonicalShopAccess({ shop: session.shop, supabase }),
     supabase
       .from("locations")
       .select("shopify_location_id, name")
@@ -407,8 +419,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   for (const result of [
     peopleResult,
     aliasesResult,
-    permissionsResult,
-    membershipsResult,
     locationsResult,
     metricsResult,
     setupResult,
@@ -417,8 +427,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     if (result.error) throw new Response(result.error.message, { status: 500 });
   const people = (peopleResult.data ?? []) as StaffPersonRow[];
   const aliases = (aliasesResult.data ?? []) as StaffAlias[];
-  const permissions = (permissionsResult.data ?? []) as PermissionRow[];
-  const memberships = (membershipsResult.data ?? []) as MembershipRow[];
+  const permissions =
+    canonicalAccess.canonicalLocationAccess as PermissionRow[];
+  const memberships = canonicalAccess.memberships as MembershipRow[];
   const duplicateAccessWaitingPersonIds = getDuplicateAccessWaitingPersonIds({
     aliases,
     memberships,
@@ -455,10 +466,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     );
     const membership =
       memberships.find((item) => item.person_id === person.id) ?? null;
-    const personPermissions = permissions.filter(
-      (row) =>
-        row.person_id === person.id ||
-        Boolean(membership && row.membership_id === membership.id),
+    const personPermissions = membership
+      ? permissions.filter((row) => row.membership_id === membership.id)
+      : [];
+    const hasAccessIntegrityIssue = canonicalAccess.integrityIssues.some(
+      (issue) => integrityIssueMatchesPerson({ issue, membership, person }),
     );
     const personDashboardAccess = accessStatus(membership);
     const accessState = getShopOpsAccessState({
@@ -466,11 +478,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       isPersonActive: person.is_active,
       membershipStatus: membership?.status ?? null,
       shopifyUserId: membership?.shopify_user_id ?? null,
-      needsAttention: hasIdentityAttention({
-        aliases: personAliases,
-        membership,
-        email: person.email,
-      }),
+      needsAttention:
+        hasIdentityAttention({
+          aliases: personAliases,
+          membership,
+          email: person.email,
+        }) || hasAccessIntegrityIssue,
     });
     const posMetrics = personAliases.reduce((total, alias) => {
       const item = metrics.get(metricKey(alias));
@@ -508,6 +521,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         personAliases.length === 0 &&
         posMetrics.orderCount === 0,
       duplicateAccessConflict: duplicateAccessWaitingPersonIds.has(person.id),
+      hasAccessIntegrityIssue,
     };
   });
   const reviewable = aliases.filter(
@@ -542,6 +556,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return {
     shop: session.shop,
     canResolveDuplicateAccess: loaderPermissions.isOwner,
+    canRepairAccess: loaderPermissions.isOwner,
     profiles,
     pending: reviewable.filter((alias) => alias.review_status !== "deferred"),
     deferred: reviewable.filter((alias) => alias.review_status === "deferred"),
@@ -581,6 +596,8 @@ function friendlyAccessError(message?: string, planHandle?: string | null) {
     return "Enter a valid email address.";
   if (message?.includes("staff_email_ambiguous"))
     return "That email needs review before access can be granted.";
+  if (message?.includes("dashboard_email_edit_required"))
+    return "Update the login email from Edit ShopOps access.";
   return "ShopOps access could not be saved. Nothing was changed.";
 }
 
@@ -836,43 +853,15 @@ export async function action({ request }: ActionFunctionArgs) {
     const email = normalizeShopOpsEmail(text(data.get("email")));
     if (!personId || !displayName)
       return { ok: false, message: "Display name is required." };
-    const existingMembership = await supabase
-      .from("dashboard_memberships")
-      .select("id, normalized_email, status")
-      .eq("shop_domain", session.shop)
-      .eq("person_id", personId)
-      .maybeSingle();
-    if (existingMembership.error)
-      return { ok: false, message: existingMembership.error.message };
-    if (
-      existingMembership.data?.status === "active" &&
-      (existingMembership.data.normalized_email ?? "") !== (email ?? "")
-    ) {
-      return {
-        ok: false,
-        message: "Update the login email from Edit ShopOps access.",
-      };
-    }
-    const result = await supabase
-      .from("staff_people")
-      .update({ display_name: displayName, email, updated_at: now })
-      .eq("shop_domain", session.shop)
-      .eq("id", personId);
-    if (!result.error) {
-      await supabase
-        .from("user_location_access")
-        .update({ access_label: displayName })
-        .eq("shop_domain", session.shop)
-        .eq("person_id", personId);
-      if (existingMembership.data)
-        await supabase
-          .from("dashboard_memberships")
-          .update({ display_name: displayName, updated_at: now })
-          .eq("shop_domain", session.shop)
-          .eq("id", existingMembership.data.id);
-    }
+    const result = await supabase.rpc("update_shopops_person_profile", {
+      p_shop_domain: session.shop,
+      p_actor_membership_id: permissions.membership.id,
+      p_person_id: personId,
+      p_display_name: displayName,
+      p_email: email,
+    });
     return result.error
-      ? { ok: false, message: result.error.message }
+      ? { ok: false, message: friendlyAccessError(result.error.message) }
       : { ok: true, message: "Profile updated." };
   }
   if (intent === "confirm_pos_tile") {
@@ -972,6 +961,34 @@ export async function action({ request }: ActionFunctionArgs) {
           route: "people.add-person",
         })
       : null;
+
+    if (shopOpsAccess) {
+      const result = await supabase.rpc("grant_or_update_shopops_access", {
+        p_shop_domain: session.shop,
+        p_actor_membership_id: permissions.membership.id,
+        p_person_id: null,
+        p_canonical_email: email!,
+        p_display_name: displayName || email!,
+        p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
+        p_location_ids: data.getAll("location_ids").map(text).filter(Boolean),
+        p_dashboard_user_limit: plan!.limits.dashboardUsers,
+        p_restore_archived: true,
+      });
+      return result.error
+        ? {
+            ok: false,
+            message: friendlyAccessError(
+              result.error.message,
+              plan!.limits.planHandle,
+            ),
+          }
+        : {
+            ok: true,
+            message:
+              "Person added. ShopOps access is waiting for the first verified sign-in.",
+          };
+    }
+
     let person;
     try {
       if (email) {
@@ -1009,41 +1026,23 @@ export async function action({ request }: ActionFunctionArgs) {
       };
     }
 
-    if (!shopOpsAccess) {
+    return {
+      ok: true,
+      message: person.restored
+        ? "Person restored. Existing sales attribution and history were preserved."
+        : "Person added. Sales attribution can be linked to detected POS sellers without granting ShopOps access.",
+    };
+  }
+  if (
+    intent === "save_dashboard_access" ||
+    intent === "repair_dashboard_access"
+  ) {
+    if (intent === "repair_dashboard_access" && !permissions.isOwner) {
       return {
-        ok: true,
-        message: person.restored
-          ? "Person restored. Existing sales attribution and history were preserved."
-          : "Person added. Sales attribution can be linked to detected POS sellers without granting ShopOps access.",
+        ok: false,
+        message: "Only the store owner can repair ShopOps access.",
       };
     }
-
-    const result = await supabase.rpc("replace_dashboard_membership_access", {
-      p_shop_domain: session.shop,
-      p_actor_membership_id: permissions.membership.id,
-      p_person_id: person.personId,
-      p_canonical_email: person.email!,
-      p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
-      p_location_ids: data.getAll("location_ids").map(text).filter(Boolean),
-      p_shopify_user_ids: [],
-      p_dashboard_user_limit: plan!.limits.dashboardUsers,
-    });
-    return result.error
-      ? {
-          ok: false,
-          message: friendlyAccessError(
-            result.error.message,
-            plan!.limits.planHandle,
-          ),
-        }
-      : {
-          ok: true,
-          message: person.restored
-            ? "Person restored. ShopOps access is waiting for the first verified sign-in."
-            : "Person added. ShopOps access is waiting for the first verified sign-in.",
-        };
-  }
-  if (intent === "save_dashboard_access") {
     const email = normalizeShopOpsEmail(text(data.get("email")));
     const role = text(data.get("role"));
     if (!personId || !email || !isValidShopOpsEmail(email)) {
@@ -1053,15 +1052,16 @@ export async function action({ request }: ActionFunctionArgs) {
       shop: session.shop,
       route: "people.save-shopops-access",
     });
-    const result = await supabase.rpc("replace_dashboard_membership_access", {
+    const result = await supabase.rpc("grant_or_update_shopops_access", {
       p_shop_domain: session.shop,
       p_actor_membership_id: permissions.membership.id,
       p_person_id: personId,
       p_canonical_email: email,
+      p_display_name: null,
       p_role: ["viewer", "manager", "admin"].includes(role) ? role : "viewer",
       p_location_ids: data.getAll("location_ids").map(text).filter(Boolean),
-      p_shopify_user_ids: [],
       p_dashboard_user_limit: limits.dashboardUsers,
+      p_restore_archived: false,
     });
     return result.error
       ? {
@@ -1180,7 +1180,15 @@ function AccessForm({
   );
   return (
     <Form method="post" className="form-stack">
-      <input type="hidden" name="intent" value="save_dashboard_access" />
+      <input
+        type="hidden"
+        name="intent"
+        value={
+          profile.hasAccessIntegrityIssue
+            ? "repair_dashboard_access"
+            : "save_dashboard_access"
+        }
+      />
       <input type="hidden" name="person_id" value={profile.id} />
       <label>
         Email
@@ -1224,7 +1232,7 @@ function AccessForm({
         Shopify user in the background.
       </p>
       <Button primary type="submit">
-        Save access
+        {profile.hasAccessIntegrityIssue ? "Repair access" : "Save access"}
       </Button>
     </Form>
   );
@@ -1886,6 +1894,7 @@ export default function StaffPage() {
     setMenu(null);
   };
   const locationLabel = (profile: StaffProfile) => {
+    if (profile.hasAccessIntegrityIssue) return "Needs repair";
     const names = [
       ...new Set(
         profile.permissions.map((row) => row.location_name).filter(Boolean),
@@ -2055,7 +2064,9 @@ export default function StaffPage() {
                       open(
                         tab === "access" && !profile.membership?.is_owner
                           ? profile.accessState === "archived" ||
-                            profile.duplicateAccessConflict
+                            profile.duplicateAccessConflict ||
+                            (profile.hasAccessIntegrityIssue &&
+                              !data.canRepairAccess)
                             ? "details"
                             : "access"
                           : "details",
@@ -2070,7 +2081,9 @@ export default function StaffPage() {
                       open(
                         tab === "access" && !profile.membership?.is_owner
                           ? profile.accessState === "archived" ||
-                            profile.duplicateAccessConflict
+                            profile.duplicateAccessConflict ||
+                            (profile.hasAccessIntegrityIssue &&
+                              !data.canRepairAccess)
                             ? "details"
                             : "access"
                           : "details",
@@ -2169,7 +2182,18 @@ export default function StaffPage() {
                           </button>
                         ) : null}
                         {tab === "access" &&
+                        profile.hasAccessIntegrityIssue &&
+                        data.canRepairAccess ? (
+                          <button
+                            type="button"
+                            onClick={() => open("access", profile)}
+                          >
+                            Repair access
+                          </button>
+                        ) : null}
+                        {tab === "access" &&
                         !profile.duplicateAccessConflict &&
+                        !profile.hasAccessIntegrityIssue &&
                         !profile.membership?.is_owner &&
                         profile.accessState === "archived" ? (
                           <Form method="post">
@@ -2613,6 +2637,10 @@ export default function StaffPage() {
                 </Button>
               ) : selected.membership?.is_owner ? (
                 <StatusBadge variant="neutral">Locked</StatusBadge>
+              ) : selected.hasAccessIntegrityIssue && !data.canRepairAccess ? (
+                <InlineNotice tone="warning">
+                  Ask the store owner to repair this access configuration.
+                </InlineNotice>
               ) : selected.accessState === "archived" ? (
                 <Form method="post">
                   <input type="hidden" name="intent" value="restore_staff" />
@@ -2621,11 +2649,13 @@ export default function StaffPage() {
                 </Form>
               ) : (
                 <Button onClick={() => setOverlay("access")}>
-                  {selected.accessState === "revoked"
-                    ? "Re-enable access"
-                    : selected.membership
-                      ? "Edit access"
-                      : "Grant access"}
+                  {selected.hasAccessIntegrityIssue
+                    ? "Repair access"
+                    : selected.accessState === "revoked"
+                      ? "Re-enable access"
+                      : selected.membership
+                        ? "Edit access"
+                        : "Grant access"}
                 </Button>
               )}
             </section>

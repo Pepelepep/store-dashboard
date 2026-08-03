@@ -130,37 +130,6 @@ async function reloadMembership({
   return result.error ? null : (result.data as MembershipRow | null);
 }
 
-async function waitForCanonicalResolution({
-  email,
-  id,
-  shop,
-  shopifyUserId,
-  supabase,
-}: {
-  email: string;
-  id: string;
-  shop: string;
-  shopifyUserId: string;
-  supabase: SupabaseClient;
-}) {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const current = await reloadMembership({ id, shop, supabase });
-    if (
-      isCanonicalResolvedMembership({
-        email,
-        membership: current,
-        shopifyUserId,
-      })
-    ) {
-      return current;
-    }
-    if (attempt < 9) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-  return null;
-}
-
 function isCanonicalResolvedMembership({
   email,
   membership,
@@ -176,52 +145,6 @@ function isCanonicalResolvedMembership({
     membership.shopify_user_id?.trim() === shopifyUserId &&
     normalizeShopOpsEmail(membership.normalized_email) === email,
   );
-}
-
-async function rollbackClaim({
-  aliasIds,
-  boundPerson,
-  email,
-  shop,
-  supabase,
-  waitingMembership,
-  waitingPerson,
-}: {
-  aliasIds: string[];
-  boundPerson: PersonRow;
-  email: string;
-  shop: string;
-  supabase: SupabaseClient;
-  waitingMembership: MembershipRow;
-  waitingPerson: PersonRow;
-}) {
-  if (aliasIds.length > 0) {
-    await supabase
-      .from("staff_identity_aliases")
-      .update({ person_id: waitingPerson.id })
-      .eq("shop_domain", shop)
-      .eq("person_id", boundPerson.id)
-      .in("id", aliasIds);
-  }
-  await supabase
-    .from("staff_people")
-    .update({ is_active: boundPerson.is_active })
-    .eq("shop_domain", shop)
-    .eq("id", boundPerson.id);
-  await supabase
-    .from("staff_people")
-    .update({ email })
-    .eq("shop_domain", shop)
-    .eq("id", waitingPerson.id)
-    .is("email", null);
-  await supabase
-    .from("dashboard_memberships")
-    .update({ normalized_email: email, status: "active" })
-    .eq("shop_domain", shop)
-    .eq("id", waitingMembership.id)
-    .eq("status", "disabled")
-    .is("normalized_email", null)
-    .is("shopify_user_id", null);
 }
 
 export async function resolveApprovedDuplicateAccess({
@@ -432,165 +355,20 @@ export async function resolveApprovedDuplicateAccess({
     };
   }
 
-  const now = new Date().toISOString();
-  const claimed = await supabase
-    .from("dashboard_memberships")
-    .update({ normalized_email: null, status: "disabled", updated_at: now })
-    .eq("shop_domain", shop)
-    .eq("id", waitingMembership.id)
-    .eq("status", "active")
-    .eq("normalized_email", email)
-    .eq("updated_at", waitingMembership.updated_at)
-    .is("shopify_user_id", null)
-    .select("id")
-    .maybeSingle();
-  if (claimed.error || !claimed.data) {
-    const current = await waitForCanonicalResolution({
-      email,
-      id: revokedMembership.id,
-      shop,
-      shopifyUserId,
-      supabase,
-    });
-    return current
-      ? { status: "resolved", membership: current! }
-      : { status: "needs_attention", reason: "resolution_failed" };
-  }
-
-  const clearedPerson = await supabase
-    .from("staff_people")
-    .update({ email: null, updated_at: now })
-    .eq("shop_domain", shop)
-    .eq("id", waitingPerson.id)
-    .ilike("email", email)
-    .select("id")
-    .maybeSingle();
-  const aliasIds = waitingAliases.map((alias) => alias.id);
-  const movedAliases =
-    aliasIds.length === 0
-      ? { data: [], error: null }
-      : await supabase
-          .from("staff_identity_aliases")
-          .update({ person_id: boundPerson.id })
-          .eq("shop_domain", shop)
-          .eq("person_id", waitingPerson.id)
-          .in("id", aliasIds)
-          .select("id, person_id");
-  const restoredBoundPerson = await supabase
-    .from("staff_people")
-    .update({ is_active: true, updated_at: now })
-    .eq("shop_domain", shop)
-    .eq("id", boundPerson.id);
-  if (
-    clearedPerson.error ||
-    !clearedPerson.data ||
-    movedAliases.error ||
-    movedAliases.data?.length !== aliasIds.length ||
-    restoredBoundPerson.error
-  ) {
-    await rollbackClaim({
-      aliasIds,
-      boundPerson,
-      email,
-      shop,
-      supabase,
-      waitingMembership,
-      waitingPerson,
-    });
-    return { status: "needs_attention", reason: "resolution_failed" };
-  }
-
-  await supabase.rpc("replace_dashboard_membership_access", {
+  const resolved = await supabase.rpc("resolve_duplicate_shopops_access", {
     p_shop_domain: shop,
-    p_actor_membership_id: ownerMembership.id,
-    p_person_id: boundPerson.id,
-    p_canonical_email: email,
-    p_role: waitingMembership.role,
-    p_location_ids: locationIds,
-    p_shopify_user_ids: [shopifyUserId],
-    // The waiting membership already reserved this seat. Consolidation removes
-    // one active seat before reactivating the canonical bound membership.
-    p_dashboard_user_limit: null,
+    p_owner_membership_id: ownerMembership.id,
+    p_revoked_membership_id: revokedMembership.id,
+    p_waiting_membership_id: waitingMembership.id,
+    p_shopify_user_id: shopifyUserId,
+    p_verified_email: email,
+    p_allow_attributed_merge: allowAttributedMerge,
   });
-  let resolvedMembership = await reloadMembership({
-    id: revokedMembership.id,
-    shop,
-    supabase,
-  });
-  const replacementCommitted = isCanonicalResolvedMembership({
-    email,
-    membership: resolvedMembership,
-    shopifyUserId,
-  });
-  if (!replacementCommitted) {
-    await rollbackClaim({
-      aliasIds,
-      boundPerson,
-      email,
-      shop,
-      supabase,
-      waitingMembership,
-      waitingPerson,
-    });
+  if (resolved.error) {
     return { status: "needs_attention", reason: "resolution_failed" };
   }
 
-  const removedMembership = await supabase
-    .from("dashboard_memberships")
-    .delete()
-    .eq("shop_domain", shop)
-    .eq("id", waitingMembership.id)
-    .eq("person_id", waitingPerson.id)
-    .eq("status", "disabled")
-    .is("normalized_email", null)
-    .is("shopify_user_id", null)
-    .select("id");
-  if (removedMembership.error) {
-    return { status: "needs_attention", reason: "resolution_failed" };
-  }
-  const [remainingAliases, remainingMemberships] = await Promise.all([
-    supabase
-      .from("staff_identity_aliases")
-      .select("id")
-      .eq("shop_domain", shop)
-      .eq("person_id", waitingPerson.id)
-      .limit(1),
-    supabase
-      .from("dashboard_memberships")
-      .select("id")
-      .eq("shop_domain", shop)
-      .eq("person_id", waitingPerson.id)
-      .limit(1),
-  ]);
-  if (
-    remainingAliases.error ||
-    remainingMemberships.error ||
-    remainingAliases.data?.length ||
-    remainingMemberships.data?.length
-  ) {
-    return { status: "needs_attention", reason: "resolution_failed" };
-  }
-  const removedPerson = await supabase
-    .from("staff_people")
-    .delete()
-    .eq("shop_domain", shop)
-    .eq("id", waitingPerson.id)
-    .is("email", null);
-  if (removedPerson.error) {
-    return { status: "needs_attention", reason: "resolution_failed" };
-  }
-
-  await supabase
-    .from("staff_identity_aliases")
-    .update({
-      review_status: "mapped",
-      last_seen_at: now,
-      updated_at: now,
-    })
-    .eq("shop_domain", shop)
-    .in("id", [hiddenAliases[0].id, emailAliases[0].id]);
-
-  resolvedMembership = await reloadMembership({
+  const resolvedMembership = await reloadMembership({
     id: revokedMembership.id,
     shop,
     supabase,
