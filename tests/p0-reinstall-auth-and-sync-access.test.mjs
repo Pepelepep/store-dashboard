@@ -1054,7 +1054,6 @@ test("merchant navigation is the exact capability-aware information architecture
     "Locations",
     "Costs",
     "People",
-    "Data quality",
     "Data sync",
     "Settings",
   ];
@@ -1266,10 +1265,7 @@ test("direct route guards and reporting queries derive from canonical capabiliti
     ["app/routes/app.locations.tsx", 'requiredCapability: "view_locations"'],
     ["app/routes/app.admin.staff.tsx", 'capability: "manage_people"'],
     ["app/routes/app.admin.setup.tsx", 'capability: "manage_costs"'],
-    [
-      "app/routes/app.data-quality.tsx",
-      'requiredCapability: "view_data_quality"',
-    ],
+    ["app/routes/app.data-quality.tsx", 'capability: "manage_sync"'],
     [
       "app/routes/app.admin.financial-qa.tsx",
       'requiredCapability: "view_data_quality"',
@@ -3339,6 +3335,13 @@ test("Shopify location state, reporting selection, report filters, and full sync
     new URL("../app/routes/app.data-quality.tsx", import.meta.url),
     "utf8",
   );
+  const dataQualityReport = readFileSync(
+    new URL(
+      "../app/lib/data-quality/data-quality-report.server.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
   const financialQa = readFileSync(
     new URL("../app/routes/app.admin.financial-qa.tsx", import.meta.url),
     "utf8",
@@ -3358,11 +3361,17 @@ test("Shopify location state, reporting selection, report filters, and full sync
     migration,
     /reporting_enabled = shopify_is_active AND shopify_location_id = ANY\(v_ids\)/,
   );
-  for (const source of [dashboard, locations, dataQuality, financialQa]) {
+  for (const source of [dashboard, locations, dataQualityReport, financialQa]) {
     assert.match(source, /\.eq\("shopify_is_active", true\)/);
     assert.match(source, /\.eq\("reporting_enabled", true\)/);
+  }
+  for (const source of [dashboard, locations, financialQa]) {
     assert.match(source, /assertReportingEntitlements/);
   }
+  // Data quality checks are now a capability-gated section embedded in
+  // Data Sync (/app/settings?tab=sync); the standalone route only redirects.
+  assert.match(dataQuality, /assertCapabilityAccess/);
+  assert.match(dataQuality, /capability: "manage_sync"/);
   assert.match(locations, /const shouldFilterOrderLinesByLocation = true/);
   assert.match(
     financialQa,
