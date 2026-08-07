@@ -57,7 +57,7 @@ export async function fetchStaffIdentityAliasesForOrderLines({
           supabase
             .from("staff_identity_aliases")
             .select(
-              "id, shop_domain, person_id, alias_type, alias_value, source, review_status, suggestion_dismissed_at, first_seen_at, last_seen_at, last_location_id, last_device_id, last_device_name, created_at, updated_at, staff_people(id, shop_domain, display_name, email, is_active, created_at, updated_at)",
+              "id, shop_domain, person_id, alias_type, alias_value, source, review_status, suggestion_dismissed_at, first_seen_at, last_seen_at, last_location_id, last_device_id, last_device_name, created_at, updated_at, staff_people!staff_identity_aliases_shop_person_fkey(id, shop_domain, display_name, email, is_active, created_at, updated_at)",
             )
             .eq("shop_domain", shop)
             .eq("alias_type", aliasType)

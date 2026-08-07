@@ -404,9 +404,8 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-report-filter-field > label, .shopops-report-filter-label { color: #303030; font-size: 13px; font-weight: 750; line-height: 1.3; }
   .shopops-report-filter-control { background: var(--shopops-surface); border: 1px solid #b7b9bb; border-radius: 9px; box-sizing: border-box; color: var(--p-color-text, #202223); font: inherit; font-size: 14px; min-height: 40px; min-width: 0; padding: 8px 10px; width: 100%; }
   .shopops-report-filter-helper { color: var(--shopops-muted); font-size: 12px; line-height: 1.35; }
-  .shopops-report-filter-readonly { background: #f8fafc; border: 1px solid var(--shopops-border); border-radius: 9px; display: grid; gap: 2px; min-height: 40px; padding: 7px 10px; }
+  .shopops-report-filter-readonly { align-items: center; background: #f8fafc; border: 1px solid var(--shopops-border); border-radius: 9px; box-sizing: border-box; display: flex; min-height: 40px; padding: 8px 10px; }
   .shopops-report-filter-readonly__value { color: var(--p-color-text, #202223); font-size: 14px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .shopops-report-filter-readonly__helper { color: var(--shopops-muted); font-size: 11px; line-height: 1.25; }
   .shopops-report-filter-actions { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(74px, 1fr)); }
   .shopops-report-filter-actions > button, .shopops-report-filter-actions > a { min-height: 40px; white-space: nowrap; }
   .shopops-report-filter-feedback { background: var(--shopops-accent-soft); border: 1px solid #b2ddff; border-radius: 9px; color: #175cd3; font-size: 12px; font-weight: 700; margin-top: 10px; padding: 7px 9px; width: fit-content; }

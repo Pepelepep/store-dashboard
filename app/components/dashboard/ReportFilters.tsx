@@ -93,13 +93,12 @@ export function ReadOnlyReportLocation({
   helper,
   value,
 }: {
-  helper: string;
+  helper?: string;
   value: string;
 }) {
   return (
-    <div className="shopops-report-filter-readonly">
+    <div className="shopops-report-filter-readonly" title={helper}>
       <span className="shopops-report-filter-readonly__value">{value}</span>
-      <span className="shopops-report-filter-readonly__helper">{helper}</span>
     </div>
   );
 }
