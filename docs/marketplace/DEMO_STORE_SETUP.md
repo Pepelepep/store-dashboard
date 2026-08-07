@@ -10,15 +10,19 @@ Prepare a Shopify demo store and marketplace database state that shows ShopOps S
 
 Demo shop domain:
 
-- `TODO_DEMO_SHOP.myshopify.com`
+- `shopops-demo.myshopify.com`
 
 Reviewer/admin account:
 
-- `TODO_REVIEWER_ADMIN_EMAIL`
+- `pierre.paul.quilichini@gmail.com`
 
-Optional viewer/manager account:
+Viewer/manager account (demonstrates location-scoped access — a manager sees only their assigned store):
 
-- `TODO_REVIEWER_VIEWER_EMAIL`
+- `pierre.paul.quilichini@outlook.fr` (seeded as `viewer` on CF Carrefour Laval only)
+
+Secondary fresh/empty-state test shop (no demo data, used to verify first-install/no-data states without touching the populated demo shop):
+
+- `shopops-fresh-qa.myshopify.com`
 
 ## Required Data Shape
 

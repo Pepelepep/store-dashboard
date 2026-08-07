@@ -12,11 +12,11 @@ Support website: `https://shopops-marketplace-preview.onrender.com/support`
 
 ## Emergency Contact
 
-Emergency technical contact: `[name / role placeholder]`
+Emergency technical contact: `Pierre-Paul Quilichini, founder/developer`
 
-Emergency email: `[emergency email placeholder]`
+Emergency email: `support@shopopsstudio.com`
 
-Emergency phone or paging channel: `[phone / paging placeholder]`
+Emergency phone or paging channel: not yet defined — email is the sole emergency channel for now.
 
 Use the emergency contact for security incidents, widespread production outages, data deletion failures, compliance webhook failures, or Shopify review escalation.
 

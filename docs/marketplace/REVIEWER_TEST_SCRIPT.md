@@ -5,9 +5,9 @@ Draft status: marketplace reviewer script. Replace placeholders before submissio
 ## Reviewer Context
 
 App name: ShopOps Studio  
-Demo shop: `TODO_DEMO_SHOP.myshopify.com`  
+Demo shop: `shopops-demo.myshopify.com`  
 Support contact: `support@shopopsstudio.com`  
-Emergency contact: `TODO_EMERGENCY_CONTACT`
+Emergency contact: `Pierre-Paul Quilichini — support@shopopsstudio.com`
 
 ShopOps Studio provides operational reporting. It is not accounting, tax, payroll, legal, or financial advice. Merchants remain responsible for validating reports before business use.
 

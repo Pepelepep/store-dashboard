@@ -5,11 +5,12 @@ begin;
 
 do $$
 declare
-  demo_shop text := 'seulementlocaldev.myshopify.com';
+  demo_shop text := 'shopops-demo.myshopify.com';
 begin
   delete from public.user_location_access where shop_domain = demo_shop;
   delete from public.sync_runs where shop_domain = demo_shop;
   delete from public.fixed_expenses where shop_domain = demo_shop;
+  delete from public.order_transactions where shop_domain = demo_shop;
   delete from public.order_lines where shop_domain = demo_shop;
   delete from public.orders where shop_domain = demo_shop;
   delete from public.inventory_levels where shop_domain = demo_shop;
@@ -273,6 +274,138 @@ begin
     cost_source
   );
 
+  -- Discounted order: demonstrates discounts/net_sales financial v2 fields
+  -- and best-effort POS staff attribution (staff_source = 'pos_session').
+  insert into public.orders (
+    shop_domain,
+    shopify_order_id,
+    order_name,
+    created_at_shopify,
+    financial_status,
+    retail_location_id,
+    retail_location_name,
+    total_price,
+    gross_sales,
+    discounts,
+    net_sales,
+    total_discount_amount,
+    discount_codes,
+    refunds,
+    returns,
+    created_at,
+    updated_at
+  )
+  values
+    (
+      demo_shop, 'gid://shopify/Order/950100013', '#D1013',
+      current_date - 5 + time '11:30', 'PAID',
+      'gid://shopify/Location/910100001', 'Downtown Montreal',
+      51.20, 64.00, 12.80, 51.20, 12.80, '["WELCOME20"]'::jsonb,
+      null, null, now(), now()
+    ),
+    (
+      demo_shop, 'gid://shopify/Order/950100014', '#D1014',
+      current_date - 6 + time '16:45', 'PARTIALLY_REFUNDED',
+      'gid://shopify/Location/910100002', 'Vieux-Port',
+      82.00, 82.00, null, 50.00, null, null,
+      32.00, 32.00, now(), now()
+    );
+
+  insert into public.order_lines (
+    shop_domain,
+    shopify_order_id,
+    shopify_line_item_id,
+    order_name,
+    created_at_shopify,
+    retail_location_id,
+    retail_location_name,
+    shopify_variant_id,
+    inventory_item_id,
+    product_title,
+    variant_title,
+    sku,
+    vendor,
+    quantity,
+    unit_price,
+    revenue,
+    unit_cost,
+    cogs,
+    gross_profit,
+    cost_source,
+    gross_sales,
+    discounts,
+    discount_amount,
+    net_sales,
+    returned_quantity,
+    refunded_amount,
+    returns,
+    staff_member_name,
+    staff_member_email,
+    staff_source,
+    created_at
+  )
+  values
+    (
+      demo_shop, 'gid://shopify/Order/950100013', 'gid://shopify/LineItem/960100035', '#D1013',
+      current_date - 5 + time '11:30', 'gid://shopify/Location/910100001', 'Downtown Montreal',
+      'gid://shopify/ProductVariant/930100005', 'gid://shopify/InventoryItem/940100005',
+      'Wool Beanie', 'Charcoal', 'BEAN-CHR', 'Laine Locale',
+      1, 42.00, 42.00, 18.00, 18.00, 24.00, 'SHOPIFY_UNIT_COST',
+      42.00, 8.40, 8.40, 33.60,
+      null, null, null,
+      'Alex Tremblay', 'alex.tremblay@demo-shopops.test', 'pos_session', now()
+    ),
+    (
+      demo_shop, 'gid://shopify/Order/950100013', 'gid://shopify/LineItem/960100036', '#D1013',
+      current_date - 5 + time '11:30', 'gid://shopify/Location/910100001', 'Downtown Montreal',
+      'gid://shopify/ProductVariant/930100013', 'gid://shopify/InventoryItem/940100013',
+      'Brass Key Ring', 'Brass', 'KEY-BRS', 'Atelier Nord',
+      1, 22.00, 22.00, 7.50, 7.50, 14.50, 'SHOPIFY_UNIT_COST',
+      22.00, 4.40, 4.40, 17.60,
+      null, null, null,
+      'Alex Tremblay', 'alex.tremblay@demo-shopops.test', 'pos_session', now()
+    ),
+    (
+      demo_shop, 'gid://shopify/Order/950100014', 'gid://shopify/LineItem/960100037', '#D1014',
+      current_date - 6 + time '16:45', 'gid://shopify/Location/910100002', 'Vieux-Port',
+      'gid://shopify/ProductVariant/930100008', 'gid://shopify/InventoryItem/940100008',
+      'Soy Candle', 'Lavender', 'CND-LAV', 'Maison Lumiere',
+      2, 32.00, 64.00, 11.75, 23.50, 40.50, 'recomputed_from_current_variant_cost',
+      64.00, null, null, 32.00,
+      1, 32.00, 32.00,
+      'Sam Ouellet', 'sam.ouellet@demo-shopops.test', 'pos_session', now()
+    ),
+    (
+      demo_shop, 'gid://shopify/Order/950100014', 'gid://shopify/LineItem/960100038', '#D1014',
+      current_date - 6 + time '16:45', 'gid://shopify/Location/910100002', 'Vieux-Port',
+      'gid://shopify/ProductVariant/930100009', 'gid://shopify/InventoryItem/940100009',
+      'Linen Notebook', 'Dotted', 'NOTE-DOT', 'Papier Saint-Laurent',
+      1, 18.00, 18.00, 5.20, 5.20, 12.80, 'SHOPIFY_UNIT_COST',
+      18.00, null, null, 18.00,
+      null, null, null,
+      'Sam Ouellet', 'sam.ouellet@demo-shopops.test', 'pos_session', now()
+    );
+
+  -- Refund transaction backing the D1014 partial refund/return above.
+  insert into public.order_transactions (
+    shop_domain,
+    shopify_order_id,
+    shopify_transaction_id,
+    kind,
+    status,
+    gateway,
+    processed_at,
+    amount,
+    currency_code,
+    created_at,
+    updated_at
+  )
+  values (
+    demo_shop, 'gid://shopify/Order/950100014', 'gid://shopify/OrderTransaction/970100001',
+    'refund', 'success', 'manual', now() - interval '6 days' + time '17:00',
+    32.00, 'CAD', now(), now()
+  );
+
   insert into public.fixed_expenses (
     shop_domain,
     shopify_location_id,
@@ -322,17 +455,29 @@ begin
     can_manage,
     created_at
   )
-  values (
-    demo_shop,
-    'pierre-paul.quilichini@gmail.com',
-    '99775414464',
-    '*',
-    'All locations',
-    'admin',
-    true,
-    true,
-    now()
-  );
+  values
+    (
+      demo_shop,
+      'pierre.paul.quilichini@gmail.com',
+      '99775414464',
+      '*',
+      'All locations',
+      'admin',
+      true,
+      true,
+      now()
+    ),
+    (
+      demo_shop,
+      'pierre.paul.quilichini@outlook.fr',
+      null,
+      'gid://shopify/Location/910100003',
+      'CF Carrefour Laval',
+      'viewer',
+      true,
+      false,
+      now()
+    );
 end $$;
 
 commit;

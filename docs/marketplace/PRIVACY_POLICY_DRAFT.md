@@ -74,7 +74,7 @@ Merchants are responsible for:
 ## Contact
 
 Support email: `support@shopopsstudio.com`  
-Emergency contact: `[emergency contact placeholder]`
+Emergency contact: `Pierre-Paul Quilichini — support@shopopsstudio.com`
 
 ## Draft Notice
 

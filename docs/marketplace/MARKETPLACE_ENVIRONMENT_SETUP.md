@@ -156,7 +156,13 @@ Cron/review note:
 
 ## Render Cron Requirements
 
-Configure Render Cron or an equivalent scheduler:
+Superseded: see `RENDER_CRON_SETUP.md` for the current single-job setup
+(`shopops-maintenance-tick`, every 5 minutes, `POST /internal/cron/maintenance-tick`).
+
+The two-endpoint scheme below (`process-sync-jobs` + `process-webhook-events`)
+is kept only for historical reference. Do not schedule it alongside
+`shopops-maintenance-tick` — the endpoints remain temporarily compatible but
+should not both be triggered by Render Cron at the same time.
 
 1. Sync jobs processor
    - Route: `/internal/cron/process-sync-jobs`

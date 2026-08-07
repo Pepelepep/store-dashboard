@@ -53,13 +53,13 @@ Draft status: marketplace preparation checklist.
 
 ## UX Readiness
 
-- [ ] Add first-run onboarding state.
-- [ ] Add empty dashboard state.
-- [ ] Add no locations state.
-- [ ] Add no assigned locations state.
-- [ ] Add sync in progress state.
-- [ ] Add sync failed state.
-- [ ] Add branded unauthorized/admin-only state.
+- [x] Add first-run onboarding state. Implemented in `app/routes/app.db-dashboard.tsx` (`showOnboarding` checklist).
+- [x] Add empty dashboard state. Implemented (`hasNoSalesForPeriod` → `CompactEmptyDataNotice`).
+- [x] Add no locations state. Implemented (`isFirstRunPreparing` → "Your data is being prepared").
+- [x] Add no assigned locations state. Implemented (`readiness.noAssignedLocations` → PageNotice).
+- [x] Add sync in progress state. Implemented via first-run preparing state above.
+- [x] Add sync failed state. Implemented (`syncFailureBanner` → "Reconnect Shopify" PageNotice).
+- [x] Add branded unauthorized/admin-only state. Implemented via `RouteErrorNotice`/`PageNotice` in each route's `ErrorBoundary`, not a bare thrown Response.
 - [ ] Test mobile and embedded iframe widths.
 - [ ] Confirm tables do not break on narrow screens.
 - [ ] Confirm 404/500 behavior is acceptable.
@@ -87,7 +87,7 @@ Draft status: marketplace preparation checklist.
 
 ## Shopify Config
 
-- [ ] Create marketplace-specific Shopify config separate from client production config.
+- [x] Create marketplace-specific Shopify config separate from client production config. Confirmed distinct `client_id`/`application_url`/`redirect_urls` across `shopify.app.store-dashboard.toml`, `-staging.toml`, and `shopify.app.shopops-marketplace.toml`.
 - [ ] Confirm OAuth redirect URLs for marketplace app.
 - [ ] Confirm webhook subscriptions.
 - [ ] Confirm compliance webhook URLs.
