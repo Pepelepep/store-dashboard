@@ -6,6 +6,24 @@ begin;
 do $$
 declare
   demo_shop text := 'shopops-demo.myshopify.com';
+  v_order_seq int;
+  v_order_id text;
+  v_order_name text;
+  v_line_item_seq int := 0;
+  v_loc record;
+  v_staff record;
+  v_order_ts timestamptz;
+  v_line_count int;
+  v_line_idx int;
+  v_variant record;
+  v_qty int;
+  v_is_discounted boolean;
+  v_is_refunded boolean;
+  v_discount_pct numeric;
+  v_line_gross numeric;
+  v_line_discount numeric;
+  v_returned_qty int;
+  v_refund_amount numeric;
 begin
   delete from public.user_location_access where shop_domain = demo_shop;
   delete from public.sync_runs where shop_domain = demo_shop;
@@ -124,287 +142,168 @@ begin
       ('gid://shopify/Location/910100003', 'gid://shopify/ProductVariant/930100015', 'gid://shopify/InventoryItem/940100015', 'TOWL-BLU', 6)
   ) as stock(location_id, variant_id, item_id, sku, available);
 
-  insert into public.orders (
-    shop_domain,
-    shopify_order_id,
-    order_name,
-    created_at_shopify,
-    financial_status,
-    retail_location_id,
-    retail_location_name,
-    total_price,
-    created_at,
-    updated_at
-  )
-  select
-    demo_shop,
-    'gid://shopify/Order/' || order_number,
-    '#' || display_number,
-    current_date - age_days + time '14:00',
-    'PAID',
-    location_id,
-    location_name,
-    total_price,
-    now(),
-    now()
-  from (
-    values
-      ('950100001', 'D1001', 0, 'gid://shopify/Location/910100001', 'Downtown Montreal', 100.00),
-      ('950100002', 'D1002', 0, 'gid://shopify/Location/910100002', 'Vieux-Port', 88.00),
-      ('950100003', 'D1003', 1, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 118.00),
-      ('950100004', 'D1004', 1, 'gid://shopify/Location/910100001', 'Downtown Montreal', 74.00),
-      ('950100005', 'D1005', 2, 'gid://shopify/Location/910100002', 'Vieux-Port', 96.00),
-      ('950100006', 'D1006', 3, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 62.00),
-      ('950100007', 'D1007', 4, 'gid://shopify/Location/910100001', 'Downtown Montreal', 102.00),
-      ('950100008', 'D1008', 5, 'gid://shopify/Location/910100002', 'Vieux-Port', 66.00),
-      ('950100009', 'D1009', 6, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 84.00),
-      ('950100010', 'D1010', 7, 'gid://shopify/Location/910100001', 'Downtown Montreal', 110.00),
-      ('950100011', 'D1011', 8, 'gid://shopify/Location/910100002', 'Vieux-Port', 78.00),
-      ('950100012', 'D1012', 9, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 90.00)
-  ) as demo_orders(order_number, display_number, age_days, location_id, location_name, total_price);
+  -- Reference data for the generated order set below.
+  create temporary table tmp_variants (
+    idx int primary key,
+    variant_id text,
+    inventory_item_id text,
+    product_title text,
+    variant_title text,
+    sku text,
+    vendor text,
+    price numeric,
+    unit_cost numeric,
+    cost_source text
+  ) on commit drop;
 
-  insert into public.order_lines (
-    shop_domain,
-    shopify_order_id,
-    shopify_line_item_id,
-    order_name,
-    created_at_shopify,
-    retail_location_id,
-    retail_location_name,
-    shopify_variant_id,
-    inventory_item_id,
-    product_title,
-    variant_title,
-    sku,
-    vendor,
-    quantity,
-    unit_price,
-    revenue,
-    unit_cost,
-    cogs,
-    gross_profit,
-    cost_source,
-    created_at
-  )
-  select
-    demo_shop,
-    'gid://shopify/Order/' || order_number,
-    'gid://shopify/LineItem/' || line_number,
-    '#' || display_number,
-    current_date - age_days + time '14:00',
-    location_id,
-    location_name,
-    variant_id,
-    inventory_item_id,
-    product_title,
-    variant_title,
-    sku,
-    vendor,
-    quantity,
-    unit_price,
-    quantity * unit_price,
-    unit_cost,
-    case when unit_cost is null then null else quantity * unit_cost end,
-    case when unit_cost is null then null else (quantity * unit_price) - (quantity * unit_cost) end,
-    cost_source,
-    now()
-  from (
-    values
-      ('950100001', 'D1001', '960100001', 0, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100001', 'gid://shopify/InventoryItem/940100001', 'Montreal Market Tote', 'Natural', 'TOTE-NAT', 'Atelier Nord', 1, 38.00, 15.00, 'SHOPIFY_UNIT_COST'),
-      ('950100001', 'D1001', '960100002', 0, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100003', 'gid://shopify/InventoryItem/940100003', 'Maple Ceramic Mug', 'Cream', 'MUG-CRM', 'Studio Fleuve', 2, 24.00, 8.25, 'recomputed_from_current_variant_cost'),
-      ('950100001', 'D1001', '960100003', 0, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100011', 'gid://shopify/InventoryItem/940100011', 'Botanical Soap Bar', 'Rosemary', 'SOAP-ROS', 'Savon du Port', 1, 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
-
-      ('950100002', 'D1002', '960100004', 0, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100006', 'gid://shopify/InventoryItem/940100006', 'Wool Beanie', 'Forest', 'BEAN-FOR', 'Laine Locale', 1, 42.00, 18.00, 'SHOPIFY_UNIT_COST'),
-      ('950100002', 'D1002', '960100005', 0, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100008', 'gid://shopify/InventoryItem/940100008', 'Soy Candle', 'Lavender', 'CND-LAV', 'Maison Lumiere', 1, 32.00, 11.75, 'recomputed_from_current_variant_cost'),
-      ('950100002', 'D1002', '960100006', 0, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100014', 'gid://shopify/InventoryItem/940100014', 'Printed Tea Towel', 'Tomato', 'TOWL-TOM', 'Studio Fleuve', 1, 28.00, null, 'MISSING_COST'),
-
-      ('950100003', 'D1003', '960100007', 1, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100002', 'gid://shopify/InventoryItem/940100002', 'Montreal Market Tote', 'Black', 'TOTE-BLK', 'Atelier Nord', 2, 38.00, 15.50, 'SHOPIFY_UNIT_COST'),
-      ('950100003', 'D1003', '960100008', 1, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100012', 'gid://shopify/InventoryItem/940100012', 'Botanical Soap Bar', 'Mint', 'SOAP-MNT', 'Savon du Port', 1, 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
-      ('950100003', 'D1003', '960100009', 1, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100015', 'gid://shopify/InventoryItem/940100015', 'Printed Tea Towel', 'Blueberry', 'TOWL-BLU', 'Studio Fleuve', 1, 28.00, 9.00, 'recomputed_from_current_variant_cost'),
-
-      ('950100004', 'D1004', '960100010', 1, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100005', 'gid://shopify/InventoryItem/940100005', 'Wool Beanie', 'Charcoal', 'BEAN-CHR', 'Laine Locale', 1, 42.00, 18.00, 'SHOPIFY_UNIT_COST'),
-      ('950100004', 'D1004', '960100011', 1, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100004', 'gid://shopify/InventoryItem/940100004', 'Maple Ceramic Mug', 'Blue', 'MUG-BLU', 'Studio Fleuve', 1, 24.00, null, 'MISSING_COST'),
-      ('950100004', 'D1004', '960100012', 1, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100009', 'gid://shopify/InventoryItem/940100009', 'Linen Notebook', 'Dotted', 'NOTE-DOT', 'Papier Saint-Laurent', 1, 18.00, 5.20, 'SHOPIFY_UNIT_COST'),
-
-      ('950100005', 'D1005', '960100013', 2, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100007', 'gid://shopify/InventoryItem/940100007', 'Soy Candle', 'Cedar', 'CND-CED', 'Maison Lumiere', 3, 32.00, 11.75, 'recomputed_from_current_variant_cost'),
-      ('950100005', 'D1005', '960100014', 2, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100010', 'gid://shopify/InventoryItem/940100010', 'Linen Notebook', 'Plain', 'NOTE-PLN', 'Papier Saint-Laurent', 1, 18.00, null, 'MISSING_COST'),
-      ('950100005', 'D1005', '960100015', 2, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100011', 'gid://shopify/InventoryItem/940100011', 'Botanical Soap Bar', 'Rosemary', 'SOAP-ROS', 'Savon du Port', 1, 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
-
-      ('950100006', 'D1006', '960100016', 3, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100013', 'gid://shopify/InventoryItem/940100013', 'Brass Key Ring', 'Brass', 'KEY-BRS', 'Atelier Nord', 1, 22.00, 7.50, 'SHOPIFY_UNIT_COST'),
-      ('950100006', 'D1006', '960100017', 3, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100003', 'gid://shopify/InventoryItem/940100003', 'Maple Ceramic Mug', 'Cream', 'MUG-CRM', 'Studio Fleuve', 1, 24.00, 8.25, 'recomputed_from_current_variant_cost'),
-      ('950100006', 'D1006', '960100018', 3, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100012', 'gid://shopify/InventoryItem/940100012', 'Botanical Soap Bar', 'Mint', 'SOAP-MNT', 'Savon du Port', 2, 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
-
-      ('950100007', 'D1007', '960100019', 4, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100001', 'gid://shopify/InventoryItem/940100001', 'Montreal Market Tote', 'Natural', 'TOTE-NAT', 'Atelier Nord', 1, 38.00, 15.00, 'SHOPIFY_UNIT_COST'),
-      ('950100007', 'D1007', '960100020', 4, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100005', 'gid://shopify/InventoryItem/940100005', 'Wool Beanie', 'Charcoal', 'BEAN-CHR', 'Laine Locale', 1, 42.00, 18.00, 'SHOPIFY_UNIT_COST'),
-      ('950100007', 'D1007', '960100021', 4, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100013', 'gid://shopify/InventoryItem/940100013', 'Brass Key Ring', 'Brass', 'KEY-BRS', 'Atelier Nord', 1, 22.00, 7.50, 'recomputed_from_current_variant_cost'),
-
-      ('950100008', 'D1008', '960100022', 5, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100008', 'gid://shopify/InventoryItem/940100008', 'Soy Candle', 'Lavender', 'CND-LAV', 'Maison Lumiere', 1, 32.00, 11.75, 'SHOPIFY_UNIT_COST'),
-      ('950100008', 'D1008', '960100023', 5, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100009', 'gid://shopify/InventoryItem/940100009', 'Linen Notebook', 'Dotted', 'NOTE-DOT', 'Papier Saint-Laurent', 1, 18.00, 5.20, 'SHOPIFY_UNIT_COST'),
-      ('950100008', 'D1008', '960100024', 5, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100014', 'gid://shopify/InventoryItem/940100014', 'Printed Tea Towel', 'Tomato', 'TOWL-TOM', 'Studio Fleuve', 1, 28.00, null, 'MISSING_COST'),
-
-      ('950100009', 'D1009', '960100025', 6, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100002', 'gid://shopify/InventoryItem/940100002', 'Montreal Market Tote', 'Black', 'TOTE-BLK', 'Atelier Nord', 1, 38.00, 15.50, 'SHOPIFY_UNIT_COST'),
-      ('950100009', 'D1009', '960100026', 6, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100015', 'gid://shopify/InventoryItem/940100015', 'Printed Tea Towel', 'Blueberry', 'TOWL-BLU', 'Studio Fleuve', 1, 28.00, 9.00, 'recomputed_from_current_variant_cost'),
-      ('950100009', 'D1009', '960100027', 6, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100012', 'gid://shopify/InventoryItem/940100012', 'Botanical Soap Bar', 'Mint', 'SOAP-MNT', 'Savon du Port', 1, 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
-
-      ('950100010', 'D1010', '960100028', 7, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100001', 'gid://shopify/InventoryItem/940100001', 'Montreal Market Tote', 'Natural', 'TOTE-NAT', 'Atelier Nord', 2, 38.00, 15.00, 'SHOPIFY_UNIT_COST'),
-      ('950100010', 'D1010', '960100029', 7, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100011', 'gid://shopify/InventoryItem/940100011', 'Botanical Soap Bar', 'Rosemary', 'SOAP-ROS', 'Savon du Port', 1, 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
-      ('950100010', 'D1010', '960100030', 7, 'gid://shopify/Location/910100001', 'Downtown Montreal', 'gid://shopify/ProductVariant/930100007', 'gid://shopify/InventoryItem/940100007', 'Soy Candle', 'Cedar', 'CND-CED', 'Maison Lumiere', 1, 32.00, 11.75, 'recomputed_from_current_variant_cost'),
-
-      ('950100011', 'D1011', '960100031', 8, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100006', 'gid://shopify/InventoryItem/940100006', 'Wool Beanie', 'Forest', 'BEAN-FOR', 'Laine Locale', 1, 42.00, 18.00, 'SHOPIFY_UNIT_COST'),
-      ('950100011', 'D1011', '960100032', 8, 'gid://shopify/Location/910100002', 'Vieux-Port', 'gid://shopify/ProductVariant/930100010', 'gid://shopify/InventoryItem/940100010', 'Linen Notebook', 'Plain', 'NOTE-PLN', 'Papier Saint-Laurent', 2, 18.00, null, 'MISSING_COST'),
-
-      ('950100012', 'D1012', '960100033', 9, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100003', 'gid://shopify/InventoryItem/940100003', 'Maple Ceramic Mug', 'Cream', 'MUG-CRM', 'Studio Fleuve', 1, 24.00, 8.25, 'SHOPIFY_UNIT_COST'),
-      ('950100012', 'D1012', '960100034', 9, 'gid://shopify/Location/910100003', 'CF Carrefour Laval', 'gid://shopify/ProductVariant/930100013', 'gid://shopify/InventoryItem/940100013', 'Brass Key Ring', 'Brass', 'KEY-BRS', 'Atelier Nord', 3, 22.00, 7.50, 'recomputed_from_current_variant_cost')
-  ) as lines(
-    order_number,
-    display_number,
-    line_number,
-    age_days,
-    location_id,
-    location_name,
-    variant_id,
-    inventory_item_id,
-    product_title,
-    variant_title,
-    sku,
-    vendor,
-    quantity,
-    unit_price,
-    unit_cost,
-    cost_source
-  );
-
-  -- Discounted order: demonstrates discounts/net_sales financial v2 fields
-  -- and best-effort POS staff attribution (staff_source = 'pos_session').
-  insert into public.orders (
-    shop_domain,
-    shopify_order_id,
-    order_name,
-    created_at_shopify,
-    financial_status,
-    retail_location_id,
-    retail_location_name,
-    total_price,
-    gross_sales,
-    discounts,
-    net_sales,
-    total_discount_amount,
-    discount_codes,
-    refunds,
-    returns,
-    created_at,
-    updated_at
-  )
+  insert into tmp_variants (idx, variant_id, inventory_item_id, product_title, variant_title, sku, vendor, price, unit_cost, cost_source)
   values
-    (
-      demo_shop, 'gid://shopify/Order/950100013', '#D1013',
-      current_date - 5 + time '11:30', 'PAID',
-      'gid://shopify/Location/910100001', 'Downtown Montreal',
-      51.20, 64.00, 12.80, 51.20, 12.80, '["WELCOME20"]'::jsonb,
-      null, null, now(), now()
-    ),
-    (
-      demo_shop, 'gid://shopify/Order/950100014', '#D1014',
-      current_date - 6 + time '16:45', 'PARTIALLY_REFUNDED',
-      'gid://shopify/Location/910100002', 'Vieux-Port',
-      82.00, 82.00, null, 50.00, null, null,
-      32.00, 32.00, now(), now()
-    );
+    (1, 'gid://shopify/ProductVariant/930100001', 'gid://shopify/InventoryItem/940100001', 'Montreal Market Tote', 'Natural', 'TOTE-NAT', 'Atelier Nord', 38.00, 15.00, 'SHOPIFY_UNIT_COST'),
+    (2, 'gid://shopify/ProductVariant/930100002', 'gid://shopify/InventoryItem/940100002', 'Montreal Market Tote', 'Black', 'TOTE-BLK', 'Atelier Nord', 38.00, 15.50, 'SHOPIFY_UNIT_COST'),
+    (3, 'gid://shopify/ProductVariant/930100003', 'gid://shopify/InventoryItem/940100003', 'Maple Ceramic Mug', 'Cream', 'MUG-CRM', 'Studio Fleuve', 24.00, 8.25, 'SHOPIFY_UNIT_COST'),
+    (4, 'gid://shopify/ProductVariant/930100004', 'gid://shopify/InventoryItem/940100004', 'Maple Ceramic Mug', 'Blue', 'MUG-BLU', 'Studio Fleuve', 24.00, null, 'MISSING_COST'),
+    (5, 'gid://shopify/ProductVariant/930100005', 'gid://shopify/InventoryItem/940100005', 'Wool Beanie', 'Charcoal', 'BEAN-CHR', 'Laine Locale', 42.00, 18.00, 'SHOPIFY_UNIT_COST'),
+    (6, 'gid://shopify/ProductVariant/930100006', 'gid://shopify/InventoryItem/940100006', 'Wool Beanie', 'Forest', 'BEAN-FOR', 'Laine Locale', 42.00, 18.00, 'SHOPIFY_UNIT_COST'),
+    (7, 'gid://shopify/ProductVariant/930100007', 'gid://shopify/InventoryItem/940100007', 'Soy Candle', 'Cedar', 'CND-CED', 'Maison Lumiere', 32.00, 11.75, 'recomputed_from_current_variant_cost'),
+    (8, 'gid://shopify/ProductVariant/930100008', 'gid://shopify/InventoryItem/940100008', 'Soy Candle', 'Lavender', 'CND-LAV', 'Maison Lumiere', 32.00, 11.75, 'recomputed_from_current_variant_cost'),
+    (9, 'gid://shopify/ProductVariant/930100009', 'gid://shopify/InventoryItem/940100009', 'Linen Notebook', 'Dotted', 'NOTE-DOT', 'Papier Saint-Laurent', 18.00, 5.20, 'SHOPIFY_UNIT_COST'),
+    (10, 'gid://shopify/ProductVariant/930100010', 'gid://shopify/InventoryItem/940100010', 'Linen Notebook', 'Plain', 'NOTE-PLN', 'Papier Saint-Laurent', 18.00, null, 'MISSING_COST'),
+    (11, 'gid://shopify/ProductVariant/930100011', 'gid://shopify/InventoryItem/940100011', 'Botanical Soap Bar', 'Rosemary', 'SOAP-ROS', 'Savon du Port', 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
+    (12, 'gid://shopify/ProductVariant/930100012', 'gid://shopify/InventoryItem/940100012', 'Botanical Soap Bar', 'Mint', 'SOAP-MNT', 'Savon du Port', 12.00, 3.80, 'SHOPIFY_UNIT_COST'),
+    (13, 'gid://shopify/ProductVariant/930100013', 'gid://shopify/InventoryItem/940100013', 'Brass Key Ring', 'Brass', 'KEY-BRS', 'Atelier Nord', 22.00, 7.50, 'recomputed_from_current_variant_cost'),
+    (14, 'gid://shopify/ProductVariant/930100014', 'gid://shopify/InventoryItem/940100014', 'Printed Tea Towel', 'Tomato', 'TOWL-TOM', 'Studio Fleuve', 28.00, null, 'MISSING_COST'),
+    (15, 'gid://shopify/ProductVariant/930100015', 'gid://shopify/InventoryItem/940100015', 'Printed Tea Towel', 'Blueberry', 'TOWL-BLU', 'Studio Fleuve', 28.00, 9.00, 'recomputed_from_current_variant_cost');
 
-  insert into public.order_lines (
-    shop_domain,
-    shopify_order_id,
-    shopify_line_item_id,
-    order_name,
-    created_at_shopify,
-    retail_location_id,
-    retail_location_name,
-    shopify_variant_id,
-    inventory_item_id,
-    product_title,
-    variant_title,
-    sku,
-    vendor,
-    quantity,
-    unit_price,
-    revenue,
-    unit_cost,
-    cogs,
-    gross_profit,
-    cost_source,
-    gross_sales,
-    discounts,
-    discount_amount,
-    net_sales,
-    returned_quantity,
-    refunded_amount,
-    returns,
-    staff_member_name,
-    staff_member_email,
-    staff_source,
-    created_at
-  )
+  create temporary table tmp_locations (
+    idx int primary key,
+    location_id text,
+    location_name text
+  ) on commit drop;
+
+  insert into tmp_locations (idx, location_id, location_name)
   values
-    (
-      demo_shop, 'gid://shopify/Order/950100013', 'gid://shopify/LineItem/960100035', '#D1013',
-      current_date - 5 + time '11:30', 'gid://shopify/Location/910100001', 'Downtown Montreal',
-      'gid://shopify/ProductVariant/930100005', 'gid://shopify/InventoryItem/940100005',
-      'Wool Beanie', 'Charcoal', 'BEAN-CHR', 'Laine Locale',
-      1, 42.00, 42.00, 18.00, 18.00, 24.00, 'SHOPIFY_UNIT_COST',
-      42.00, 8.40, 8.40, 33.60,
-      null, null, null,
-      'Alex Tremblay', 'alex.tremblay@demo-shopops.test', 'pos_session', now()
-    ),
-    (
-      demo_shop, 'gid://shopify/Order/950100013', 'gid://shopify/LineItem/960100036', '#D1013',
-      current_date - 5 + time '11:30', 'gid://shopify/Location/910100001', 'Downtown Montreal',
-      'gid://shopify/ProductVariant/930100013', 'gid://shopify/InventoryItem/940100013',
-      'Brass Key Ring', 'Brass', 'KEY-BRS', 'Atelier Nord',
-      1, 22.00, 22.00, 7.50, 7.50, 14.50, 'SHOPIFY_UNIT_COST',
-      22.00, 4.40, 4.40, 17.60,
-      null, null, null,
-      'Alex Tremblay', 'alex.tremblay@demo-shopops.test', 'pos_session', now()
-    ),
-    (
-      demo_shop, 'gid://shopify/Order/950100014', 'gid://shopify/LineItem/960100037', '#D1014',
-      current_date - 6 + time '16:45', 'gid://shopify/Location/910100002', 'Vieux-Port',
-      'gid://shopify/ProductVariant/930100008', 'gid://shopify/InventoryItem/940100008',
-      'Soy Candle', 'Lavender', 'CND-LAV', 'Maison Lumiere',
-      2, 32.00, 64.00, 11.75, 23.50, 40.50, 'recomputed_from_current_variant_cost',
-      64.00, null, null, 32.00,
-      1, 32.00, 32.00,
-      'Sam Ouellet', 'sam.ouellet@demo-shopops.test', 'pos_session', now()
-    ),
-    (
-      demo_shop, 'gid://shopify/Order/950100014', 'gid://shopify/LineItem/960100038', '#D1014',
-      current_date - 6 + time '16:45', 'gid://shopify/Location/910100002', 'Vieux-Port',
-      'gid://shopify/ProductVariant/930100009', 'gid://shopify/InventoryItem/940100009',
-      'Linen Notebook', 'Dotted', 'NOTE-DOT', 'Papier Saint-Laurent',
-      1, 18.00, 18.00, 5.20, 5.20, 12.80, 'SHOPIFY_UNIT_COST',
-      18.00, null, null, 18.00,
-      null, null, null,
-      'Sam Ouellet', 'sam.ouellet@demo-shopops.test', 'pos_session', now()
-    );
+    (0, 'gid://shopify/Location/910100001', 'Downtown Montreal'),
+    (1, 'gid://shopify/Location/910100002', 'Vieux-Port'),
+    (2, 'gid://shopify/Location/910100003', 'CF Carrefour Laval');
 
-  -- Refund transaction backing the D1014 partial refund/return above.
-  insert into public.order_transactions (
-    shop_domain,
-    shopify_order_id,
-    shopify_transaction_id,
-    kind,
-    status,
-    gateway,
-    processed_at,
-    amount,
-    currency_code,
-    created_at,
-    updated_at
-  )
-  values (
-    demo_shop, 'gid://shopify/Order/950100014', 'gid://shopify/OrderTransaction/970100001',
-    'refund', 'success', 'manual', now() - interval '6 days' + time '17:00',
-    32.00, 'CAD', now(), now()
-  );
+  -- Two staff members per location, standing in for POS session attribution.
+  create temporary table tmp_staff (
+    location_idx int,
+    staff_slot int,
+    staff_name text,
+    staff_email text,
+    primary key (location_idx, staff_slot)
+  ) on commit drop;
+
+  insert into tmp_staff (location_idx, staff_slot, staff_name, staff_email)
+  values
+    (0, 0, 'Alex Tremblay', 'alex.tremblay@demo-shopops.test'),
+    (0, 1, 'Jamie Roy', 'jamie.roy@demo-shopops.test'),
+    (1, 0, 'Sam Ouellet', 'sam.ouellet@demo-shopops.test'),
+    (1, 1, 'Chloe Bernier', 'chloe.bernier@demo-shopops.test'),
+    (2, 0, 'Marc-Andre Gagnon', 'marc-andre.gagnon@demo-shopops.test'),
+    (2, 1, 'Priya Nair', 'priya.nair@demo-shopops.test');
+
+  -- Generate 100 orders spread over the last 30 days, each with full staff
+  -- attribution, so Sales by Staff / by Location / by Vendor all have real
+  -- volume instead of a couple of hand-written examples. ~1 in 7 orders gets
+  -- a discount; ~1 in 11 gets a partial refund/return with a matching
+  -- order_transactions row. Order-level financial totals are rolled up from
+  -- the order_lines just inserted, so orders and order_lines always agree
+  -- (avoids tripping the Financial QA order/line reconciliation checks).
+  for v_order_seq in 1..100 loop
+    v_order_id := 'gid://shopify/Order/97501' || lpad(v_order_seq::text, 5, '0');
+    v_order_name := '#DM' || lpad(v_order_seq::text, 4, '0');
+
+    select * into v_loc from tmp_locations where idx = (v_order_seq % 3);
+    select * into v_staff from tmp_staff
+      where location_idx = (v_order_seq % 3) and staff_slot = (v_order_seq % 2);
+
+    v_order_ts := (current_date - (v_order_seq % 30))
+      + time '09:00'
+      + (((v_order_seq * 47) % 540) * interval '1 minute');
+
+    v_line_count := least(3, 1 + (v_order_seq % 4));
+    v_is_discounted := (v_order_seq % 7 = 0);
+    v_is_refunded := (v_order_seq % 11 = 0);
+    v_discount_pct := case when v_is_discounted then (10 + (v_order_seq % 3) * 5) else 0 end;
+
+    for v_line_idx in 1..v_line_count loop
+      v_line_item_seq := v_line_item_seq + 1;
+      select * into v_variant from tmp_variants
+        where idx = 1 + ((v_order_seq * 3 + v_line_idx) % 15);
+      v_qty := 1 + ((v_order_seq + v_line_idx) % 3);
+      v_line_gross := round(v_qty * v_variant.price, 2);
+      v_line_discount := round(v_line_gross * v_discount_pct / 100.0, 2);
+      v_returned_qty := case
+        when v_is_refunded and v_line_idx = 1 then greatest(1, v_qty / 2)
+        else null
+      end;
+      v_refund_amount := case
+        when v_returned_qty is not null then round(v_variant.price * v_returned_qty, 2)
+        else null
+      end;
+
+      insert into public.order_lines (
+        shop_domain, shopify_order_id, shopify_line_item_id, order_name, created_at_shopify,
+        retail_location_id, retail_location_name, shopify_variant_id, inventory_item_id,
+        product_title, variant_title, sku, vendor, quantity, unit_price, revenue,
+        unit_cost, cogs, gross_profit, cost_source,
+        gross_sales, discounts, discount_amount, net_sales,
+        returned_quantity, refunded_amount, returns,
+        staff_member_name, staff_member_email, staff_source, created_at
+      ) values (
+        demo_shop, v_order_id, 'gid://shopify/LineItem/9865' || lpad(v_line_item_seq::text, 6, '0'),
+        v_order_name, v_order_ts,
+        v_loc.location_id, v_loc.location_name, v_variant.variant_id, v_variant.inventory_item_id,
+        v_variant.product_title, v_variant.variant_title, v_variant.sku, v_variant.vendor,
+        v_qty, v_variant.price, v_line_gross,
+        v_variant.unit_cost,
+        case when v_variant.unit_cost is null then null else v_qty * v_variant.unit_cost end,
+        case when v_variant.unit_cost is null then null else v_line_gross - (v_qty * v_variant.unit_cost) end,
+        v_variant.cost_source,
+        v_line_gross, v_line_discount, v_line_discount,
+        v_line_gross - v_line_discount - coalesce(v_refund_amount, 0),
+        v_returned_qty, v_refund_amount, v_refund_amount,
+        v_staff.staff_name, v_staff.staff_email, 'pos_session', now()
+      );
+    end loop;
+
+    insert into public.orders (
+      shop_domain, shopify_order_id, order_name, created_at_shopify, financial_status,
+      retail_location_id, retail_location_name, total_price,
+      gross_sales, discounts, returns, net_sales, refunds,
+      total_discount_amount, discount_codes,
+      staff_member_name, staff_member_email, staff_source,
+      created_at, updated_at
+    )
+    select
+      demo_shop, v_order_id, v_order_name, v_order_ts,
+      case when v_is_refunded then 'PARTIALLY_REFUNDED' else 'PAID' end,
+      v_loc.location_id, v_loc.location_name,
+      sum(gross_sales) - sum(discounts),
+      sum(gross_sales), sum(discounts), sum(returns), sum(net_sales), sum(refunded_amount),
+      sum(discounts),
+      case when v_is_discounted then ('["DEMO' || v_discount_pct::text || '"]')::jsonb else null end,
+      v_staff.staff_name, v_staff.staff_email, 'pos_session',
+      now(), now()
+    from public.order_lines
+    where shop_domain = demo_shop and shopify_order_id = v_order_id;
+
+    if v_is_refunded then
+      insert into public.order_transactions (
+        shop_domain, shopify_order_id, shopify_transaction_id, kind, status, gateway,
+        processed_at, amount, currency_code, created_at, updated_at
+      )
+      select
+        demo_shop, v_order_id, 'gid://shopify/OrderTransaction/9755' || lpad(v_order_seq::text, 5, '0'),
+        'refund', 'success', 'manual', v_order_ts + interval '1 day',
+        sum(refunded_amount), 'CAD', now(), now()
+      from public.order_lines
+      where shop_domain = demo_shop and shopify_order_id = v_order_id
+        and refunded_amount is not null;
+    end if;
+  end loop;
 
   insert into public.fixed_expenses (
     shop_domain,
@@ -440,9 +339,28 @@ begin
   )
   values
     (demo_shop, 'locations', 'success', now() - interval '35 minutes', now() - interval '34 minutes', null, 'demo_seed', '{"syncedCount": 3}'::jsonb),
-    (demo_shop, 'products', 'success', now() - interval '33 minutes', now() - interval '31 minutes', null, 'demo_seed', '{"productsSynced": 8, "variantsSynced": 15, "variantsWithUnitCostSynced": 11, "variantsWithMissingUnitCost": 4, "orderLinesCogsRecomputed": 12}'::jsonb),
-    (demo_shop, 'inventory', 'success', now() - interval '30 minutes', now() - interval '29 minutes', null, 'demo_seed', '{"inventoryItemsProcessed": 15, "inventoryLevelsSynced": 18, "variantsUnitCostUpdated": 11, "orderLinesCogsRecomputed": 8}'::jsonb),
-    (demo_shop, 'orders', 'success', now() - interval '28 minutes', now() - interval '25 minutes', null, 'demo_seed', '{"ordersSynced": 12, "orderLinesSynced": 34, "pagesProcessed": 1, "startDate": "demo", "endDate": "demo"}'::jsonb);
+    (demo_shop, 'products', 'success', now() - interval '33 minutes', now() - interval '31 minutes', null, 'demo_seed', '{"productsSynced": 8, "variantsSynced": 15, "variantsWithUnitCostSynced": 11, "variantsWithMissingUnitCost": 3, "orderLinesCogsRecomputed": 12}'::jsonb),
+    (demo_shop, 'inventory', 'success', now() - interval '30 minutes', now() - interval '29 minutes', null, 'demo_seed', '{"inventoryItemsProcessed": 15, "inventoryLevelsSynced": 18, "variantsUnitCostUpdated": 11, "orderLinesCogsRecomputed": 8}'::jsonb);
+
+  insert into public.sync_runs (
+    shop_domain,
+    sync_type,
+    status,
+    started_at,
+    finished_at,
+    error_message,
+    source,
+    details
+  )
+  select
+    demo_shop, 'orders', 'success', now() - interval '28 minutes', now() - interval '25 minutes', null, 'demo_seed',
+    jsonb_build_object(
+      'ordersSynced', (select count(*) from public.orders where shop_domain = demo_shop),
+      'orderLinesSynced', (select count(*) from public.order_lines where shop_domain = demo_shop),
+      'pagesProcessed', 1,
+      'startDate', 'demo',
+      'endDate', 'demo'
+    );
 
   insert into public.user_location_access (
     shop_domain,
