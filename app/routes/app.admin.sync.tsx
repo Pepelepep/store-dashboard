@@ -14,7 +14,9 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { AppButton } from "../components/ui/AppButton";
 import { ContentCard } from "../components/ui/ShopOpsPage";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import { DataQualityChecks } from "../components/sync/DataQualityChecks";
 import { assertCapabilityAccess } from "../lib/auth/permissions.server";
+import { loadDataQualityReport } from "../lib/data-quality/data-quality-report.server";
 import { formatStoreDateTime } from "../lib/dashboard/dashboard-metrics";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import {
@@ -32,6 +34,7 @@ import {
 } from "../lib/sync/sync-jobs.server";
 import { ensureShopInitialized } from "../lib/shop/shop-initialization.server";
 import { authenticate } from "../shopify.server";
+import type { DataQualityReport } from "../lib/data-quality/data-quality-report.server";
 
 type SyncRun = {
   sync_type: string;
@@ -56,6 +59,9 @@ type LoaderData = {
   maintenance: MaintenanceHealth | null;
   webhookCounts: Record<string, number>;
   managePlanUrl: string;
+  shop: string;
+  preservedSearch: string;
+  dataQuality: DataQualityReport;
 };
 type ActionData = { ok: boolean; message: string; operationStatus?: string };
 
@@ -192,6 +198,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   );
   const activityLimit = viewAllActivity ? 20 : 5;
   const from = viewAllActivity ? page * 20 : 0;
+  const dataQuality = await loadDataQualityReport({
+    supabase,
+    shop: session.shop,
+  });
   const [
     runsResult,
     jobsResult,
@@ -253,6 +263,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     maintenance: maintenanceResult.data as MaintenanceHealth | null,
     webhookCounts,
     managePlanUrl: "/app/settings?tab=plan",
+    shop: session.shop,
+    preservedSearch: url.search,
+    dataQuality,
   } satisfies LoaderData;
 }
 
@@ -391,6 +404,9 @@ export default function DataSyncPage({
     maintenance,
     webhookCounts,
     managePlanUrl,
+    shop,
+    preservedSearch,
+    dataQuality,
   } = useLoaderData<LoaderData>();
   const result = useActionData<ActionData>();
   const navigation = useNavigation();
@@ -756,6 +772,19 @@ export default function DataSyncPage({
                   ) : null}
                 </div>
               ))}
+            </section>
+            <section>
+              <h3>Data quality checks</h3>
+              <p>
+                Integrity checks that compare synced Shopify data against
+                what reporting expects. Use this to confirm reports are
+                complete enough to trust.
+              </p>
+              <DataQualityChecks
+                report={dataQuality}
+                shop={shop}
+                preservedSearch={preservedSearch}
+              />
             </section>
           </div>
         </details>
