@@ -25,10 +25,10 @@ export const SHOP_OPS_ROLE_DEFINITIONS = {
   viewer: {
     label: "Location viewer",
     description: "View performance for assigned locations only.",
-    defaultPath: "/app/locations",
+    defaultPath: "/app/db-dashboard",
     capabilities: {
-      view_dashboard: false,
-      view_locations: true,
+      view_dashboard: true,
+      view_locations: false,
       assigned_locations: true,
       manage_people: false,
       manage_costs: false,

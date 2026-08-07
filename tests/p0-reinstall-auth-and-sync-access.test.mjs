@@ -1043,7 +1043,7 @@ test("merchant navigation is the exact capability-aware information architecture
 
   assert.deepEqual(
     getShopOpsNavigation("viewer").map((item) => item.label),
-    ["Compare Locations"],
+    ["Overview"],
   );
   assert.deepEqual(
     getShopOpsNavigation("manager").map((item) => item.label),
@@ -1064,8 +1064,7 @@ test("merchant navigation is the exact capability-aware information architecture
     getShopOpsNavigation("owner").map((item) => item.label),
     operationalNavigation,
   );
-  assert.equal(getShopOpsDefaultPath("viewer"), "/app/locations");
-  for (const role of ["manager", "admin", "owner"]) {
+  for (const role of ["viewer", "manager", "admin", "owner"]) {
     assert.equal(getShopOpsDefaultPath(role), "/app/db-dashboard");
   }
   assert.match(costsRoute, /capability: "manage_costs"/);
@@ -1084,8 +1083,8 @@ test("merchant navigation is the exact capability-aware information architecture
 test("ShopOps roles use one exact merchant-facing capability matrix", () => {
   const expectedCapabilities = {
     viewer: {
-      view_dashboard: false,
-      view_locations: true,
+      view_dashboard: true,
+      view_locations: false,
       assigned_locations: true,
       manage_people: false,
       manage_costs: false,
