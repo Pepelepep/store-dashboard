@@ -106,12 +106,12 @@ export const SHOP_OPS_NAVIGATION = [
   {
     capability: "view_dashboard",
     href: "/app/db-dashboard",
-    label: "Dashboard",
+    label: "Overview",
   },
   {
     capability: "view_locations",
     href: "/app/locations",
-    label: "Locations",
+    label: "Compare Locations",
   },
   { capability: "manage_costs", href: "/app/costs", label: "Costs" },
   { capability: "manage_people", href: "/app/people", label: "People" },

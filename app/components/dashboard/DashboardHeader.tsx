@@ -65,7 +65,7 @@ export function DashboardHeader({
         }
         description="Track Shopify sales, discounts, refunds, COGS, margins, and inventory risk from synced store data."
         icon={ChartVerticalIcon}
-        title="Dashboard"
+        title="Overview"
       />
       <ContentCard>
         <DashboardFilters

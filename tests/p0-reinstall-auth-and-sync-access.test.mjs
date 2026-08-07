@@ -1043,15 +1043,15 @@ test("merchant navigation is the exact capability-aware information architecture
 
   assert.deepEqual(
     getShopOpsNavigation("viewer").map((item) => item.label),
-    ["Locations"],
+    ["Compare Locations"],
   );
   assert.deepEqual(
     getShopOpsNavigation("manager").map((item) => item.label),
-    ["Dashboard", "Locations"],
+    ["Overview", "Compare Locations"],
   );
   const operationalNavigation = [
-    "Dashboard",
-    "Locations",
+    "Overview",
+    "Compare Locations",
     "Costs",
     "People",
     "Settings",
@@ -1332,7 +1332,7 @@ test("People access UX presents merchant roles and canonical location scope", ()
   assert.match(people, /capabilities\.all_locations \? \(/);
   assert.match(people, /normalizeShopOpsAccessConfiguration/);
   assert.match(people, /return "All locations"/);
-  assert.match(locations, /Dashboard access is not included/);
+  assert.match(locations, /Overview access is not included/);
   assert.match(
     locations,
     /Your ShopOps role provides access to assigned locations only\./,

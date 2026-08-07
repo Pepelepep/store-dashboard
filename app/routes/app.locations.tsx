@@ -2864,7 +2864,7 @@ function ReportingLocationsPage({ data }: { data: ReportingLoaderData }) {
       <PageHeader
         description="Review location performance and choose which locations appear in ShopOps."
         icon={LocationIcon}
-        title="Locations"
+        title="Compare Locations"
       />
       <SectionTabs
         activeTab="reporting"
@@ -3266,12 +3266,12 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
             : "Review performance for assigned reporting locations."
         }
         icon={LocationIcon}
-        title="Locations"
+        title="Compare Locations"
       />
       {data.dashboardAccessNotice ? (
         <PageNotice
           cta={{ to: "/app/locations", label: "View locations" }}
-          title="Dashboard access is not included"
+          title="Overview access is not included"
           message="Your ShopOps role provides access to assigned locations only."
           tone="info"
         />
