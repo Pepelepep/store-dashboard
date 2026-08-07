@@ -1054,7 +1054,6 @@ test("merchant navigation is the exact capability-aware information architecture
     "Locations",
     "Costs",
     "People",
-    "Data sync",
     "Settings",
   ];
   assert.deepEqual(

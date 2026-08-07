@@ -29,7 +29,7 @@ type PlanLoaderData = {
 
 export async function loader(args: LoaderFunctionArgs) {
   const url = new URL(args.request.url);
-  if (url.searchParams.get("tab") !== "plan") {
+  if (url.searchParams.get("tab") === "sync") {
     return dataSyncLoader(args);
   }
 
@@ -110,14 +110,14 @@ export { ErrorBoundary };
 export default function SettingsPage() {
   const location = useLocation();
   const tab =
-    new URLSearchParams(location.search).get("tab") === "plan"
-      ? "plan"
-      : "sync";
+    new URLSearchParams(location.search).get("tab") === "sync"
+      ? "sync"
+      : "plan";
 
   return (
     <ShopOpsPage>
       <PageHeader
-        description="Manage synchronization, usage, and billing."
+        description="Manage plan, billing, and data synchronization."
         icon={SettingsIcon}
         title="Settings"
       />
@@ -125,11 +125,11 @@ export default function SettingsPage() {
         activeTab={tab}
         ariaLabel="Settings sections"
         tabs={[
-          { value: "sync", label: "Data sync" },
           { value: "plan", label: "Plan & billing" },
+          { value: "sync", label: "Data sync" },
         ]}
       />
-      {tab === "plan" ? <PlanBillingContent /> : <DataSyncPage embedded />}
+      {tab === "sync" ? <DataSyncPage embedded /> : <PlanBillingContent />}
     </ShopOpsPage>
   );
 }

@@ -116,12 +116,6 @@ export const SHOP_OPS_NAVIGATION = [
   { capability: "manage_costs", href: "/app/costs", label: "Costs" },
   { capability: "manage_people", href: "/app/people", label: "People" },
   {
-    capability: "manage_sync",
-    href: "/app/settings",
-    label: "Data sync",
-    tab: "sync",
-  },
-  {
     capability: "manage_settings",
     href: "/app/settings",
     label: "Settings",
