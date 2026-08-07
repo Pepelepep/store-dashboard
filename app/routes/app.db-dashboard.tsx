@@ -19,9 +19,13 @@ import {
 } from "../lib/sync/sync-failure-resolution";
 import { ActiveDrilldownBadge } from "../components/dashboard/ActiveDrilldownBadge";
 import { BestSellersCard } from "../components/dashboard/BestSellersCard";
-import { DashboardHeader } from "../components/dashboard/DashboardHeader";
+import {
+  DashboardHeader,
+  type DashboardConfidenceStatus,
+} from "../components/dashboard/DashboardHeader";
 import { KpiCards } from "../components/dashboard/KpiCards";
 import { RecentOrderLinesCard } from "../components/dashboard/RecentOrderLinesCard";
+import { SalesAdjustmentsCard } from "../components/dashboard/SalesAdjustmentsCard";
 import { SalesByHourCard } from "../components/dashboard/SalesByHourCard";
 import { SalesByStaffCard } from "../components/dashboard/SalesByStaffCard";
 import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
@@ -31,6 +35,7 @@ import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { AppButtonLink } from "../components/ui/AppButton";
 import {
   CompactEmptyDataNotice,
+  InlineNotice,
   ShopOpsPage,
 } from "../components/ui/ShopOpsPage";
 import { getDataSyncPath } from "../lib/navigation/sync-status";
@@ -43,6 +48,7 @@ import {
   computeSalesByVendor,
   computeStockAlerts,
   daysBetween,
+  formatNumber,
   getBestSellerDrilldownValue,
   getLineCogsV2,
   getLineDiscounts,
@@ -979,6 +985,12 @@ export default function DbDashboardPage() {
   ];
   const showOnboarding =
     readiness.canAdmin && onboardingItems.some((item) => !item.complete);
+  const hasSyncIssue = readiness.syncFailureBanner.kind !== "hidden";
+  const confidenceStatus: DashboardConfidenceStatus = isFirstRunPreparing
+    ? "Syncing"
+    : hasSyncIssue || kpis.cogsIncomplete
+      ? "Needs attention"
+      : "Up to date";
 
   return (
     <ShopOpsPage>
@@ -996,6 +1008,7 @@ export default function DbDashboardPage() {
         lastSuccessfulSync={lastSuccessfulSync}
         selectedDays={selectedDays}
         locationAccessRestricted={!readiness.canAdmin}
+        confidenceStatus={confidenceStatus}
       />
 
       {showOnboarding ? (
@@ -1090,11 +1103,36 @@ export default function DbDashboardPage() {
 
       {!readiness.noAssignedLocations && !isFirstRunPreparing ? (
         <>
+          {kpis.cogsIncomplete ? (
+            <div style={{ marginBottom: 14 }}>
+              <InlineNotice tone="warning">
+                {formatNumber(kpis.missingCogsLineCount)} sales{" "}
+                {kpis.missingCogsLineCount === 1 ? "line is" : "lines are"}{" "}
+                missing product costs for this period — profit and margin may
+                be understated.
+                {readiness.canAdmin ? (
+                  <>
+                    {" "}
+                    <Link to="/app/costs?tab=products">
+                      Review product costs
+                    </Link>
+                  </>
+                ) : null}
+              </InlineNotice>
+            </div>
+          ) : null}
+
           <KpiCards
             kpis={kpis}
             financialMetricsVersion={financialMetricsVersion}
             canAdmin={readiness.canAdmin}
           />
+
+          {financialMetricsVersion === "v2" ? (
+            <div style={{ marginBottom: 20 }}>
+              <SalesAdjustmentsCard kpis={kpis} />
+            </div>
+          ) : null}
 
           <ActiveDrilldownBadge
             activeDrilldowns={activeDrilldowns}

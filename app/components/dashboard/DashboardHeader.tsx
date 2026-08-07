@@ -9,8 +9,20 @@ import type {
 } from "../../lib/dashboard/dashboard-types";
 import { ChartVerticalIcon } from "@shopify/polaris-icons";
 import { ContentCard, PageHeader } from "../ui/ShopOpsPage";
+import { StatusBadge } from "../ui/StatusBadge";
 import { DashboardFilters } from "./DashboardFilters";
 import { ReportFilterMeta } from "./ReportFilters";
+
+export type DashboardConfidenceStatus =
+  | "Up to date"
+  | "Syncing"
+  | "Needs attention";
+
+const CONFIDENCE_BADGE_VARIANT = {
+  "Up to date": "success",
+  Syncing: "info",
+  "Needs attention": "warning",
+} as const;
 
 export function DashboardHeader({
   locations,
@@ -26,6 +38,7 @@ export function DashboardHeader({
   lastSuccessfulSync,
   selectedDays,
   locationAccessRestricted,
+  confidenceStatus,
 }: {
   locations: LocationRow[];
   selectedLocationId: string | null;
@@ -40,10 +53,16 @@ export function DashboardHeader({
   lastSuccessfulSync: string | null;
   selectedDays: number;
   locationAccessRestricted: boolean;
+  confidenceStatus: DashboardConfidenceStatus;
 }) {
   return (
     <>
       <PageHeader
+        action={
+          <StatusBadge variant={CONFIDENCE_BADGE_VARIANT[confidenceStatus]}>
+            {confidenceStatus}
+          </StatusBadge>
+        }
         description="Track Shopify sales, discounts, refunds, COGS, margins, and inventory risk from synced store data."
         icon={ChartVerticalIcon}
         title="Dashboard"
