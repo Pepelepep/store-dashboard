@@ -34,8 +34,8 @@ Compliance webhook behavior:
 - Valid compliance webhook requests return 200.
 - Invalid HMAC requests return 401.
 
-Open decisions:
+First-submission decisions:
 
-- Approve final retention periods.
-- Decide whether operational webhook payloads need shorter retention after processing.
-- Confirm final retention periods.
+- Shop-scoped data is deleted when Shopify delivers `shop/redact`; the public policy allows a maximum 30-day accidental-reinstall window.
+- Minimal compliance audit events are retained for one year without raw customer contact values.
+- Successful operational webhook history is cleaned after 30 days by the bounded maintenance workflow. Failed/unresolved events remain available for remediation and must not contain unnecessary customer contact data.

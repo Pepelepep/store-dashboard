@@ -44,7 +44,7 @@ Draft status: marketplace preparation checklist.
 
 - [x] Confirm app name: ShopOps Studio.
 - [ ] Approve target launch strategy: private, unlisted, or public App Store.
-- [ ] Decide whether `/app/locations` should remain admin-only or become viewer-accessible.
+- [x] Finalize role-first Locations behavior: Viewer uses scoped Overview only; Manager compares assigned locations; Admin/Owner compare globally.
 - [ ] Decide first-install onboarding requirements.
 - [x] Confirm Data Health is the marketplace-facing report trust page.
 - [ ] Confirm Sync Center remains admin/support diagnostic and hidden from main navigation.
@@ -73,15 +73,15 @@ Draft status: marketplace preparation checklist.
 - [x] Public expected response time set to within 2 business days; security or privacy requests are prioritized.
 - [ ] Legal review privacy policy.
 - [ ] Legal review terms of service.
-- [ ] Approve data retention policy.
-- [ ] Approve 30-day post-uninstall retention or choose alternative.
-- [ ] Decide permission preservation vs reset on uninstall.
-- [ ] Decide compliance audit event retention window.
+- [x] Approve first-submission data retention policy.
+- [x] Set a maximum 30-day accidental-reinstall window, with `shop/redact` deletion taking precedence.
+- [x] Preserve permissions only during the recovery window; delete them on `shop/redact`.
+- [x] Retain minimal non-contact compliance audit events for one year.
 - [ ] Confirm direct customer profile fields are not stored in reporting tables.
 - [x] Confirm no customer name, customer email, customer phone, or customer address columns are used in reporting tables.
 - [x] Confirm `orders.shipping` is shipping amount only.
 - [x] Confirm staff/app email fields are not customer email fields.
-- [ ] Confirm operational webhook payload retention policy.
+- [x] Confirm bounded operational history cleanup and prohibit unnecessary customer contact data in payload history.
 - [ ] Confirm support workflow avoids unnecessary customer personal data.
 - [ ] Validate compliance webhook behavior in staging.
 
@@ -111,7 +111,7 @@ Draft status: marketplace preparation checklist.
 
 ## Listing Assets
 
-- [ ] Final app icon.
+- [x] Create a compliant 1200 × 1200 app-icon candidate (`public/marketplace/shopops-studio-app-icon-1200.png`). Final visual approval/upload remains manual.
 - [ ] Dashboard screenshot.
 - [ ] Locations screenshot.
 - [ ] Data Health screenshot.

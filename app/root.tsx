@@ -12,7 +12,7 @@ import "@shopify/polaris/build/esm/styles.css";
 
 export default function App() {
   return (
-    <html>
+    <html lang="en">
       <head>
         <Meta />
         <Links />

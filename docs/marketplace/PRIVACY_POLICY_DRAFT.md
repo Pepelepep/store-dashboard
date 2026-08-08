@@ -51,7 +51,7 @@ Specific subprocessors and infrastructure providers must be listed before public
 
 ShopOps Studio handles Shopify compliance webhooks at draft level as follows:
 
-- `customers/data_request`: records a safe audit event and notes that direct customer profile export is not implemented because direct customer profiles are not intentionally stored.
+- `customers/data_request`: records a safe pending fulfillment event. Requested order reporting records are treated as potentially personal data and must be exported and delivered directly to the merchant within Shopify's required timeframe. Raw customer email and phone values from the webhook are not stored in the audit event.
 - `customers/redact`: redacts matched order display fields where Shopify provides order IDs, while preserving aggregate financial totals needed for merchant analytics.
 - `shop/redact`: deletes shop-scoped business analytics data and Shopify sessions for the requested shop, while retaining a minimal compliance audit event.
 

@@ -45,8 +45,9 @@ Admin expected result:
 
 Viewer/no-access expected result:
 
-- Viewer with no assigned locations sees "You do not have access to any locations yet."
-- Viewer is told to ask an app admin to assign location access.
+- A Viewer with active assigned locations lands directly on Overview and sees only that assigned scope.
+- A Viewer has no Compare Locations, reporting-location management, People, Costs, Sync, Settings or Billing navigation.
+- A Viewer with no valid assignment is denied safely and is told to contact the store owner/admin.
 
 ## Dashboard
 
@@ -54,7 +55,7 @@ Route: `/app/db-dashboard`
 
 Steps:
 
-1. Confirm location selector appears.
+1. As Manager/Admin/Owner, confirm the location selector reflects the role's allowed scope. As Viewer, confirm there is no global comparison or access-management UX.
 2. Select a date range with demo orders.
 3. Review KPI cards.
 4. Review Best sellers.
@@ -87,13 +88,15 @@ Expected result:
 
 Route: `/app/locations`
 
-Admin-only note:
+Role note:
 
-- This route remains admin-only in Phase 3.
+- Manager can compare assigned locations.
+- Admin and Owner can compare all reporting locations.
+- Viewer cannot open this route and remains on scoped Overview.
 
 Steps:
 
-1. Open Locations as an admin.
+1. Open Compare Locations as Manager, Admin or Owner.
 2. Select all locations.
 3. Select one location.
 4. Change date range.
@@ -145,11 +148,11 @@ Expected result:
 
 ## Permissions
 
-Route: `/app/admin/permissions`
+Route: `/app/people`
 
 Steps:
 
-1. Open Permissions as admin.
+1. Open People as Admin or Owner.
 2. Confirm locations appear after location sync.
 3. Enter a Shopify account email or Shopify user ID manually.
 4. Assign a role and one or more locations.
@@ -167,11 +170,11 @@ Expected result:
 
 ## Expenses
 
-Route: `/app/admin/expenses`
+Route: `/app/costs?tab=expenses`
 
 Steps:
 
-1. Open Expenses as admin.
+1. Open Costs > Operating expenses as Admin or Owner.
 2. Review existing demo expenses.
 3. Add a demo expense if needed.
 4. Assign expense globally or to a location.

@@ -13,7 +13,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const supabase = getSupabaseAdminClient();
   const details = {
     ...getSafeCustomerRequestDetails(payload),
-    limitation: "Customer-level export is not implemented because direct customer profiles are not stored.",
+    fulfillmentStatus: "pending_merchant_delivery",
+    fulfillmentDeadlineDays: 30,
+    nextAction:
+      "Use the requested Shopify order IDs to prepare the shop-scoped data export and deliver it directly to the merchant.",
+    limitation:
+      "Direct customer contact fields are not stored. Requested order reporting records can still be personal data and must be included in the merchant response.",
   };
 
   console.log(`Received ${topic} compliance webhook for ${shop}.`);
@@ -23,7 +28,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       supabase,
       shop,
       topic,
-      status: "completed",
+      status: "received",
       details,
     });
   } catch (error) {

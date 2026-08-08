@@ -29,6 +29,7 @@ import { fetchAllSupabasePages } from "../app/lib/db/supabase-pagination.server.
 import { respondToOperationalWebhook } from "../app/lib/webhooks/operational-webhook-response.server.ts";
 import {
   deleteShopScopedSupabaseData,
+  getSafeCustomerRequestDetails,
   recordComplianceWebhookEvent,
   SHOP_REDACTION_TABLES,
 } from "../app/lib/compliance/compliance-webhooks.server.ts";
@@ -4628,6 +4629,35 @@ test("primary filter reset key changes only with applied dashboard dimensions", 
     assert.match(route, /buildDrilldownResetKey/);
     assert.match(route, /useEffect\(\(\) => \{[\s\S]*?setActiveDrilldowns\(/);
   }
+});
+
+test("customer data request audit details never retain raw customer contact values", () => {
+  const details = getSafeCustomerRequestDetails({
+    customer: {
+      id: "customer-1",
+      email: "customer@example.com",
+      phone: "+1-555-0100",
+    },
+    orders_requested: [101, 102],
+    data_request: { id: 999 },
+  });
+
+  assert.deepEqual(details, {
+    dataRequestId: "999",
+    customerIdPresent: true,
+    customerEmailPresent: true,
+    customerPhonePresent: true,
+    ordersRequestedCount: 2,
+  });
+  assert.doesNotMatch(JSON.stringify(details), /customer@example\.com|555-0100/);
+
+  const route = readFileSync(
+    new URL("../app/routes/webhooks.customers.data_request.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(route, /status:\s*"received"/);
+  assert.match(route, /pending_merchant_delivery/);
+  assert.doesNotMatch(route, /status:\s*"completed"/);
 });
 
 test("minimal completed and failed compliance events remain recordable after shop deletion", async () => {

@@ -230,7 +230,7 @@ export default function MarketingHome() {
         <section style={{ padding: "8px 0 56px" }}>
           <div style={{ ...cardStyle, padding: "32px clamp(20px, 4vw, 44px)" }}>
             <h2 style={{ fontSize: 22, margin: "0 0 18px" }}>
-              What's included
+              What&apos;s included
             </h2>
             <ul
               style={{

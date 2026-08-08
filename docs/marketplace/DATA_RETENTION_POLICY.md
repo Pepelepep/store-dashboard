@@ -1,6 +1,6 @@
 # Data Retention Policy
 
-Draft status: marketplace preparation draft. This document records proposed decisions and open alternatives.
+Status: approved first-submission policy.
 
 ## Current Observed Behavior
 
@@ -17,9 +17,9 @@ Draft status: marketplace preparation draft. This document records proposed deci
 - It deletes Shopify sessions for the shop.
 - It records a minimal compliance audit event.
 
-## Proposed Uninstall/Reinstall Policy
+## Uninstall/Reinstall Policy
 
-Recommended policy: retain shop-scoped business analytics data for 30 days after app uninstall, unless a redaction/deletion request occurs sooner.
+ShopOps Studio may retain shop-scoped business analytics data for no more than 30 days after app uninstall, unless Shopify's `shop/redact` webhook or another valid deletion request requires deletion sooner. A successful `shop/redact` request deletes the data immediately and therefore takes precedence over the recovery window.
 
 Reasoning:
 
@@ -28,9 +28,7 @@ Reasoning:
 - Gives support a short window to diagnose uninstall/reinstall issues.
 - Limits long-term retention after the merchant stops using the app.
 
-Important implementation note:
-
-- The current code does not yet enforce a 30-day deletion timer after uninstall. This is a policy recommendation and implementation decision, not current behavior.
+The primary deletion mechanism is Shopify's mandatory `shop/redact` lifecycle webhook. Operations must monitor failed compliance events and complete any failed deletion manually. If the application ever retains data beyond Shopify's redaction lifecycle, a separate 30-day cleanup job must be deployed before that behavior is enabled.
 
 ## Alternatives
 
@@ -81,11 +79,8 @@ Audit event details should remain non-sensitive:
 - Error message if needed.
 - Counts and safe boolean indicators rather than raw customer contact data.
 
-Open decision: define final audit event retention window. Recommended starting point: 1 year, unless counsel recommends a different period.
+Minimal compliance audit events are retained for one year. They contain status, timestamps, safe counts/booleans and bounded error details, not raw customer contact values or webhook payloads.
 
-## Open Decisions
+## Reinstall and Permissions
 
-- Approve 30-day post-uninstall retention or choose an alternative.
-- Decide whether permissions should be preserved across reinstall or reset on uninstall.
-- Decide final compliance audit event retention period.
-- Decide whether to add an automated deletion job for uninstalled shops before App Store submission.
+Permissions may remain during the short recovery window so an accidental reinstall can recover the previous ShopOps configuration. They are deleted by `shop/redact`. OAuth sessions and billing cache are always removed immediately on uninstall, so reinstall requires a fresh Shopify authentication and fresh billing verification.

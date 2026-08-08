@@ -15,6 +15,7 @@ These docs support ShopOps Studio marketplace readiness and reviewer preparation
 - [Privacy policy draft](PRIVACY_POLICY_DRAFT.md)
 - [Terms of service draft](TERMS_OF_SERVICE_DRAFT.md)
 - [Data retention policy](DATA_RETENTION_POLICY.md)
+- [Partner Dashboard submission runbook](PARTNER_DASHBOARD_SUBMISSION_RUNBOOK.md)
 - [Support and contacts](SUPPORT_AND_CONTACTS.md)
 
 ## Data And Shopify Review
