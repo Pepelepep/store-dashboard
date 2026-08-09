@@ -6,78 +6,11 @@ import type {
   FinancialMetricsVersion,
   StaffSalesRow,
 } from "../../lib/dashboard/dashboard-types";
+import {
+  SortableDataTable,
+  type SortableDataTableColumn,
+} from "../ui/SortableDataTable";
 import { SectionCard } from "./SectionCard";
-
-function SalesTable({
-  headers,
-  rows,
-  selectedRowKey,
-  onRowClick,
-}: {
-  headers: string[];
-  rows: Array<{
-    key: string;
-    values: Array<string | number>;
-    source: StaffSalesRow;
-  }>;
-  selectedRowKey?: string | null;
-  onRowClick?: (row: StaffSalesRow) => void;
-}) {
-  const numericHeaders = new Set(["Units", "Revenue", "Product sales"]);
-
-  return (
-    <div className="shopops-data-table-scroll">
-      <table className="shopops-data-table">
-        <thead>
-          <tr>
-            {headers.map((header) => (
-              <th
-                data-align={numericHeaders.has(header) ? "right" : "left"}
-                key={header}
-              >
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const isSelected = selectedRowKey === row.key;
-            return (
-              <tr
-                data-selectable={onRowClick ? "true" : "false"}
-                data-selected={isSelected ? "true" : "false"}
-                key={row.key}
-                title="Filter sales sections by this staff member"
-                role={onRowClick ? "button" : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
-                onClick={() => onRowClick?.(row.source)}
-                onKeyDown={(event) => {
-                  if (!onRowClick) return;
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onRowClick(row.source);
-                  }
-                }}
-              >
-                {row.values.map((cell, cellIndex) => (
-                  <td
-                    data-align={
-                      numericHeaders.has(headers[cellIndex]) ? "right" : "left"
-                    }
-                    key={cellIndex}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 export function SalesByStaffCard({
   salesByStaff,
@@ -94,6 +27,28 @@ export function SalesByStaffCard({
 }) {
   const revenueLabel =
     financialMetricsVersion === "v2" ? "Product sales" : "Revenue";
+  const columns: SortableDataTableColumn<StaffSalesRow>[] = [
+    {
+      key: "staff",
+      label: "Staff",
+      render: (row) => row.staff,
+      sortValue: (row) => row.staff,
+    },
+    {
+      align: "right",
+      key: "units",
+      label: "Units",
+      render: (row) => formatNumber(row.units),
+      sortValue: (row) => row.units,
+    },
+    {
+      align: "right",
+      key: "revenue",
+      label: revenueLabel,
+      render: (row) => formatCurrency(row.revenue),
+      sortValue: (row) => row.revenue,
+    },
+  ];
 
   return (
     <SectionCard
@@ -127,19 +82,15 @@ export function SalesByStaffCard({
         </div>
       ) : null}
       {salesByStaff.length > 0 ? (
-        <SalesTable
-          headers={["Staff", "Units", revenueLabel]}
+        <SortableDataTable
+          ariaLabel="Product sales by staff"
+          columns={columns}
+          defaultSort={{ key: "revenue", direction: "desc" }}
+          getRowKey={(row) => row.staffKey}
+          getRowTitle={() => "Filter sales sections by this staff member"}
           selectedRowKey={selectedStaffKey}
           onRowClick={onSelectStaff}
-          rows={salesByStaff.map((row) => ({
-            key: row.staffKey,
-            source: row,
-            values: [
-              row.staff,
-              formatNumber(row.units),
-              formatCurrency(row.revenue),
-            ],
-          }))}
+          rows={salesByStaff}
         />
       ) : (
         <div className="shopops-table-empty-inline">

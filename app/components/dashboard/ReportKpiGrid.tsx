@@ -36,11 +36,12 @@ export function MetricCard({ item }: { item: ReportKpiCardItem }) {
         <div className="shopops-kpi-value">{item.value}</div>
         {item.comparison ? (
           <div
+            aria-label={`${item.comparison.value} ${item.comparison.label}`}
             className="shopops-kpi-comparison"
             data-tone={item.comparison.tone}
+            title={item.comparison.label}
           >
             <strong>{item.comparison.value}</strong>
-            <span>{item.comparison.label}</span>
           </div>
         ) : null}
         {item.detail ? (
@@ -65,13 +66,27 @@ export function ReportKpiNotice({
   );
 }
 
-export function ReportKpiGrid({ items }: { items: ReportKpiCardItem[] }) {
+export function ReportKpiGrid({
+  comparisonContext,
+  items,
+}: {
+  comparisonContext?: string;
+  items: ReportKpiCardItem[];
+}) {
   return (
-    <section className="shopops-kpi-grid" data-item-count={items.length}>
-      {items.map((item) => (
-        <MetricCard item={item} key={item.id} />
-      ))}
-    </section>
+    <>
+      {comparisonContext ? (
+        <div className="shopops-kpi-comparison-context">
+          <span>Compared with</span>
+          <strong>{comparisonContext}</strong>
+        </div>
+      ) : null}
+      <section className="shopops-kpi-grid" data-item-count={items.length}>
+        {items.map((item) => (
+          <MetricCard item={item} key={item.id} />
+        ))}
+      </section>
+    </>
   );
 }
 

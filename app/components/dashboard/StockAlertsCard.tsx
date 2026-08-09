@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
-
 import {
   formatDecimal,
   formatNumber,
 } from "../../lib/dashboard/dashboard-metrics";
 import type { StockAlertRow } from "../../lib/dashboard/dashboard-types";
+import {
+  SortableDataTable,
+  type SortableDataTableColumn,
+} from "../ui/SortableDataTable";
 import { SectionCard } from "./SectionCard";
 
 function StatusBadge({ status }: { status: StockAlertRow["status"] }) {
@@ -29,67 +31,54 @@ function StatusBadge({ status }: { status: StockAlertRow["status"] }) {
   );
 }
 
-function Table({
-  headers,
-  rows,
-}: {
-  headers: string[];
-  rows: Array<Array<string | number | ReactNode>>;
-}) {
-  const numericHeaders = new Set(["Available", "Sold", "Days left"]);
-
-  return (
-    <div className="shopops-data-table-scroll">
-      <table className="shopops-data-table">
-        <thead>
-          <tr>
-            {headers.map((header) => (
-              <th
-                data-align={numericHeaders.has(header) ? "right" : "left"}
-                key={header}
-              >
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length > 0 ? (
-            rows.map((row, index) => (
-              <tr key={index}>
-                {row.map((cell, cellIndex) => (
-                  <td
-                    data-align={
-                      numericHeaders.has(headers[cellIndex]) ? "right" : "left"
-                    }
-                    key={cellIndex}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td
-                className="shopops-data-table__empty"
-                colSpan={headers.length}
-              >
-                No data for this selection.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export function StockAlertsCard({
   stockAlerts,
 }: {
   stockAlerts: StockAlertRow[];
 }) {
+  const columns: SortableDataTableColumn<StockAlertRow>[] = [
+    {
+      key: "product",
+      label: "Product",
+      render: (row) => row.product,
+      sortValue: (row) => row.product,
+    },
+    {
+      key: "sku",
+      label: "SKU",
+      render: (row) => row.sku,
+      sortValue: (row) => row.sku,
+    },
+    {
+      align: "right",
+      key: "available",
+      label: "Available",
+      render: (row) => formatNumber(row.available),
+      sortValue: (row) => row.available,
+    },
+    {
+      align: "right",
+      key: "sold",
+      label: "Sold",
+      render: (row) => formatNumber(row.unitsSold),
+      sortValue: (row) => row.unitsSold,
+    },
+    {
+      align: "right",
+      key: "daysLeft",
+      label: "Days left",
+      render: (row) =>
+        row.daysLeft === null ? "-" : formatDecimal(row.daysLeft),
+      sortValue: (row) => row.daysLeft,
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (row) => <StatusBadge status={row.status} />,
+      sortValue: (row) => row.status,
+    },
+  ];
+
   return (
     <SectionCard
       title="Soon out of stock"
@@ -107,16 +96,12 @@ export function StockAlertsCard({
         ]),
       }}
     >
-      <Table
-        headers={["Product", "SKU", "Available", "Sold", "Days left", "Status"]}
-        rows={stockAlerts.map((row) => [
-          row.product,
-          row.sku,
-          formatNumber(row.available),
-          formatNumber(row.unitsSold),
-          row.daysLeft === null ? "-" : formatDecimal(row.daysLeft),
-          <StatusBadge key={`${row.sku}-${row.status}`} status={row.status} />,
-        ])}
+      <SortableDataTable
+        ariaLabel="Products soon out of stock"
+        columns={columns}
+        defaultSort={{ key: "daysLeft", direction: "asc" }}
+        getRowKey={(row, index) => `${row.sku}-${row.product}-${index}`}
+        rows={stockAlerts}
       />
     </SectionCard>
   );

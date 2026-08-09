@@ -436,6 +436,7 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-form-control--short { width: 120px; }
   .shopops-checkbox-field { align-items: flex-start; display: flex; gap: 10px; }
   .shopops-checkbox-field input { accent-color: var(--shopops-accent); margin-top: 3px; }
+  .shopops-checkbox-field > span { display: grid; gap: 4px; }
   .shopops-notice-spaced { margin-top: 18px; }
   .shopops-preview { border-top: 1px solid var(--shopops-border); margin-top: 20px; padding-top: 18px; }
   .shopops-preview h3 { font-size: 16px; margin: 0; }
@@ -496,7 +497,8 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-kpi-value { color: var(--p-color-text, #202223); font-size: clamp(21px, 2vw, 28px); font-variant-numeric: tabular-nums; font-weight: 800; letter-spacing: -0.025em; line-height: 1.12; margin-bottom: 7px; overflow-wrap: anywhere; }
   .shopops-kpi-comparison { align-items: center; display: flex; flex-wrap: wrap; font-size: 11px; gap: 4px 6px; margin: 0 0 7px; }
   .shopops-kpi-comparison strong { border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 850; padding: 3px 7px; }
-  .shopops-kpi-comparison span { color: var(--shopops-muted); }
+  .shopops-kpi-comparison-context { align-items: center; color: var(--shopops-muted); display: flex; font-size: 11px; gap: 5px; justify-content: flex-end; margin: 0 2px 7px; }
+  .shopops-kpi-comparison-context strong { color: #475569; font-weight: 750; }
   .shopops-kpi-comparison[data-tone="positive"] strong { background: #dcfce7; color: #067647; }
   .shopops-kpi-comparison[data-tone="negative"] strong { background: #fee2e2; color: #b42318; }
   .shopops-kpi-comparison[data-tone="neutral"] strong { background: #e5e7eb; color: #4b5563; }
@@ -528,6 +530,8 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-data-table tbody tr[data-selectable="true"]:focus-visible { outline: 3px solid #93c5fd; outline-offset: -3px; }
   .shopops-data-table__empty { color: var(--shopops-muted); padding: 16px !important; text-align: left !important; }
   .shopops-data-table__sort { align-items: center; background: transparent; border: 0; color: inherit; cursor: pointer; display: inline-flex; font: inherit; font-weight: inherit; gap: 4px; padding: 0; text-transform: inherit; }
+  .shopops-data-table__sort-indicator { color: #94a3b8; font-size: 12px; font-weight: 900; line-height: 1; }
+  .shopops-data-table__sort-indicator[data-active="true"] { color: var(--shopops-accent); }
   .shopops-data-table__primary { display: grid; gap: 4px; }
   .shopops-location-comparison-table th:first-child, .shopops-location-comparison-table td:first-child { background: var(--shopops-surface); box-shadow: 1px 0 0 var(--shopops-border); left: 0; min-width: 190px; position: sticky; width: 190px; z-index: 1; }
   .shopops-location-comparison-table th:first-child { background: #f9fafb; z-index: 2; }
@@ -574,8 +578,10 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-vendor-row__label { color: var(--p-color-text, #202223); font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .shopops-vendor-row__label small { color: #1d4ed8; display: block; font-size: 10px; }
   .shopops-vendor-row__track { align-self: center; background: #eef2f7; border-radius: 999px; height: 10px; overflow: hidden; }
-  .shopops-vendor-row__fill { background: var(--shopops-accent); border-radius: 999px; height: 100%; }
-  .shopops-vendor-row__value { color: var(--shopops-muted); font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 700; text-align: right; white-space: nowrap; }
+  .shopops-vendor-row__fill { background: linear-gradient(90deg, #1d4ed8, #2563eb); border-radius: 999px; box-shadow: 0 0 0 1px rgba(29, 78, 216, 0.08); height: 100%; }
+  .shopops-vendor-row__value { align-items: center; display: flex; font-size: 12px; font-variant-numeric: tabular-nums; gap: 7px; justify-content: flex-end; text-align: right; white-space: nowrap; }
+  .shopops-vendor-row__value > strong { color: #334155; font-weight: 800; }
+  .shopops-vendor-row__percent { background: #dbeafe; border: 1px solid #bfdbfe; border-radius: 999px; color: #1d4ed8; font-size: 11px; font-weight: 850; padding: 2px 6px; }
   .shopops-breakdown-grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-bottom: 20px; }
   .shopops-chart-interactive:focus-visible, .shopops-chart-export:focus-visible, .shopops-chart-point:focus-visible, .shopops-mirror-sales-chart:focus-visible, .shopops-recharts .recharts-wrapper:focus-visible { outline: 3px solid #93c5fd !important; outline-offset: 2px; }
   .shopops-chart-scroll { scrollbar-color: #cbd5e1 transparent; scrollbar-width: thin; }

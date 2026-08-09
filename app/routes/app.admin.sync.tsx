@@ -776,9 +776,9 @@ export default function DataSyncPage({
             <section>
               <h3>Data quality checks</h3>
               <p>
-                Integrity checks that compare synced Shopify data against
-                what reporting expects. Use this to confirm reports are
-                complete enough to trust.
+                Integrity checks that compare synced Shopify data against what
+                reporting expects. Use this to confirm reports are complete
+                enough to trust.
               </p>
               <DataQualityChecks
                 report={dataQuality}
@@ -806,6 +806,8 @@ const COMPACT_CSS = `
 .sync-status-card{margin-bottom:16px}
 .sync-status-card .shopops-content-card__header{align-items:center}
 .sync-status-action{margin:0}
+.sync-status-action button{background:var(--shopops-accent,#2563eb);border-color:var(--shopops-accent,#2563eb);color:#fff}
+.sync-status-action button:hover:not(:disabled){background:#1d4ed8;border-color:#1d4ed8}
 .sync-status-grid{display:grid;gap:16px;grid-template-columns:repeat(3,minmax(0,1fr));min-width:0}
 .sync-status-item{align-content:start;display:grid;gap:7px;min-width:0}
 .sync-status-item>span{color:var(--shopops-muted,#616161);font-size:12px;font-weight:700;line-height:1.35}

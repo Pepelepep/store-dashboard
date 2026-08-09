@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 import {
   formatCurrency,
   formatNumber,
@@ -9,81 +7,11 @@ import type {
   FinancialMetricsVersion,
   RecentOrderRow,
 } from "../../lib/dashboard/dashboard-types";
+import {
+  SortableDataTable,
+  type SortableDataTableColumn,
+} from "../ui/SortableDataTable";
 import { SectionCard } from "./SectionCard";
-
-function Table({
-  headers,
-  rows,
-  dateColumnMinWidth,
-}: {
-  headers: string[];
-  rows: Array<Array<string | number | ReactNode>>;
-  dateColumnMinWidth?: number;
-}) {
-  const textHeaders = new Set(["Order", "Date", "Product", "SKU", "Flags"]);
-
-  return (
-    <div className="shopops-data-table-scroll">
-      <table className="shopops-data-table">
-        <thead>
-          <tr>
-            {headers.map((header) => (
-              <th
-                data-align={textHeaders.has(header) ? "left" : "right"}
-                key={header}
-                style={{
-                  minWidth:
-                    header === "Date" && dateColumnMinWidth
-                      ? dateColumnMinWidth
-                      : undefined,
-                }}
-              >
-                {header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length > 0 ? (
-            rows.map((row, index) => (
-              <tr key={index}>
-                {row.map((cell, cellIndex) => (
-                  <td
-                    data-align={
-                      textHeaders.has(headers[cellIndex]) ? "left" : "right"
-                    }
-                    key={cellIndex}
-                    style={{
-                      minWidth:
-                        cellIndex === 1 && dateColumnMinWidth
-                          ? dateColumnMinWidth
-                          : undefined,
-                      whiteSpace:
-                        cellIndex === 1 && dateColumnMinWidth
-                          ? "nowrap"
-                          : undefined,
-                    }}
-                  >
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))
-          ) : (
-            <tr>
-              <td
-                className="shopops-data-table__empty"
-                colSpan={headers.length}
-              >
-                No data for this selection.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 function getChipStyles(label: string) {
   if (
@@ -206,92 +134,98 @@ export function RecentOrderLinesCard({
           row.grossProfit ?? "-",
         ],
   );
-  const tableHeaders = isFinancialMetricsV2
-    ? [
-        "Order",
-        "Date",
-        "Product",
-        "SKU",
-        "Qty",
-        "Gross Sales",
-        "Discounts",
-        "Net Sales",
-        "Returns",
-        "Refunded",
-        "Returned Qty",
-        "Cost at Sale",
-        "COGS",
-        "Gross profit",
-        "Flags",
-      ]
-    : [
-        "Order",
-        "Date",
-        "Product",
-        "SKU",
-        "Qty",
-        "Revenue",
-        "COGS",
-        "Gross profit",
-      ];
-  const tableRows = recentOrders.map((row) =>
-    isFinancialMetricsV2
+  const moneyColumn = (
+    key: keyof RecentOrderRow,
+    label: string,
+  ): SortableDataTableColumn<RecentOrderRow> => ({
+    align: "right",
+    key: String(key),
+    label,
+    render: (row) => {
+      const value = row[key];
+      return typeof value === "number" ? formatCurrency(value) : "-";
+    },
+    sortValue: (row) => {
+      const value = row[key];
+      return typeof value === "number" ? value : null;
+    },
+  });
+  const columns: SortableDataTableColumn<RecentOrderRow>[] = [
+    {
+      key: "order",
+      label: "Order",
+      render: (row) =>
+        row.orderUrl ? (
+          <a href={row.orderUrl} target="_blank" rel="noreferrer">
+            {row.orderName}
+          </a>
+        ) : (
+          row.orderName
+        ),
+      sortValue: (row) => row.orderName,
+    },
+    {
+      key: "date",
+      label: "Date",
+      minWidth: isFinancialMetricsV2 ? 138 : undefined,
+      render: (row) => formatDate(row.date),
+      sortValue: (row) => new Date(row.date).getTime(),
+    },
+    {
+      key: "product",
+      label: "Product",
+      render: (row) => row.product,
+      sortValue: (row) => row.product,
+    },
+    {
+      key: "sku",
+      label: "SKU",
+      render: (row) => row.sku,
+      sortValue: (row) => row.sku,
+    },
+    {
+      align: "right",
+      key: "quantity",
+      label: "Qty",
+      render: (row) => formatNumber(row.quantity),
+      sortValue: (row) => row.quantity,
+    },
+    ...(isFinancialMetricsV2
       ? [
-          row.orderUrl ? (
-            <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
-              {row.orderName}
-            </a>
-          ) : (
-            row.orderName
-          ),
-          formatDate(row.date),
-          row.product,
-          row.sku,
-          formatNumber(row.quantity),
-          row.grossSales === null || row.grossSales === undefined
-            ? "-"
-            : formatCurrency(row.grossSales),
-          row.discounts === null || row.discounts === undefined
-            ? "-"
-            : formatCurrency(row.discounts),
-          row.netSales === null || row.netSales === undefined
-            ? "-"
-            : formatCurrency(row.netSales),
-          row.returns === null || row.returns === undefined
-            ? "-"
-            : formatCurrency(row.returns),
-          row.refundedAmount === null || row.refundedAmount === undefined
-            ? "-"
-            : formatCurrency(row.refundedAmount),
-          row.returnedQuantity === null || row.returnedQuantity === undefined
-            ? "-"
-            : formatNumber(row.returnedQuantity),
-          row.costAtSale === null || row.costAtSale === undefined
-            ? "-"
-            : formatCurrency(row.costAtSale),
-          row.cogs === null ? "-" : formatCurrency(row.cogs),
-          row.grossProfit === null ? "-" : formatCurrency(row.grossProfit),
-          row.chips && row.chips.length > 0
-            ? row.chips.map((chip) => <Chip key={chip} label={chip} />)
-            : "-",
+          moneyColumn("grossSales", "Gross Sales"),
+          moneyColumn("discounts", "Discounts"),
+          moneyColumn("netSales", "Net Sales"),
+          moneyColumn("returns", "Returns"),
+          moneyColumn("refundedAmount", "Refunded"),
+          {
+            align: "right" as const,
+            key: "returnedQuantity",
+            label: "Returned Qty",
+            render: (row: RecentOrderRow) =>
+              row.returnedQuantity == null
+                ? "-"
+                : formatNumber(row.returnedQuantity),
+            sortValue: (row: RecentOrderRow) => row.returnedQuantity,
+          },
+          moneyColumn("costAtSale", "Cost at Sale"),
+          moneyColumn("cogs", "COGS"),
+          moneyColumn("grossProfit", "Gross profit"),
+          {
+            key: "flags",
+            label: "Flags",
+            render: (row: RecentOrderRow) =>
+              row.chips && row.chips.length > 0
+                ? row.chips.map((chip) => <Chip key={chip} label={chip} />)
+                : "-",
+            sortValue: (row: RecentOrderRow) => row.chips?.join(" ") ?? "",
+          },
         ]
       : [
-          row.orderUrl ? (
-            <a key="order" href={row.orderUrl} target="_blank" rel="noreferrer">
-              {row.orderName}
-            </a>
-          ) : (
-            row.orderName
-          ),
-          formatDate(row.date),
-          row.product,
-          row.sku,
-          formatNumber(row.quantity),
-          formatCurrency(row.revenue),
-          row.cogs === null ? "-" : formatCurrency(row.cogs),
-          row.grossProfit === null ? "-" : formatCurrency(row.grossProfit),
-        ],
-  );
+          moneyColumn("revenue", "Revenue"),
+          moneyColumn("cogs", "COGS"),
+          moneyColumn("grossProfit", "Gross profit"),
+        ]),
+  ];
 
   return (
     <SectionCard
@@ -307,10 +241,14 @@ export function RecentOrderLinesCard({
         rows: exportRows,
       }}
     >
-      <Table
-        headers={tableHeaders}
-        rows={tableRows}
-        dateColumnMinWidth={isFinancialMetricsV2 ? 138 : undefined}
+      <SortableDataTable
+        ariaLabel="Recent order lines"
+        columns={columns}
+        defaultSort={{ key: "date", direction: "desc" }}
+        getRowKey={(row, index) =>
+          `${row.orderName}-${row.sku}-${row.date}-${index}`
+        }
+        rows={recentOrders}
       />
     </SectionCard>
   );

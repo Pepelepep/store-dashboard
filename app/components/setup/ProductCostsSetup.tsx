@@ -3,12 +3,17 @@ import { Form, useFetcher, useLocation, useNavigation } from "react-router";
 
 import { formatRelativeUpdatedAt } from "../../lib/financial/cogs-setup";
 import type {
+  MissingProductCostRow,
   MissingProductCostsPageData,
   ProductCostSetupData,
 } from "../../lib/financial/cogs-setup.server";
 import { AppButton } from "../ui/AppButton";
 import { HelperText } from "../ui/HelperText";
 import { InlineResult } from "../ui/InlineResult";
+import {
+  SortableDataTable,
+  type SortableDataTableColumn,
+} from "../ui/SortableDataTable";
 import {
   ContentCard,
   EmptyState,
@@ -69,6 +74,51 @@ export function ProductCostsSetup({
   const [search, setSearch] = useState(data.missingProducts.search);
   const [missingProducts, setMissingProducts] = useState(data.missingProducts);
   const didMountSearch = useRef(false);
+  const missingProductColumns: SortableDataTableColumn<MissingProductCostRow>[] =
+    [
+      {
+        key: "product",
+        label: "Product",
+        render: (row) => row.product,
+        sortValue: (row) => row.product,
+      },
+      {
+        key: "variant",
+        label: "Variant",
+        render: (row) => row.variant,
+        sortValue: (row) => row.variant,
+      },
+      {
+        align: "right",
+        key: "unitsSold",
+        label: "Units sold",
+        render: (row) => formatNumber(row.unitsSold),
+        sortValue: (row) => row.unitsSold,
+      },
+      {
+        align: "right",
+        key: "salesAffected",
+        label: "Sales missing costs",
+        render: (row) => formatCurrency(row.salesAffected),
+        sortValue: (row) => row.salesAffected,
+      },
+      {
+        key: "action",
+        label: "Action",
+        render: (row) =>
+          row.shopifyProductId ? (
+            <a
+              href={getShopifyAdminProductUrl(shop, row.shopifyProductId)}
+              className="shopops-link"
+              target="_top"
+            >
+              Open in Shopify
+            </a>
+          ) : (
+            <span className="shopops-muted">—</span>
+          ),
+      },
+    ];
 
   useEffect(() => {
     setEnabled(data.settings.enabled);
@@ -398,73 +448,23 @@ export function ProductCostsSetup({
                 )} of ${formatNumber(missingProducts.totalCount)}`}
           </div>
         </div>
-        <div className="shopops-data-table-scroll shopops-data-table-scroll--spaced">
-          <table className="shopops-data-table">
-            <thead>
-              <tr>
-                {[
-                  "Product",
-                  "Variant",
-                  "Units sold",
-                  "Sales missing costs",
-                  "Action",
-                ].map((header) => (
-                  <th
-                    data-align={
-                      header === "Units sold" ||
-                      header === "Sales missing costs"
-                        ? "right"
-                        : undefined
-                    }
-                    key={header}
-                  >
-                    {header}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {missingProducts.rows.map((row) => (
-                <tr key={row.key}>
-                  <td>{row.product}</td>
-                  <td>{row.variant}</td>
-                  <td data-align="right">{formatNumber(row.unitsSold)}</td>
-                  <td data-align="right">
-                    {formatCurrency(row.salesAffected)}
-                  </td>
-                  <td>
-                    {row.shopifyProductId ? (
-                      <a
-                        href={getShopifyAdminProductUrl(
-                          shop,
-                          row.shopifyProductId,
-                        )}
-                        className="shopops-link"
-                        target="_top"
-                      >
-                        Open in Shopify
-                      </a>
-                    ) : (
-                      <span className="shopops-muted">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {missingProducts.rows.length === 0 ? (
-                <tr>
-                  <td className="shopops-data-table__empty" colSpan={5}>
-                    <EmptyState
-                      title={
-                        search
-                          ? "No missing-cost products match this search."
-                          : "All synced sales lines have product costs."
-                      }
-                    />
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+        <div className="shopops-data-table-scroll--spaced">
+          <SortableDataTable
+            ariaLabel="Products missing costs"
+            columns={missingProductColumns}
+            defaultSort={{ key: "salesAffected", direction: "desc" }}
+            emptyMessage={
+              <EmptyState
+                title={
+                  search
+                    ? "No missing-cost products match this search."
+                    : "All synced sales lines have product costs."
+                }
+              />
+            }
+            getRowKey={(row) => row.key}
+            rows={missingProducts.rows}
+          />
         </div>
         <div className="shopops-table-pagination">
           <AppButton

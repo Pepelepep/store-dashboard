@@ -38,7 +38,7 @@ export function SalesAdjustmentsCard({
   return (
     <SectionCard
       title="Sales adjustments"
-      subtitle="How gross sales became net sales this period."
+      subtitle="Net sales subtract discounts and merchandise returns. Cash refunds are shown separately, not deducted twice."
     >
       <Row
         label="Gross sales"
@@ -51,18 +51,22 @@ export function SalesAdjustmentsCard({
         value={`-${formatCurrency(discounts)}`}
       />
       <Row
-        label={`Refunds (${formatNumber(
-          kpis.refundTransactionsCount ?? 0,
-        )} tx · ${formatNumber(kpis.refundedOrdersCount ?? 0)} orders)`}
-        tone="negative"
-        value={`-${formatCurrency(kpis.refunds ?? 0)}`}
-      />
-      <Row
-        label={`Returns (${formatNumber(
+        label={`Merchandise returns deducted (${formatNumber(
           kpis.returnedQuantity ?? 0,
         )} units · ${formatNumber(kpis.returnedOrdersCount ?? 0)} orders)`}
         tone="negative"
         value={`-${formatCurrency(kpis.returns ?? 0)}`}
+      />
+      <Row
+        label="Net sales"
+        tone="commercial"
+        value={formatCurrency(kpis.revenue)}
+      />
+      <Row
+        label={`Cash refunds shown separately (${formatNumber(
+          kpis.refundTransactionsCount ?? 0,
+        )} tx · ${formatNumber(kpis.refundedOrdersCount ?? 0)} orders)`}
+        value={formatCurrency(kpis.refunds ?? 0)}
       />
       {kpis.refundAllocationWarning ? (
         <div className="shopops-adjustment-warning">

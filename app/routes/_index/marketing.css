@@ -54,17 +54,14 @@
 .brand {
   align-items: center;
   display: inline-flex;
-  font-size: 19px;
-  font-weight: 780;
-  gap: 11px;
-  letter-spacing: -0.025em;
   text-decoration: none;
 }
 
 .brand img {
-  border-radius: 11px;
-  box-shadow: 0 5px 16px rgba(7, 26, 63, 0.18);
   display: block;
+  height: auto;
+  mix-blend-mode: multiply;
+  width: 180px;
 }
 
 .marketing-nav-links {
@@ -933,14 +930,12 @@
   }
 
   .brand {
-    font-size: 16px;
-    gap: 8px;
+    max-width: 142px;
   }
 
   .brand img {
-    border-radius: 9px;
-    height: 36px;
-    width: 36px;
+    height: auto;
+    width: 142px;
   }
 
   .marketing-nav .marketing-button-small {

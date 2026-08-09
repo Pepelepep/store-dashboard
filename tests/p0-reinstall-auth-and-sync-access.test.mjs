@@ -1579,7 +1579,11 @@ test("missing-product table uses a bounded fetcher with pagination", () => {
   assert.match(component, /Showing \$\{formatNumber\(showingStart\)\}/);
   assert.match(component, />\s*Previous\s*</);
   assert.match(component, />\s*Next\s*</);
-  assert.match(component, /className="shopops-data-table"/);
+  assert.match(component, /<SortableDataTable/);
+  assert.match(
+    component,
+    /defaultSort=\{\{ key: "salesAffected", direction: "desc" \}\}/,
+  );
   assert.match(presentation, /\.shopops-data-table th \{[^}]*position: sticky/);
   assert.match(resourceRoute, /capability: "manage_costs"/);
   assert.match(resourceRoute, /loadMissingProductCostsPage/);
@@ -5122,7 +5126,14 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(staffSection, /<thead>/);
   assert.match(staffSection, /<tbody>/);
   assert.match(staffSection, /scope="col"/);
-  assert.match(staffSection, /\["Rank", "Staff", revenueLabel, "Orders"\]/);
+  assert.match(staffSection, /\{ label: "Rank", key: null \}/);
+  assert.match(staffSection, /\{ label: "Staff", key: "staff" as const \}/);
+  assert.match(
+    staffSection,
+    /\{ label: revenueLabel, key: "revenue" as const \}/,
+  );
+  assert.match(staffSection, /\{ label: "Orders", key: "orders" as const \}/);
+  assert.match(staffSection, /aria-sort=/);
   assert.match(staffSection, /tableLayout: "fixed"/);
   assert.match(staffSection, /fontVariantNumeric: "tabular-nums"/);
   assert.match(staffSection, /textAlign: "right"/);

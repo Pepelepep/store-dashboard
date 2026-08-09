@@ -53,6 +53,8 @@ export function KpiCards({
     selectedDays === 1
       ? "vs previous day"
       : `vs previous ${selectedDays}-day period`;
+  const comparisonContext =
+    selectedDays === 1 ? "previous day" : `previous ${selectedDays}-day period`;
   const comparisons = {
     sales: buildReportKpiComparison({
       current: kpis.revenue,
@@ -151,28 +153,25 @@ export function KpiCards({
     returns: `${formatNumber(kpis.returnedQuantity ?? 0)} units · ${formatNumber(
       kpis.returnedOrdersCount ?? 0,
     )} orders`,
-    orders: "Unique orders in the selected range",
-    unitsSold: "Quantity sold from order lines",
-    cogs: (
-      <>
-        <div>
-          Actual: {formatCurrency(kpis.actualCogs)} · Estimated:{" "}
-          {formatCurrency(kpis.estimatedCogs)}
-        </div>
-        {kpis.missingCogsLineCount > 0 ? (
-          <div>
-            {formatNumber(kpis.missingCogsLineCount)} sales lines missing costs
-          </div>
-        ) : null}
-      </>
-    ),
+    cogs:
+      kpis.estimatedCogs > 0 || kpis.missingCogsLineCount > 0 ? (
+        <>
+          {kpis.estimatedCogs > 0 ? (
+            <div>
+              Actual: {formatCurrency(kpis.actualCogs)} · Estimated:{" "}
+              {formatCurrency(kpis.estimatedCogs)}
+            </div>
+          ) : null}
+          {kpis.missingCogsLineCount > 0 ? (
+            <div>
+              {formatNumber(kpis.missingCogsLineCount)} sales lines missing
+              costs
+            </div>
+          ) : null}
+        </>
+      ) : null,
     grossProfit: grossProfitDetail,
-    grossMargin: kpis.cogsIncomplete
-      ? "Requires complete product costs"
-      : isFinancialMetricsV2
-        ? "Gross profit / Net Sales"
-        : "Gross profit / revenue",
-    expenses: "Fixed expenses from DB",
+    grossMargin: kpis.cogsIncomplete ? "Requires complete product costs" : null,
     netProfit: netProfitDetail,
   };
   const items = attachReportKpiDetails(
@@ -186,7 +185,7 @@ export function KpiCards({
 
   return (
     <>
-      <ReportKpiGrid items={items} />
+      <ReportKpiGrid comparisonContext={comparisonContext} items={items} />
       {isFinancialMetricsV2 ? (
         <details className="shopops-metric-definitions">
           <summary>Metric definitions</summary>

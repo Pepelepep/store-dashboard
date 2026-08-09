@@ -28,6 +28,10 @@ import { HelperText } from "../components/ui/HelperText";
 import { InlineResult } from "../components/ui/InlineResult";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
+import {
+  SortableDataTable,
+  type SortableDataTableColumn,
+} from "../components/ui/SortableDataTable";
 import { SectionTabs } from "../components/ui/SectionTabs";
 import {
   ContentCard,
@@ -535,6 +539,115 @@ export default function AdminSetupPage() {
     });
   }
 
+  const expenseColumns: SortableDataTableColumn<ExpenseRow>[] = [
+    {
+      key: "name",
+      label: "Name",
+      render: (expense) => expense.expense_name,
+      sortValue: (expense) => expense.expense_name,
+    },
+    {
+      key: "category",
+      label: "Category",
+      render: (expense) => expense.expense_category ?? "-",
+      sortValue: (expense) => expense.expense_category ?? "",
+    },
+    {
+      key: "location",
+      label: "Location",
+      render: (expense) => expense.location_name ?? "Global",
+      sortValue: (expense) => expense.location_name ?? "Global",
+    },
+    {
+      align: "right",
+      key: "amount",
+      label: "Monthly amount",
+      render: (expense) => formatCurrency(Number(expense.monthly_amount ?? 0)),
+      sortValue: (expense) => Number(expense.monthly_amount ?? 0),
+    },
+    {
+      key: "start",
+      label: "Start",
+      render: (expense) => formatMonth(expense.start_month),
+      sortValue: (expense) => expense.start_month,
+    },
+    {
+      key: "end",
+      label: "End",
+      render: (expense) => formatMonth(expense.end_month),
+      sortValue: (expense) => expense.end_month,
+    },
+    {
+      key: "active",
+      label: "Active",
+      render: (expense) => (
+        <StatusBadge variant={expense.is_active ? "success" : "neutral"}>
+          {expense.is_active ? "Active" : "Inactive"}
+        </StatusBadge>
+      ),
+      sortValue: (expense) => (expense.is_active ? 1 : 0),
+    },
+    {
+      key: "actions",
+      label: "Actions",
+      render: (expense) => (
+        <div className="shopops-table-actions">
+          <AppButton
+            type="button"
+            variant="secondary"
+            compact
+            disabled={isSubmitting}
+            onClick={() => editExpense(expense)}
+          >
+            Edit
+          </AppButton>
+
+          <Form method="post">
+            <input type="hidden" name="intent" value="toggle" />
+            <input type="hidden" name="id" value={expense.id} />
+            <input
+              type="hidden"
+              name="is_active"
+              value={String(expense.is_active)}
+            />
+            <AppButton
+              type="submit"
+              variant="secondary"
+              compact
+              disabled={isSubmitting}
+            >
+              {expense.is_active ? "Disable" : "Enable"}
+            </AppButton>
+          </Form>
+
+          <Form
+            method="post"
+            onSubmit={(event) => {
+              if (
+                !window.confirm(
+                  `Delete “${expense.expense_name}”? Reporting will update to remove this expense. This cannot be undone.`,
+                )
+              ) {
+                event.preventDefault();
+              }
+            }}
+          >
+            <input type="hidden" name="intent" value="delete" />
+            <input type="hidden" name="id" value={expense.id} />
+            <AppButton
+              type="submit"
+              variant="danger"
+              compact
+              disabled={isSubmitting}
+            >
+              Delete
+            </AppButton>
+          </Form>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <ShopOpsPage>
       <PageHeader
@@ -761,121 +874,19 @@ export default function AdminSetupPage() {
             title="Current expenses"
             description="Disable keeps the expense history but excludes it from future active calculations."
           >
-            <div className="shopops-data-table-scroll">
-              <table className="shopops-data-table">
-                <thead>
-                  <tr>
-                    {[
-                      "Name",
-                      "Category",
-                      "Location",
-                      "Monthly amount",
-                      "Start",
-                      "End",
-                      "Active",
-                      "Actions",
-                    ].map((header) => (
-                      <th
-                        data-align={
-                          header === "Monthly amount" ? "right" : undefined
-                        }
-                        key={header}
-                      >
-                        {header}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {expenses.map((expense) => (
-                    <tr key={expense.id}>
-                      <td>{expense.expense_name}</td>
-                      <td>{expense.expense_category ?? "-"}</td>
-                      <td>{expense.location_name ?? "Global"}</td>
-                      <td data-align="right">
-                        {formatCurrency(Number(expense.monthly_amount ?? 0))}
-                      </td>
-                      <td>{formatMonth(expense.start_month)}</td>
-                      <td>{formatMonth(expense.end_month)}</td>
-                      <td>
-                        <StatusBadge
-                          variant={expense.is_active ? "success" : "neutral"}
-                        >
-                          {expense.is_active ? "Active" : "Inactive"}
-                        </StatusBadge>
-                      </td>
-                      <td>
-                        <div className="shopops-table-actions">
-                          <AppButton
-                            type="button"
-                            variant="secondary"
-                            compact
-                            disabled={isSubmitting}
-                            onClick={() => editExpense(expense)}
-                          >
-                            Edit
-                          </AppButton>
-
-                          <Form method="post">
-                            <input type="hidden" name="intent" value="toggle" />
-                            <input type="hidden" name="id" value={expense.id} />
-                            <input
-                              type="hidden"
-                              name="is_active"
-                              value={String(expense.is_active)}
-                            />
-                            <AppButton
-                              type="submit"
-                              variant="secondary"
-                              compact
-                              disabled={isSubmitting}
-                            >
-                              {expense.is_active ? "Disable" : "Enable"}
-                            </AppButton>
-                          </Form>
-
-                          <Form
-                            method="post"
-                            onSubmit={(event) => {
-                              if (
-                                !window.confirm(
-                                  `Delete “${expense.expense_name}”? Reporting will update to remove this expense. This cannot be undone.`,
-                                )
-                              ) {
-                                event.preventDefault();
-                              }
-                            }}
-                          >
-                            <input type="hidden" name="intent" value="delete" />
-                            <input type="hidden" name="id" value={expense.id} />
-                            <AppButton
-                              type="submit"
-                              variant="danger"
-                              compact
-                              disabled={isSubmitting}
-                            >
-                              Delete
-                            </AppButton>
-                          </Form>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {expenses.length === 0 ? (
-                    <tr>
-                      <td className="shopops-data-table__empty" colSpan={8}>
-                        <EmptyState
-                          title="No expenses configured yet."
-                          description="Add fixed expenses to calculate location profitability."
-                        />
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+            <SortableDataTable
+              ariaLabel="Current expenses"
+              columns={expenseColumns}
+              defaultSort={{ key: "name", direction: "asc" }}
+              emptyMessage={
+                <EmptyState
+                  title="No expenses configured yet."
+                  description="Add fixed expenses to calculate location profitability."
+                />
+              }
+              getRowKey={(expense) => expense.id}
+              rows={expenses}
+            />
           </ContentCard>
         </>
       )}

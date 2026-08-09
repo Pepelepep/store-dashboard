@@ -194,7 +194,12 @@ const PERIOD_OPTIONS: Array<{ value: Period; label: string }> = [
 
 type SortKey =
   | "location"
+  | "grossSales"
+  | "discounts"
+  | "returns"
+  | "returnedUnits"
   | "revenue"
+  | "refunds"
   | "orders"
   | "units"
   | "cogs"
@@ -1710,30 +1715,25 @@ function KpiGrid({
       "Synced retail sales"
     ),
     returns: `${formatNumber(kpis.returnedUnits ?? 0)} units`,
-    orders: "Unique orders in the selected range",
-    unitsSold: "Quantity sold from order lines",
-    cogs: (
-      <>
-        <div>
-          Actual: {formatCurrency(kpis.actualCogs)} · Estimated:{" "}
-          {formatCurrency(kpis.estimatedCogs)}
-        </div>
-        {kpis.missingCogsLineCount > 0 ? (
-          <div>
-            {formatNumber(kpis.missingCogsLineCount)} sales lines missing costs
-          </div>
-        ) : null}
-      </>
-    ),
-    grossProfit:
-      grossProfitNotice ??
-      (isFinancialMetricsV2 ? "Net Sales minus COGS" : "Revenue minus COGS"),
-    grossMargin: kpis.cogsIncomplete
-      ? "Requires complete product costs"
-      : isFinancialMetricsV2
-        ? "Gross profit / Net Sales"
-        : "Gross profit / revenue",
-    expenses: "Fixed expenses from DB",
+    cogs:
+      kpis.estimatedCogs > 0 || kpis.missingCogsLineCount > 0 ? (
+        <>
+          {kpis.estimatedCogs > 0 ? (
+            <div>
+              Actual: {formatCurrency(kpis.actualCogs)} · Estimated:{" "}
+              {formatCurrency(kpis.estimatedCogs)}
+            </div>
+          ) : null}
+          {kpis.missingCogsLineCount > 0 ? (
+            <div>
+              {formatNumber(kpis.missingCogsLineCount)} sales lines missing
+              costs
+            </div>
+          ) : null}
+        </>
+      ) : null,
+    grossProfit: grossProfitNotice,
+    grossMargin: kpis.cogsIncomplete ? "Requires complete product costs" : null,
     netProfit: kpis.cogsIncomplete
       ? "Requires complete product costs"
       : (expensesNotice ?? "Gross profit minus expenses"),
@@ -1742,6 +1742,8 @@ function KpiGrid({
     selectedDays === 1
       ? "vs previous day"
       : `vs previous ${selectedDays}-day period`;
+  const comparisonContext =
+    selectedDays === 1 ? "previous day" : `previous ${selectedDays}-day period`;
   const comparisons: Partial<Record<ReportKpiId, ReportKpiComparison>> = {};
   const addComparison = (
     id: ReportKpiId,
@@ -1761,21 +1763,12 @@ function KpiGrid({
   };
 
   addComparison("sales", kpis.revenue, comparisonKpis.revenue);
-  addComparison(
-    "refunds",
-    kpis.refunds,
-    comparisonKpis.refunds,
-    true,
-  );
+  addComparison("refunds", kpis.refunds, comparisonKpis.refunds, true);
   addComparison("returns", kpis.returns, comparisonKpis.returns, true);
   addComparison("orders", kpis.ordersCount, comparisonKpis.ordersCount);
   addComparison("unitsSold", kpis.unitsSold, comparisonKpis.unitsSold);
   addComparison("cogs", kpis.cogs, comparisonKpis.cogs, true);
-  addComparison(
-    "grossProfit",
-    kpis.grossProfit,
-    comparisonKpis.grossProfit,
-  );
+  addComparison("grossProfit", kpis.grossProfit, comparisonKpis.grossProfit);
   addComparison(
     "grossMargin",
     kpis.grossMarginPct,
@@ -1805,7 +1798,7 @@ function KpiGrid({
 
   return (
     <>
-      <ReportKpiGrid items={items} />
+      <ReportKpiGrid comparisonContext={comparisonContext} items={items} />
       {isFinancialMetricsV2 ? (
         <details className="shopops-metric-definitions">
           <summary>Metric definitions</summary>
@@ -1986,22 +1979,35 @@ function LocationTable({
       title: "Average Order Value = Revenue / Orders",
     },
   ];
-  const v2Headers = [
-    "Location",
-    "Gross Sales",
-    "Discounts",
-    "Returns",
-    "Returned Units",
-    "Net Sales",
-    "Refunds",
-    "Orders",
-    "Units Sold",
-    "COGS",
-    "Gross Profit",
-    "Gross Margin",
-    "Expenses",
-    "Net Profit",
-    "AOV (Net)",
+  const v2Headers: Array<{
+    label: string;
+    key: SortKey;
+    title?: string;
+  }> = [
+    { label: "Location", key: "location" },
+    { label: "Gross Sales", key: "grossSales" },
+    { label: "Discounts", key: "discounts" },
+    { label: "Returns", key: "returns" },
+    { label: "Returned Units", key: "returnedUnits" },
+    { label: "Net Sales", key: "revenue" },
+    {
+      label: "Refunds",
+      key: "refunds",
+      title:
+        "Refunds are order-level cash movements allocated to locations from matching order lines.",
+    },
+    { label: "Orders", key: "orders" },
+    { label: "Units Sold", key: "units" },
+    { label: "COGS", key: "cogs" },
+    { label: "Gross Profit", key: "grossProfit" },
+    {
+      label: "Gross Margin",
+      key: "grossMargin",
+      title: "Gross Margin is based on Net Sales.",
+    },
+    { label: "Expenses", key: "expenses" },
+    { label: "Net Profit", key: "netProfit" },
+    { label: "AOV (Net)", key: "aov" },
   ];
   const totalRevenue = rows.reduce((sum, row) => sum + row.revenue, 0);
   const averageRevenue = rows.length > 0 ? totalRevenue / rows.length : 0;
@@ -2009,7 +2015,12 @@ function LocationTable({
   const sortedRows = useMemo(() => {
     const getValue = (row: LocationMetricRow) => {
       if (sort.key === "location") return row.locationName.toLowerCase();
+      if (sort.key === "grossSales") return row.grossSales ?? 0;
+      if (sort.key === "discounts") return row.discounts ?? 0;
+      if (sort.key === "returns") return row.returns ?? 0;
+      if (sort.key === "returnedUnits") return row.returnedUnits ?? 0;
       if (sort.key === "revenue") return row.revenue;
+      if (sort.key === "refunds") return row.refunds ?? 0;
       if (sort.key === "orders") return row.ordersCount;
       if (sort.key === "units") return row.unitsSold;
       if (sort.key === "cogs") return row.cogs;
@@ -2078,17 +2089,37 @@ function LocationTable({
               {isFinancialMetricsV2
                 ? v2Headers.map((header) => (
                     <th
-                      data-align={header === "Location" ? "left" : "right"}
-                      key={header}
-                      title={
-                        header === "Refunds"
-                          ? "Refunds are order-level cash movements allocated to locations from matching order lines."
-                          : header === "Gross Margin"
-                            ? "Gross Margin is based on Net Sales."
-                            : undefined
+                      aria-sort={
+                        sort.key === header.key
+                          ? sort.direction === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : undefined
                       }
+                      data-align={header.key === "location" ? "left" : "right"}
+                      key={header.key}
+                      title={header.title}
                     >
-                      {header}
+                      <button
+                        className="shopops-data-table__sort"
+                        type="button"
+                        onClick={() => updateSort(header.key)}
+                      >
+                        <span>{header.label}</span>
+                        <span
+                          aria-hidden="true"
+                          className="shopops-data-table__sort-indicator"
+                          data-active={
+                            sort.key === header.key ? "true" : "false"
+                          }
+                        >
+                          {sort.key === header.key
+                            ? sort.direction === "asc"
+                              ? "↑"
+                              : "↓"
+                            : "↕"}
+                        </span>
+                      </button>
                     </th>
                   ))
                 : null}
@@ -2461,7 +2492,10 @@ function RankedBreakdownBars({
               />
             </div>
             <span className="shopops-vendor-row__value">
-              {formatCurrency(row.revenue)} · {formatPercent(row.percent)}
+              <strong>{formatCurrency(row.revenue)}</strong>
+              <span className="shopops-vendor-row__percent">
+                {formatPercent(row.percent)} share
+              </span>
             </span>
           </div>
         );
@@ -2481,6 +2515,46 @@ function StaffLeaderboard({
   selectedValue?: string | null;
   onSelect?: (row: RevenueBreakdownRow) => void;
 }) {
+  const [sort, setSort] = useState<{
+    key: "staff" | "revenue" | "orders";
+    direction: "asc" | "desc";
+  }>({ key: "revenue", direction: "desc" });
+  const sortedRows = useMemo(
+    () =>
+      [...rows].sort((left, right) => {
+        const direction = sort.direction === "asc" ? 1 : -1;
+        const leftValue =
+          sort.key === "staff"
+            ? left.label
+            : sort.key === "orders"
+              ? left.ordersCount
+              : left.revenue;
+        const rightValue =
+          sort.key === "staff"
+            ? right.label
+            : sort.key === "orders"
+              ? right.ordersCount
+              : right.revenue;
+        return typeof leftValue === "string" && typeof rightValue === "string"
+          ? leftValue.localeCompare(rightValue) * direction
+          : (Number(leftValue) - Number(rightValue)) * direction;
+      }),
+    [rows, sort],
+  );
+  const updateSort = (key: "staff" | "revenue" | "orders") => {
+    setSort((current) => ({
+      key,
+      direction:
+        current.key === key && current.direction === "desc" ? "asc" : "desc",
+    }));
+  };
+  const headers = [
+    { label: "Rank", key: null },
+    { label: "Staff", key: "staff" as const },
+    { label: revenueLabel, key: "revenue" as const },
+    { label: "Orders", key: "orders" as const },
+  ];
+
   return (
     <div className="shopops-staff-leaderboard" style={{ overflowX: "auto" }}>
       <table
@@ -2500,9 +2574,16 @@ function StaffLeaderboard({
         </colgroup>
         <thead>
           <tr>
-            {["Rank", "Staff", revenueLabel, "Orders"].map((label, index) => (
+            {headers.map((header, index) => (
               <th
-                key={label}
+                aria-sort={
+                  header.key && sort.key === header.key
+                    ? sort.direction === "asc"
+                      ? "ascending"
+                      : "descending"
+                    : undefined
+                }
+                key={header.label}
                 scope="col"
                 style={{
                   borderBottom: "1px solid #dfe3e8",
@@ -2515,13 +2596,34 @@ function StaffLeaderboard({
                   textTransform: "uppercase",
                 }}
               >
-                {label}
+                {header.key ? (
+                  <button
+                    className="shopops-data-table__sort"
+                    onClick={() => updateSort(header.key!)}
+                    type="button"
+                  >
+                    <span>{header.label}</span>
+                    <span
+                      aria-hidden="true"
+                      className="shopops-data-table__sort-indicator"
+                      data-active={sort.key === header.key ? "true" : "false"}
+                    >
+                      {sort.key === header.key
+                        ? sort.direction === "asc"
+                          ? "↑"
+                          : "↓"
+                        : "↕"}
+                    </span>
+                  </button>
+                ) : (
+                  header.label
+                )}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, index) => {
+          {sortedRows.map((row, index) => {
             const canSelect = Boolean(onSelect) && row.value !== "Others";
             const isSelected = selectedValue === row.value;
             const detailLabel = [

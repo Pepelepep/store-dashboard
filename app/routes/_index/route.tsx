@@ -142,12 +142,11 @@ export default function MarketingHome() {
         <div className="marketing-shell marketing-nav">
           <a className="brand" href="#top" aria-label="ShopOps Studio home">
             <img
-              src="/marketplace/shopops-studio-app-icon-1200.png"
-              alt=""
-              width="42"
-              height="42"
+              src="/marketplace/shopops-studio-logo-horizontal.jpg"
+              alt="ShopOps Studio"
+              width="180"
+              height="90"
             />
-            <span>ShopOps Studio</span>
           </a>
           <nav className="marketing-nav-links" aria-label="Primary navigation">
             <a href="#product">Product</a>
@@ -415,12 +414,11 @@ export default function MarketingHome() {
           <div>
             <a className="brand brand-footer" href="#top">
               <img
-                src="/marketplace/shopops-studio-app-icon-1200.png"
-                alt=""
-                width="38"
-                height="38"
+                src="/marketplace/shopops-studio-logo-horizontal.jpg"
+                alt="ShopOps Studio"
+                width="180"
+                height="90"
               />
-              <span>ShopOps Studio</span>
             </a>
             <p>Operational reporting for Shopify retailers.</p>
           </div>
