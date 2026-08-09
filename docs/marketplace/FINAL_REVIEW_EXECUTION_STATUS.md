@@ -122,7 +122,7 @@ or other personal data. Marketplace media must use the synthetic demo staff.
   reinstalled before the scheduled post-48-hour `shop/redact` verification.
   Immediate baseline: 0 sessions, 1 membership, 2 locations, 17 products, 5
   sync runs, 0 orders, and 0 order lines.
-- Frozen release gates on `bb3c226` / `v0.1.0-rc.1`: typecheck passed, lint
+- Frozen release gates on `v0.1.0-rc.3`: typecheck passed, lint
   passed, production build passed, Shopify CLI app build passed, and all 129
   P0/Marketplace tests passed on 2026-08-09.
 - Public live smoke on 2026-08-08: `/privacy`, `/terms`, and `/support` each
