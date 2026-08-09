@@ -1,6 +1,6 @@
 # Screenshot Plan
 
-Status: Phase 7B first-submission screenshot sequence.
+Status: Three final first-submission assets prepared on 2026-08-09.
 
 ## Capture Rules
 
@@ -105,7 +105,8 @@ Use only if the submission flow needs a billing or first-run screenshot.
 
 Show:
 
-- ShopOps Studio plan at `$59.99/month`.
+- Shopify App Pricing choices: Solo at `$19/month`, Growth at `$49/month`, and
+  Multi-location at `$99/month`.
 - 14-day free trial.
 - Shopify managed billing context.
 - First-run state that explains reporting becomes useful after sync completes.
@@ -132,7 +133,7 @@ If captured, show:
 
 Final Shopify App Store screenshot dimensions:
 
-- `TODO_CONFIRM_SHOPIFY_SCREENSHOT_DIMENSIONS`
+- 1600px by 900px, confirmed from the live listing form on 2026-08-09.
 
 Working capture recommendations:
 
@@ -143,16 +144,17 @@ Working capture recommendations:
 
 ## Final Asset Checklist
 
-- [ ] App icon.
-- [ ] Dashboard overview screenshot.
-- [ ] Location performance screenshot.
+- [x] App icon.
+- [x] Feature image: `00-feature-overview-1600x900.png`.
+- [x] Dashboard overview screenshot: `01-overview-1600x900.png`.
+- [x] Location performance screenshot: `02-compare-locations-1600x900.png`.
 - [ ] Data Health screenshot.
-- [ ] Expenses / COGS screenshot.
+- [x] Expenses / COGS screenshot: `03-costs-1600x900.png`.
 - [ ] Permissions screenshot.
 - [ ] Billing or onboarding screenshot if needed.
 - [ ] Optional Sync Center support screenshot if requested by reviewer.
-- [ ] All screenshots use demo data only.
-- [ ] All screenshots checked for customer personal data.
-- [ ] All screenshots checked for client production data.
-- [ ] Final dimensions confirmed.
-- [ ] Listing copy and screenshots tell the same story.
+- [x] All prepared screenshots use demo operational data only.
+- [x] All prepared screenshots checked for customer personal data.
+- [x] All prepared screenshots checked for client production data.
+- [x] Final dimensions confirmed.
+- [x] Listing copy and prepared screenshots tell the same story.

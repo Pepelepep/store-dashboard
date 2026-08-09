@@ -1,6 +1,6 @@
 # ShopOps Marketplace final review status
 
-Last verified: 2026-08-08
+Last verified: 2026-08-09
 
 ## Product promise to demonstrate
 
@@ -24,11 +24,11 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Reporting-location lifecycle | PASSED 2026-08-08 | Laval was disabled: reporting changed from three locations/118 orders/18,027.93 CAD to two locations/85 orders/13,500.87 CAD. Re-enabling restored the exact original totals. All 225 synthetic lines remained stored and all three Shopify locations remained active. |
 | Billing lifecycle | LIVE PASS WITH PLATFORM BOUNDARY 2026-08-08 | Two clean stores selected and approved the hosted Growth trial at $0 in development. Uninstall changed the subscription to canceling and the app rendered that state correctly after reinstall. The secondary account that reached Shopify's hosted pricing had the high-trust Shopify `Store administrator` system role; it was not a low-privilege Shopify user. Those elevated roles were removed, leaving the custom `App users` role with ShopOps Studio access and neither `Approve app charges` nor app-management permission. Shopify still exposes $0 test approvals on this development store, so production paid-charge denial must be evaluated from Shopify's documented `Approve app charges` permission rather than inferred from dev-store test pricing. ShopOps plan controls and callback confirmation remain owner-only. |
 | Fresh install/reinstall | PASSED 2026-08-08 | Two clean development stores completed install, managed OAuth, hosted pricing, first sync, reload, and uninstall. Lifecycle A also completed immediate reinstall, automatic expiring offline-token acquisition, successful post-reinstall sync, idempotent retained data, and a second uninstall. |
-| Marketplace screencast | MISSING | Reviewer video shows install/onboarding, location setup, staff mapping, role behavior, reports, and billing. |
-| Final listing screenshots | REPLACE | Capture dashboard-only frames after role QA, using synthetic staff and no PII. Do not expose the current Staff filter because it also lists identities from real synchronized data. |
+| Marketplace screencast | MISSING | Record and upload the final 3-8 minute reviewer video showing install/onboarding, location setup, staff mapping, role behavior, reports, and billing. This is now one of the two remaining listing-media tasks. |
+| Final listing screenshots | READY TO UPLOAD 2026-08-09 | Three final 1600x900 dashboard-only assets were recaptured from the frozen release with synthetic operational data and no visible personal identity: Overview, Compare Locations, and Costs. Alt text is already saved in the listing draft. |
 | Automatic maintenance scheduler | PASSED 2026-08-08 | Render service `shopops-maintenance-tick` is active and completed successful maintenance runs while the two lifecycle stores synchronized. Keep it active through review. |
 | Live compliance webhooks | IN PROGRESS | `app/uninstalled` was missing from the deployed Shopify configuration and was fixed in app version `shopops-studio-15`. Live retest proved both online and offline sessions drop to zero within seconds. Lifecycle B remains uninstalled from 2026-08-09 01:50 UTC for the real Shopify `shop/redact` delivery after 48 hours; an automated verification is scheduled for 2026-08-11 02:05 UTC. |
-| Embedded-admin performance | TRACE PENDING AFTER RESTART | Shopify reports seven-day LCP p75 3,552 ms; Aug 9 is 3,556 ms across 28 loads. INP is good at 34 ms and CLS is 0.0. Render Starter is not saturated (roughly 20-30% memory, normally under 5% CPU with brief ~20% peaks); Supabase Micro is also not saturated (8% CPU, 42% memory, 1% disk I/O). Business queries are generally below 7 ms, with observed maxima below 20 ms. The strongest infrastructure risk is geographic: Render runs in Oregon while Supabase runs in `us-east-1`, so every database round trip crosses the continent. Render cannot move an existing service in place; quantify the loader/network share before cloning the service in Virginia. The Chrome DevTools trace server is configured in Codex but requires an app restart before its tools are available. |
+| Embedded-admin performance | PUBLIC BASELINE PASS; AUTHENTICATED TRACE PENDING | Shopify reports seven-day embedded LCP p75 3,552 ms; Aug 9 is 3,556 ms across 28 loads. INP is good at 34 ms and CLS is 0.0. A fresh Chrome DevTools trace of the public production landing page on 2026-08-09 measured LCP 365 ms, TTFB 138 ms, and CLS 0.00, with no estimated LCP savings. This clears the public Render/TLS baseline but does not replace an authenticated embedded trace. Render Starter and Supabase Micro are not saturated; the main remaining hypothesis is Oregon Render to `us-east-1` Supabase latency amplified by authenticated loader round trips. This is a Built for Shopify/performance follow-up, not a failed App Store automated check. |
 
 ## MUST FIX / COMPLETE
 
@@ -41,8 +41,8 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Owner-sensitive actions | LIVE PASS WITH DOCUMENTED SHOPIFY BOUNDARY | Owner restored QA Pilot after the controlled Solo test. ShopOps only exposes and confirms plan changes for Owner. Direct Shopify-hosted billing remains governed by Shopify staff permissions and cannot be represented as a ShopOps role guarantee. |
 | Plan capacity enforcement | LIVE SOLO PASS; DEPLOYED GUARDS VERIFIED | Solo was activated temporarily with 3 reporting locations and 2 ShopOps users. ShopOps showed `3 of 1` and `2 of 1` over-capacity states, blocked Viewer reports, rejected a third ShopOps user without leaving any person/membership/grant row, and rejected saving all three locations without changing the current selection. QA Pilot was restored active with 3 locations and 2 users within capacity. The deployed database functions enforce serialized user/location limits and are executable only by `service_role`. Growth remains 5 locations/5 users; Multi-location remains 10 locations/unlimited users; QA Pilot is private and unmetered. |
 | Shopify compliance webhooks | LIVE HANDLER PASS; REAL 48-HOUR DELIVERY PENDING | Shopify CLI delivered valid-HMAC samples for all three mandatory topics to production. `customers/data_request` was recorded as `received`; `customers/redact` completed with zero matching dummy orders; `shop/redact` completed with zero dummy rows and session deletion confirmed. Audit records retain no raw contact values. Lifecycle B remains the real automatic 48-hour `shop/redact` delivery proof. |
-| API/scopes/privacy declarations | MANUAL CONFIRMATION NEEDED | Partner Dashboard declarations must exactly match deployed scopes and Protected Customer Data/read_all_orders approvals. |
-| Listing validation | INCOMPLETE | Resolve feature media, final screenshots, active pricing plans, and screencast URL. |
+| API/scopes/privacy declarations | PARTNER DASHBOARD READY 2026-08-09 | Protected Customer Data is complete at 9/9 questions, no optional customer name/email/phone/address fields are selected, and the submission summary reports the protected-data request completed. The app requests order-history access without `read_users`; final approval occurs as part of Shopify review. |
+| Listing validation | TWO MEDIA TASKS REMAIN | Shopify App Pricing is enabled. Public plans are live as Solo $19/month, Growth $49/month, and Multi-location $99/month, all with 14-day trials; QA Pilot remains private for three QA stores. Public plan display names are saved, capabilities are set to Embedded, and Shopify's automated common-error check passed. Remaining listing inputs are the prepared image uploads and the screencast URL. |
 | Shopify extension validation | CANDIDATE PASS 2026-08-08 | POS extension API `2026-01` was paired with stale `@shopify/ui-extensions` 2025.10 types, which blocked Shopify CLI validation. The dependency is now aligned to 2026.1.5; `shopify app build` passes and the extension bundle is ~9.1 KB compressed. Shopify accepted the complete non-live candidate version `shopops-studio-16-candidate`; release remains pending until the final smoke gate. |
 | Privileged Supabase RPC grants | FIXED 2026-08-08 | Five SECURITY DEFINER functions were executable by anon/authenticated in the remote DB. Grants are now service-role-only and the security advisor has no remaining WARN findings. |
 | Historical inventory identity | FIXED 2026-08-08 | Repaired 19 inventory-level rows with legacy `-` variant IDs through their canonical inventory-item relationship; the critical data-quality count is now zero. |
@@ -122,8 +122,9 @@ or other personal data. Marketplace media must use the synthetic demo staff.
   reinstalled before the scheduled post-48-hour `shop/redact` verification.
   Immediate baseline: 0 sessions, 1 membership, 2 locations, 17 products, 5
   sync runs, 0 orders, and 0 order lines.
-- Local release gates after the latest live-role fixes: typecheck passed, lint
-  passed, production build passed, and all 127 P0/Marketplace tests passed.
+- Frozen release gates on `bb3c226` / `v0.1.0-rc.1`: typecheck passed, lint
+  passed, production build passed, Shopify CLI app build passed, and all 129
+  P0/Marketplace tests passed on 2026-08-09.
 - Public live smoke on 2026-08-08: `/privacy`, `/terms`, and `/support` each
   returned HTTP 200 without an authentication redirect; navigation links are
   present and the support address is `support@shopopsstudio.com`.
@@ -171,9 +172,9 @@ Do not redesign the dashboard. The smallest safe path is:
 
 1. keep Lifecycle B uninstalled and verify the real `shop/redact` result after
    48 hours;
-2. capture an authenticated embedded Dashboard performance trace and reduce the
-   measured LCP if the 3,552 ms result reproduces;
-3. verify Partner Dashboard scopes, protected-data declarations, public pricing,
-   screencast, and listing validation;
-4. capture focused Marketplace media from the proven flows;
-5. run final automated pre-submission checks and submit.
+2. upload the three prepared 1600x900 assets and record/upload the reviewer
+   screencast;
+3. capture an authenticated embedded Dashboard performance trace as a
+   performance/Built for Shopify follow-up;
+4. complete the AI self-review and owner attestation;
+5. submit only after the real 48-hour `shop/redact` proof and final owner review.
