@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 
 import type {
   ReportKpiId,
+  ReportKpiComparison,
   ReportKpiPresentationItem,
 } from "../../lib/dashboard/kpi-presentation";
 import { ShopOpsTooltip } from "../ui/ShopOpsTooltip";
 import { Card } from "../ui/primitives/card";
 
 export type ReportKpiCardItem = ReportKpiPresentationItem & {
+  comparison?: ReportKpiComparison;
   detail?: ReactNode;
 };
 
@@ -32,6 +34,15 @@ export function MetricCard({ item }: { item: ReportKpiCardItem }) {
           </ShopOpsTooltip>
         </div>
         <div className="shopops-kpi-value">{item.value}</div>
+        {item.comparison ? (
+          <div
+            className="shopops-kpi-comparison"
+            data-tone={item.comparison.tone}
+          >
+            <strong>{item.comparison.value}</strong>
+            <span>{item.comparison.label}</span>
+          </div>
+        ) : null}
         {item.detail ? (
           <div className="shopops-kpi-detail">{item.detail}</div>
         ) : null}
@@ -67,9 +78,11 @@ export function ReportKpiGrid({ items }: { items: ReportKpiCardItem[] }) {
 export function attachReportKpiDetails(
   items: ReportKpiPresentationItem[],
   details: Partial<Record<ReportKpiId, ReactNode>>,
+  comparisons: Partial<Record<ReportKpiId, ReportKpiComparison>> = {},
 ): ReportKpiCardItem[] {
   return items.map((item) => ({
     ...item,
+    comparison: comparisons[item.id],
     detail: details[item.id],
   }));
 }

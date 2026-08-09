@@ -7,6 +7,7 @@ import {
   formatPercent,
 } from "../../lib/dashboard/dashboard-metrics";
 import {
+  buildReportKpiComparison,
   buildSharedReportKpiItems,
   REPORT_METRIC_DEFINITIONS,
   type ReportKpiId,
@@ -23,10 +24,14 @@ import {
 
 export function KpiCards({
   kpis,
+  comparison,
+  selectedDays,
   financialMetricsVersion,
   canAdmin,
 }: {
   kpis: DashboardLoaderData["kpis"];
+  comparison: DashboardLoaderData["comparison"];
+  selectedDays: number;
   financialMetricsVersion: FinancialMetricsVersion;
   canAdmin: boolean;
 }) {
@@ -44,6 +49,39 @@ export function KpiCards({
     grossSales > 0
       ? formatPercent((discounts / grossSales) * 100)
       : formatPercent(0);
+  const comparisonLabel =
+    selectedDays === 1
+      ? "vs previous day"
+      : `vs previous ${selectedDays}-day period`;
+  const comparisons = {
+    sales: buildReportKpiComparison({
+      current: kpis.revenue,
+      previous: comparison.revenue,
+      label: comparisonLabel,
+    }),
+    refunds: buildReportKpiComparison({
+      current: kpis.refunds ?? 0,
+      previous: comparison.refunds,
+      label: comparisonLabel,
+      lowerIsBetter: true,
+    }),
+    returns: buildReportKpiComparison({
+      current: kpis.returns ?? 0,
+      previous: comparison.returns,
+      label: comparisonLabel,
+      lowerIsBetter: true,
+    }),
+    orders: buildReportKpiComparison({
+      current: kpis.ordersCount,
+      previous: comparison.ordersCount,
+      label: comparisonLabel,
+    }),
+    unitsSold: buildReportKpiComparison({
+      current: kpis.unitsSold,
+      previous: comparison.unitsSold,
+      label: comparisonLabel,
+    }),
+  } as const;
 
   const grossProfitDetail = kpis.cogsIncomplete ? (
     <ReportKpiNotice tone="warning">
@@ -143,6 +181,7 @@ export function KpiCards({
       financialMetricsVersion,
     }),
     details,
+    comparisons,
   );
 
   return (

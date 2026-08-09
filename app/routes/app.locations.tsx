@@ -1750,6 +1750,57 @@ function TrendChart({
   );
 }
 
+function LocationSalesBenchmark({
+  revenue,
+  totalRevenue,
+  averageRevenue,
+}: {
+  revenue: number;
+  totalRevenue: number;
+  averageRevenue: number;
+}) {
+  const share = totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0;
+  const delta =
+    averageRevenue > 0
+      ? ((revenue - averageRevenue) / averageRevenue) * 100
+      : 0;
+  const tone =
+    Math.abs(delta) < 0.05 ? "neutral" : delta > 0 ? "above" : "below";
+
+  return (
+    <div className="shopops-location-benchmark">
+      <span>{formatPercent(share)} of selected sales</span>
+      <strong data-tone={tone}>
+        {tone === "neutral"
+          ? "At portfolio average"
+          : `${delta > 0 ? "↑" : "↓"} ${formatPercent(Math.abs(delta))} vs avg`}
+      </strong>
+    </div>
+  );
+}
+
+function LocationSalesValue({
+  revenue,
+  maximumRevenue,
+}: {
+  revenue: number;
+  maximumRevenue: number;
+}) {
+  const width =
+    maximumRevenue > 0 && revenue > 0
+      ? Math.max((revenue / maximumRevenue) * 100, 2)
+      : 0;
+
+  return (
+    <div className="shopops-location-sales-value">
+      <strong>{formatCurrency(revenue)}</strong>
+      <span aria-hidden="true">
+        <i style={{ width: `${width}%` }} />
+      </span>
+    </div>
+  );
+}
+
 function LocationTable({
   rows,
   financialMetricsVersion,
@@ -1805,6 +1856,9 @@ function LocationTable({
     "Net Profit",
     "AOV (Net)",
   ];
+  const totalRevenue = rows.reduce((sum, row) => sum + row.revenue, 0);
+  const averageRevenue = rows.length > 0 ? totalRevenue / rows.length : 0;
+  const maximumRevenue = Math.max(...rows.map((row) => row.revenue), 0);
   const sortedRows = useMemo(() => {
     const getValue = (row: LocationMetricRow) => {
       if (sort.key === "location") return row.locationName.toLowerCase();
@@ -1928,6 +1982,11 @@ function LocationTable({
                             Negative net profit
                           </StatusBadge>
                         ) : null}
+                        <LocationSalesBenchmark
+                          averageRevenue={averageRevenue}
+                          revenue={row.revenue}
+                          totalRevenue={totalRevenue}
+                        />
                       </div>
                     </td>
                     <td
@@ -1968,7 +2027,10 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.revenue)}
+                      <LocationSalesValue
+                        maximumRevenue={maximumRevenue}
+                        revenue={row.revenue}
+                      />
                     </td>
                     <td
                       style={{
@@ -2078,6 +2140,11 @@ function LocationTable({
                             Negative net profit
                           </StatusBadge>
                         ) : null}
+                        <LocationSalesBenchmark
+                          averageRevenue={averageRevenue}
+                          revenue={row.revenue}
+                          totalRevenue={totalRevenue}
+                        />
                       </div>
                     </td>
                     <td
@@ -2086,7 +2153,10 @@ function LocationTable({
                         padding: "12px 10px",
                       }}
                     >
-                      {formatCurrency(row.revenue)}
+                      <LocationSalesValue
+                        maximumRevenue={maximumRevenue}
+                        revenue={row.revenue}
+                      />
                     </td>
                     <td
                       style={{

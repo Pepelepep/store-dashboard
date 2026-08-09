@@ -60,7 +60,7 @@ so pages that do not use it do not pay its client-side cost.
 - Authentication, legal, billing, authorization, setup actions, and all server loaders/actions.
 - `app.admin.financial-qa.tsx`, which is an internal financial verification surface rather than a merchant-facing product page.
 - People identity/access overlays and staff lifecycle behavior, because their existing interaction model is mature and permission-sensitive.
-- Chart data contracts, Recharts composition, calculations, sorting, selection state, and export behavior.
+- Existing metric calculations, sorting, selection state, and export behavior.
 - Navigation structure and route semantics; global polish was applied through the existing shared shell instead.
 
 ## Safe implementation sequence
@@ -77,8 +77,34 @@ so pages that do not use it do not pay its client-side cost.
 
 ## Risk controls
 
-- No route, loader, action, database, billing, scope, authorization, or metric-calculation changes.
+- No route, action, database, billing, scope, authorization, or existing
+  metric-calculation changes. A read-only previous-period loader query supports
+  the explicitly requested comparisons.
 - Dependency additions are limited to Tailwind 4, shadcn utility packages, Lucide, and the Radix primitives actually used.
 - Tailwind Preflight is disabled to avoid resetting Polaris and legacy workflow surfaces.
 - No broad page migration or duplicated public primitive API.
 - No inferred access based on visibility of controls.
+
+## Second-pass analytical polish
+
+The follow-up pass adds restrained semantic color instead of decorative color:
+
+- blue for commercial sales;
+- violet for order/unit activity;
+- red for refunds and returns;
+- amber for costs and expenses;
+- green for profit and margin.
+
+Dashboard Net Sales, Refunds, Returns, Orders, and Units Sold now compare with
+the immediately preceding period of identical length. The comparison query uses
+the same location, staff, vendor, authorization, financial-metric, refund, and
+timezone rules as the selected period. It requests only the columns needed for
+comparison and runs alongside the current-period query.
+
+The hourly chart displays previous-period product sales as a subdued comparison
+series. It hides that series during local chart/table drill-downs because those
+client-only drill-downs do not alter the server-side comparison scope.
+
+Locations adds portfolio-relative context without another data query: each row
+shows its share of selected sales, variance from the selected-location average,
+and a proportional Net Sales bar.

@@ -31,16 +31,25 @@ function normalizeHourlyRows(rows: SalesByHourRow[]) {
 
 export function SalesByHourCard({
   salesByHour,
+  comparisonSalesByHour,
   financialMetricsVersion,
   selectedHour,
   onSelectHour,
 }: {
   salesByHour: SalesByHourRow[];
+  comparisonSalesByHour?: SalesByHourRow[];
   financialMetricsVersion: FinancialMetricsVersion;
   selectedHour?: number | null;
   onSelectHour?: (hour: number) => void;
 }) {
   const rows = useMemo(() => normalizeHourlyRows(salesByHour), [salesByHour]);
+  const comparisonRows = useMemo(
+    () =>
+      comparisonSalesByHour
+        ? normalizeHourlyRows(comparisonSalesByHour)
+        : undefined,
+    [comparisonSalesByHour],
+  );
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const revenueLabel = isFinancialMetricsV2 ? "Product sales" : "Revenue";
   const chartPoints = rows.map((row) => ({
@@ -48,6 +57,7 @@ export function SalesByHourCard({
     axisLabel: formatHourLabel(row.hour),
     tooltipLabel: formatHourLabel(row.hour),
     sales: row.revenue,
+    comparisonSales: comparisonRows?.[row.hour]?.revenue,
     orders: row.ordersCount,
     unitsSold: row.unitsSold,
   }));
@@ -70,6 +80,7 @@ export function SalesByHourCard({
         minimumWidth={864}
         onSelectPoint={(_, index) => onSelectHour?.(rows[index].hour)}
         points={chartPoints}
+        comparisonLabel={comparisonRows ? "Previous period" : undefined}
         salesLabel={revenueLabel}
         selectedKey={
           selectedHour === null || selectedHour === undefined

@@ -58,6 +58,7 @@ import {
   getLineRefundedAmount,
   getLineReturnedQuantity,
   getLineReturns,
+  getPreviousPeriodDateRange,
   getStaffDisplayLabel,
   getStaffFilterValue,
   getTodayStoreDate,
@@ -65,6 +66,7 @@ import {
   isActiveInventoryProduct,
   nextDate,
   normalizeFinancialMetricsVersion,
+  STORE_TIME_ZONE,
   storeDateToUtcIso,
   UNKNOWN_STAFF_FILTER_VALUE,
 } from "../lib/dashboard/dashboard-metrics";
@@ -73,6 +75,7 @@ import { getRecentOrderChips } from "../lib/dashboard/recent-order-flags";
 import { buildDrilldownResetKey } from "../lib/dashboard/drilldown-reset-key";
 import { calculateReportedProfit, summarizeCogs } from "../lib/financial/cogs";
 import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
+import { computeHourlySalesRows } from "../lib/dashboard/hourly-sales";
 import type {
   ActiveDrilldowns,
   DashboardLoaderData as LoaderData,
@@ -278,6 +281,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const startDateUtc = storeDateToUtcIso(startDate);
   const endExclusiveUtc = storeDateToUtcIso(endExclusive);
   const selectedDays = daysBetween(startDate, endExclusive);
+  const previousPeriod = getPreviousPeriodDateRange({ startDate, endDate });
   const financialMetricsVersion = normalizeFinancialMetricsVersion(
     process.env.FINANCIAL_METRICS_VERSION,
   );
@@ -285,6 +289,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const orderLinesSelect = isFinancialMetricsV2
     ? "*"
     : "id, order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, returned_quantity, cost_at_sale, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name";
+  const comparisonOrderLinesSelect = isFinancialMetricsV2
+    ? "id, shopify_order_id, created_at_shopify, retail_location_id, vendor, quantity, revenue, gross_sales, discounts, returns, net_sales, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name"
+    : orderLinesSelect;
 
   const locationsData = await fetchAllSupabasePages<
     LocationRow & { id: string }
@@ -355,6 +362,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     syncJobs,
     webhookFailures,
     rawOrderLines,
+    rawPreviousOrderLines,
     inventoryRows,
     variants,
     products,
@@ -430,6 +438,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
               .in("retail_location_id", selectedLocationIds)
               .gte("created_at_shopify", startDateUtc)
               .lt("created_at_shopify", endExclusiveUtc)
+              .order("created_at_shopify", { ascending: false })
+              .order("id", { ascending: true })
+              .range(from, to) as unknown as PromiseLike<{
+              data: Array<OrderLineDbRow & { id: string }> | null;
+              error: { message: string } | null;
+            }>,
+        })
+      : Promise.resolve([]),
+    selectedLocationIds.length > 0
+      ? fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
+          label: "Dashboard previous-period order lines",
+          getRowKey: (row) => row.id,
+          fetchPage: (from, to) =>
+            supabase
+              .from("order_lines")
+              .select(comparisonOrderLinesSelect)
+              .eq("shop_domain", session.shop)
+              .in("retail_location_id", selectedLocationIds)
+              .gte("created_at_shopify", previousPeriod.startDateUtc)
+              .lt("created_at_shopify", previousPeriod.endExclusiveUtc)
               .order("created_at_shopify", { ascending: false })
               .order("id", { ascending: true })
               .range(from, to) as unknown as PromiseLike<{
@@ -519,21 +547,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const staffAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
     supabase,
     shop: session.shop,
-    orderLines: rawOrderLines,
+    orderLines: [...rawOrderLines, ...rawPreviousOrderLines],
   });
-  const orderLines = rawOrderLines.map((row) => {
-    const resolution = resolveStaffDisplayNameForOrderLine(
-      row,
-      staffAliasesByKey,
-    );
+  const resolveStaff = (rows: OrderLineDbRow[]) =>
+    rows.map((row) => {
+      const resolution = resolveStaffDisplayNameForOrderLine(
+        row,
+        staffAliasesByKey,
+      );
 
-    return {
-      ...row,
-      resolved_staff_display_name: resolution.label,
-      resolved_staff_status: resolution.status,
-      resolved_staff_key: resolution.staffKey,
-    };
-  });
+      return {
+        ...row,
+        resolved_staff_display_name: resolution.label,
+        resolved_staff_status: resolution.status,
+        resolved_staff_key: resolution.staffKey,
+      };
+    });
+  const orderLines = resolveStaff(rawOrderLines);
+  const previousOrderLines = resolveStaff(rawPreviousOrderLines);
   if (allLocations.length === 0 || orderLines.length === 0) {
     logEmptyDataState({
       route: "app.db-dashboard",
@@ -567,9 +598,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedStaff,
     selectedVendor,
   });
+  const filteredPreviousOrderLines = filterOrderLines({
+    orderLines: previousOrderLines,
+    selectedStaff,
+    selectedVendor,
+  });
   let revenue = isFinancialMetricsV2
     ? filteredOrderLines.reduce((sum, row) => sum + getLineNetSales(row), 0)
     : filteredOrderLines.reduce(
+        (sum, row) => sum + Number(row.revenue ?? 0),
+        0,
+      );
+  let previousRevenue = isFinancialMetricsV2
+    ? filteredPreviousOrderLines.reduce(
+        (sum, row) => sum + getLineNetSales(row),
+        0,
+      )
+    : filteredPreviousOrderLines.reduce(
         (sum, row) => sum + Number(row.revenue ?? 0),
         0,
       );
@@ -581,6 +626,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     : 0;
   const returns = isFinancialMetricsV2
     ? filteredOrderLines.reduce((sum, row) => sum + getLineReturns(row), 0)
+    : 0;
+  const previousReturns = isFinancialMetricsV2
+    ? filteredPreviousOrderLines.reduce(
+        (sum, row) => sum + getLineReturns(row),
+        0,
+      )
     : 0;
   const returnedQuantity = isFinancialMetricsV2
     ? filteredOrderLines.reduce(
@@ -603,18 +654,36 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const uniqueOrders = new Set(
     filteredOrderLines.map((row) => row.shopify_order_id),
   );
+  const previousUniqueOrders = new Set(
+    filteredPreviousOrderLines.map((row) => row.shopify_order_id),
+  );
   const ordersCount = uniqueOrders.size;
-  const refundTransactions =
+  const previousOrdersCount = previousUniqueOrders.size;
+  const [refundTransactions, previousRefundTransactions] = await Promise.all([
     isFinancialMetricsV2 && uniqueOrders.size > 0
-      ? await fetchRefundTransactionsForOrders({
+      ? fetchRefundTransactionsForOrders({
           supabase,
           shop: session.shop,
           orderIds: Array.from(uniqueOrders),
           startDateUtc,
           endExclusiveUtc,
         })
-      : [];
+      : Promise.resolve([]),
+    isFinancialMetricsV2 && previousUniqueOrders.size > 0
+      ? fetchRefundTransactionsForOrders({
+          supabase,
+          shop: session.shop,
+          orderIds: Array.from(previousUniqueOrders),
+          startDateUtc: previousPeriod.startDateUtc,
+          endExclusiveUtc: previousPeriod.endExclusiveUtc,
+        })
+      : Promise.resolve([]),
+  ]);
   const refunds = refundTransactions.reduce(
+    (sum, row) => sum + Number(row.amount ?? 0),
+    0,
+  );
+  const previousRefunds = previousRefundTransactions.reduce(
     (sum, row) => sum + Number(row.amount ?? 0),
     0,
   );
@@ -623,6 +692,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
       lineNetSales: revenue,
       merchandiseReturns: returns,
       totalRefunds: refunds,
+    });
+    previousRevenue = calculateNetSalesAfterCashRefunds({
+      lineNetSales: previousRevenue,
+      merchandiseReturns: previousReturns,
+      totalRefunds: previousRefunds,
     });
   }
   const refundTransactionsCount = refundTransactions.length;
@@ -636,6 +710,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const unitsSold = filteredOrderLines.reduce(
     (sum, row) => sum + Number(row.quantity ?? 0),
     0,
+  );
+  const previousUnitsSold = filteredPreviousOrderLines.reduce(
+    (sum, row) => sum + Number(row.quantity ?? 0),
+    0,
+  );
+  const previousSalesByHour = computeHourlySalesRows(
+    filteredPreviousOrderLines.map((row) => ({
+      created_at_shopify: row.created_at_shopify,
+      shopify_order_id: row.shopify_order_id,
+      revenue: isFinancialMetricsV2
+        ? getLineNetSales(row)
+        : Number(row.revenue ?? 0),
+      quantity: Number(row.quantity ?? 0),
+    })),
+    STORE_TIME_ZONE,
   );
   const averageOrderValue = ordersCount > 0 ? revenue / ordersCount : 0;
   const inventoryUnits = activeInventoryRows.reduce(
@@ -816,6 +905,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
       netProfit,
       hasOperatingExpenses: expenses.some((expense) => expense.is_active),
     },
+    comparison: {
+      startDate: previousPeriod.startDate,
+      endDate: previousPeriod.endDate,
+      revenue: previousRevenue,
+      refunds: previousRefunds,
+      returns: previousReturns,
+      ordersCount: previousOrdersCount,
+      unitsSold: previousUnitsSold,
+      salesByHour: previousSalesByHour,
+    },
     stockAlerts,
     salesOrderLines,
     staffAttributionAvailable,
@@ -887,6 +986,7 @@ export default function DbDashboardPage() {
     selectedDays,
     financialMetricsVersion,
     kpis,
+    comparison,
     stockAlerts,
     salesOrderLines,
     staffAttributionAvailable,
@@ -931,6 +1031,9 @@ export default function DbDashboardPage() {
   const selectedProductKey = activeDrilldowns.product?.value ?? null;
   const selectedStaffKey = activeDrilldowns.staff?.value ?? null;
   const selectedVendorKey = activeDrilldowns.vendor?.value ?? null;
+  const hasActiveDrilldowns = Object.values(activeDrilldowns).some(
+    (value) => value !== null && value !== undefined,
+  );
   const toggleHourDrilldown = (hour: number) => {
     setActiveDrilldowns((current) => ({
       ...current,
@@ -1120,6 +1223,8 @@ export default function DbDashboardPage() {
 
             <KpiCards
               kpis={kpis}
+              comparison={comparison}
+              selectedDays={selectedDays}
               financialMetricsVersion={financialMetricsVersion}
               canAdmin={readiness.canAdmin}
             />
@@ -1144,6 +1249,9 @@ export default function DbDashboardPage() {
             <div style={{ marginBottom: 20 }}>
               <SalesByHourCard
                 salesByHour={drilldownSalesByHour}
+                comparisonSalesByHour={
+                  hasActiveDrilldowns ? undefined : comparison.salesByHour
+                }
                 financialMetricsVersion={financialMetricsVersion}
                 selectedHour={selectedHour}
                 onSelectHour={toggleHourDrilldown}

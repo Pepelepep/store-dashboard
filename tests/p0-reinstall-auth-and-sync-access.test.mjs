@@ -4400,16 +4400,16 @@ test("shared report KPI order, labels, formatting, and categories are canonical"
   );
   for (const category of [
     'sales: "commercial"',
-    'grossProfit: "commercial"',
-    'grossMargin: "commercial"',
-    'netProfit: "commercial"',
+    'grossProfit: "profit"',
+    'grossMargin: "profit"',
+    'netProfit: "profit"',
     'orders: "activity"',
     'unitsSold: "activity"',
     'averageOrderValue: "activity"',
-    'refunds: "neutral"',
-    'returns: "neutral"',
-    'cogs: "neutral"',
-    'expenses: "neutral"',
+    'refunds: "negative"',
+    'returns: "negative"',
+    'cogs: "cost"',
+    'expenses: "cost"',
   ]) {
     assert.match(configuration, new RegExp(category));
   }
@@ -4451,6 +4451,38 @@ test("shared report KPI order, labels, formatting, and categories are canonical"
   );
   assert.match(presentation, /\.shopops-kpi-info \{[^}]*cursor: help/);
   assert.match(renderer, /export function MetricCard/);
+});
+
+test("KPI comparisons use the exact preceding period and metric-aware tones", () => {
+  const dashboardMetrics = readFileSync(
+    new URL("../app/lib/dashboard/dashboard-metrics.ts", import.meta.url),
+    "utf8",
+  );
+  const kpiPresentation = readFileSync(
+    new URL("../app/lib/dashboard/kpi-presentation.ts", import.meta.url),
+    "utf8",
+  );
+  const dashboard = readFileSync(
+    new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    dashboardMetrics,
+    /export function getPreviousPeriodDateRange[\s\S]*?addDays\(currentStart, -selectedDays\)[\s\S]*?addDays\(currentStart, -1\)/,
+  );
+  assert.match(
+    kpiPresentation,
+    /export function buildReportKpiComparison[\s\S]*?lowerIsBetter[\s\S]*?Math\.abs\(previous\)[\s\S]*?isIncrease !== lowerIsBetter/,
+  );
+  assert.match(
+    dashboard,
+    /label: "Dashboard previous-period order lines"[\s\S]*?previousPeriod\.startDateUtc[\s\S]*?previousPeriod\.endExclusiveUtc/,
+  );
+  assert.match(
+    dashboard,
+    /comparison: \{[\s\S]*?revenue: previousRevenue[\s\S]*?refunds: previousRefunds[\s\S]*?salesByHour: previousSalesByHour/,
+  );
 });
 
 test("Settings separates data freshness from scheduler state at the shared width", () => {
@@ -5110,7 +5142,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(mirrorChart, /export function MirrorSalesChart/);
   assert.equal((mirrorChart.match(/<ResponsiveContainer\b/g) ?? []).length, 2);
   assert.equal(mirrorPlots.length, 2);
-  assert.equal((mirrorChart.match(/<Bar\b/g) ?? []).length, 2);
+  assert.equal((mirrorChart.match(/<Bar\b/g) ?? []).length, 3);
   assert.equal((mirrorChart.match(/data=\{chartData\}/g) ?? []).length, 2);
   assert.match(
     mirrorChart,
@@ -5118,6 +5150,7 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   );
   assert.match(mirrorChart, /\.\.\.point/);
   assert.match(mirrorPlots[0], /dataKey="sales"/);
+  assert.match(mirrorPlots[0], /dataKey="comparisonSales"/);
   assert.doesNotMatch(mirrorPlots[0], /dataKey="orders"/);
   assert.match(mirrorPlots[1], /dataKey="orders"/);
   assert.doesNotMatch(mirrorPlots[1], /dataKey="sales"/);

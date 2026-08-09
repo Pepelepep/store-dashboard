@@ -31,6 +31,7 @@ type ShopOpsTooltipDatum = {
   sales?: number;
   productSales?: number;
   netSales?: number;
+  comparisonSales?: number;
   orders?: number;
   unitsSold?: number;
 };
@@ -42,10 +43,12 @@ export function ShopOpsChartTooltip({
   labelLabel,
   valueKey,
   valueLabel,
+  comparisonLabel,
 }: TooltipContentProps & {
   labelLabel?: string;
   valueKey: "sales" | "productSales" | "netSales";
   valueLabel: string;
+  comparisonLabel?: string;
 }) {
   if (!active || !payload?.length) {
     return null;
@@ -63,6 +66,11 @@ export function ShopOpsChartTooltip({
       <div>
         {valueLabel}: {formatCurrency(value)}
       </div>
+      {comparisonLabel && datum?.comparisonSales !== undefined ? (
+        <div>
+          {comparisonLabel}: {formatCurrency(datum.comparisonSales)}
+        </div>
+      ) : null}
       <div>Orders: {formatNumber(Number(datum?.orders ?? 0))}</div>
       <div>Units sold: {formatNumber(Number(datum?.unitsSold ?? 0))}</div>
     </div>

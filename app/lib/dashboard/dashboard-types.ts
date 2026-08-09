@@ -280,6 +280,16 @@ export type DashboardLoaderData = {
     netProfit: number | null;
     hasOperatingExpenses: boolean;
   };
+  comparison: {
+    startDate: string;
+    endDate: string;
+    revenue: number;
+    refunds: number;
+    returns: number;
+    ordersCount: number;
+    unitsSold: number;
+    salesByHour: SalesByHourRow[];
+  };
   stockAlerts: StockAlertRow[];
   salesOrderLines: DashboardSalesOrderLineRow[];
   staffAttributionAvailable: boolean;

@@ -153,6 +153,29 @@ export function daysBetween(startDate: string, endExclusiveDate: string) {
   );
 }
 
+export function getPreviousPeriodDateRange({
+  startDate,
+  endDate,
+}: {
+  startDate: string;
+  endDate: string;
+}) {
+  const selectedDays = daysBetween(startDate, nextDate(endDate));
+  const currentStart = parseDateOnlyUtc(startDate);
+  const previousStartDate = formatDateOnlyUtc(
+    addDays(currentStart, -selectedDays),
+  );
+  const previousEndDate = formatDateOnlyUtc(addDays(currentStart, -1));
+
+  return {
+    startDate: previousStartDate,
+    endDate: previousEndDate,
+    startDateUtc: storeDateToUtcIso(previousStartDate),
+    endExclusiveUtc: storeDateToUtcIso(startDate),
+    selectedDays,
+  };
+}
+
 function getTimeZoneOffsetMs(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,

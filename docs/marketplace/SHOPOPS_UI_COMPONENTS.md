@@ -45,4 +45,9 @@ import {
 - Add a primitive only when it removes a concrete inconsistency.
 - Prefer semantic tokens over arbitrary per-page colors.
 - Numeric and financial values use tabular numbers and right alignment.
+- Metric comparisons use the immediately preceding period with the same length
+  and filters. Direction tone is metric-aware: lower refunds/returns are
+  positive, while higher sales/activity are positive.
+- Semantic color identifies metric families; it does not encode arbitrary card
+  identity.
 - Keep no-data and loading dimensions stable enough to avoid layout shifts.

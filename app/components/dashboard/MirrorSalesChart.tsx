@@ -32,6 +32,7 @@ export type MirrorSalesChartPoint = {
   axisLabel: string;
   tooltipLabel: string;
   sales: number;
+  comparisonSales?: number;
   orders: number;
   unitsSold: number;
 };
@@ -72,13 +73,27 @@ function getAxisInterval(pointCount: number, maximumTickLabels: number) {
   return Math.max(0, Math.ceil(pointCount / maximumTickLabels) - 1);
 }
 
-function getPointDetail(point: MirrorSalesChartPoint, salesLabel: string) {
-  return [
+function getPointDetail(
+  point: MirrorSalesChartPoint,
+  salesLabel: string,
+  comparisonLabel?: string,
+) {
+  const details = [
     point.tooltipLabel,
     `${salesLabel}: ${formatCurrency(point.sales)}`,
     `Orders: ${formatNumber(point.orders)}`,
     `Units sold: ${formatNumber(point.unitsSold)}`,
-  ].join(". ");
+  ];
+
+  if (comparisonLabel && point.comparisonSales !== undefined) {
+    details.splice(
+      2,
+      0,
+      `${comparisonLabel}: ${formatCurrency(point.comparisonSales)}`,
+    );
+  }
+
+  return details.join(". ");
 }
 
 function getActiveIndex(value: unknown, pointCount: number) {
@@ -101,6 +116,7 @@ export function MirrorSalesChart({
   maximumTickLabels = 8,
   minimumWidth = 640,
   minimumBucketWidth = 24,
+  comparisonLabel,
 }: {
   points: MirrorSalesChartPoint[];
   salesLabel: string;
@@ -113,6 +129,7 @@ export function MirrorSalesChart({
   maximumTickLabels?: number;
   minimumWidth?: number;
   minimumBucketWidth?: number;
+  comparisonLabel?: string;
 }) {
   const componentId = useId();
   const statusId = `${componentId}-status`;
@@ -124,6 +141,9 @@ export function MirrorSalesChart({
     [points],
   );
   const hasActivity = hasMirrorChartActivity(points);
+  const hasComparison =
+    Boolean(comparisonLabel) &&
+    points.some((point) => point.comparisonSales !== undefined);
   const selectedIndex = selectedKey
     ? points.findIndex((point) => point.key === selectedKey)
     : -1;
@@ -163,7 +183,8 @@ export function MirrorSalesChart({
   const salesAxisMaximum = Math.max(
     1,
     points.reduce(
-      (maximum, point) => Math.max(maximum, point.sales),
+      (maximum, point) =>
+        Math.max(maximum, point.sales, point.comparisonSales ?? 0),
       0,
     ) * 1.15,
   );
@@ -220,10 +241,7 @@ export function MirrorSalesChart({
       focusPoint(points.length - 1);
       return;
     }
-    if (
-      (event.key === "Enter" || event.key === " ") &&
-      points[currentIndex]
-    ) {
+    if ((event.key === "Enter" || event.key === " ") && points[currentIndex]) {
       event.preventDefault();
       onSelectPoint?.(points[currentIndex], currentIndex);
     }
@@ -242,7 +260,11 @@ export function MirrorSalesChart({
       aria-valuemax={points.length - 1}
       aria-valuemin={0}
       aria-valuenow={accessibleIndex}
-      aria-valuetext={getPointDetail(accessiblePoint, salesLabel)}
+      aria-valuetext={getPointDetail(
+        accessiblePoint,
+        salesLabel,
+        comparisonLabel,
+      )}
       className="shopops-mirror-sales-chart shopops-recharts shopops-chart-scroll"
       data-label-mode={labelMode}
       data-selected-key={selectedKey ?? undefined}
@@ -270,6 +292,11 @@ export function MirrorSalesChart({
         <span>
           ↑ <span style={{ color: "#2563eb" }}>{salesLabel}</span>
         </span>
+        {hasComparison ? (
+          <span>
+            <span style={{ color: "#94a3b8" }}>■</span> {comparisonLabel}
+          </span>
+        ) : null}
         <span>
           ↓ <span style={{ color: "#0f766e" }}>Orders</span>
         </span>
@@ -325,6 +352,7 @@ export function MirrorSalesChart({
                 content={(props) => (
                   <ShopOpsChartTooltip
                     {...props}
+                    comparisonLabel={comparisonLabel}
                     labelLabel={tooltipBucketLabel}
                     valueKey="sales"
                     valueLabel={salesLabel}
@@ -333,8 +361,7 @@ export function MirrorSalesChart({
                 cursor={false}
                 isAnimationActive={false}
               />
-              {transientPoint &&
-              transientPoint.key !== selectedPoint?.key ? (
+              {transientPoint && transientPoint.key !== selectedPoint?.key ? (
                 <ReferenceArea
                   fill="rgba(15, 118, 110, 0.06)"
                   stroke="none"
@@ -349,6 +376,15 @@ export function MirrorSalesChart({
                   strokeWidth={1}
                   x1={selectedPoint.key}
                   x2={selectedPoint.key}
+                />
+              ) : null}
+              {hasComparison ? (
+                <Bar
+                  dataKey="comparisonSales"
+                  fill="#cbd5e1"
+                  isAnimationActive={false}
+                  name={comparisonLabel}
+                  radius={[4, 4, 0, 0]}
                 />
               ) : null}
               <Bar
@@ -452,8 +488,7 @@ export function MirrorSalesChart({
                 cursor={false}
                 isAnimationActive={false}
               />
-              {transientPoint &&
-              transientPoint.key !== selectedPoint?.key ? (
+              {transientPoint && transientPoint.key !== selectedPoint?.key ? (
                 <ReferenceArea
                   fill="rgba(15, 118, 110, 0.06)"
                   stroke="none"

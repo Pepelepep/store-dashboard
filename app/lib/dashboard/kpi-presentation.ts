@@ -5,7 +5,19 @@ import {
 } from "./dashboard-metrics";
 import type { FinancialMetricsVersion } from "./dashboard-types";
 
-export type ReportKpiCategory = "commercial" | "activity" | "neutral";
+export type ReportKpiCategory =
+  | "commercial"
+  | "activity"
+  | "neutral"
+  | "negative"
+  | "cost"
+  | "profit";
+
+export type ReportKpiComparison = {
+  label: string;
+  value: string;
+  tone: "positive" | "negative" | "neutral";
+};
 
 export type SharedReportKpiId =
   | "sales"
@@ -85,17 +97,58 @@ export const LOCATION_ONLY_REPORT_KPI_APPEND_ORDER = [
 
 const KPI_CATEGORIES: Record<ReportKpiId, ReportKpiCategory> = {
   sales: "commercial",
-  refunds: "neutral",
-  returns: "neutral",
+  refunds: "negative",
+  returns: "negative",
   orders: "activity",
   unitsSold: "activity",
-  cogs: "neutral",
-  grossProfit: "commercial",
-  grossMargin: "commercial",
-  expenses: "neutral",
-  netProfit: "commercial",
+  cogs: "cost",
+  grossProfit: "profit",
+  grossMargin: "profit",
+  expenses: "cost",
+  netProfit: "profit",
   averageOrderValue: "activity",
 };
+
+export function buildReportKpiComparison({
+  current,
+  previous,
+  label,
+  lowerIsBetter = false,
+}: {
+  current: number;
+  previous: number;
+  label: string;
+  lowerIsBetter?: boolean;
+}): ReportKpiComparison {
+  if (previous === 0) {
+    if (current === 0) {
+      return { label, value: "No change", tone: "neutral" };
+    }
+
+    return {
+      label,
+      value: "New activity",
+      tone: lowerIsBetter ? "negative" : "positive",
+    };
+  }
+
+  const change = ((current - previous) / Math.abs(previous)) * 100;
+  const isFlat = Math.abs(change) < 0.05;
+  const isIncrease = change > 0;
+  const tone = isFlat
+    ? "neutral"
+    : isIncrease !== lowerIsBetter
+      ? "positive"
+      : "negative";
+
+  return {
+    label,
+    value: isFlat
+      ? "No change"
+      : `${isIncrease ? "↑" : "↓"} ${formatPercent(Math.abs(change))}`,
+    tone,
+  };
+}
 
 export const REPORT_METRIC_DEFINITIONS = {
   grossSales: "Gross Sales: product sales before discounts and returns.",
