@@ -20,11 +20,11 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Item | Status | Proof required before submission |
 | --- | --- | --- |
 | Live Owner/Admin/Manager/Viewer role QA | BLOCKED | Four real sign-in identities (or Shopify staff accounts) complete the role matrix below. Fake seed emails are reporting identities, not login accounts. |
-| Reporting-location lifecycle | NOT RUN | Enable one synced location, verify it appears in Dashboard/Locations and role scopes; disable it, verify it disappears without deleting historical Shopify data; re-enable and verify recovery. |
+| Reporting-location lifecycle | PASSED 2026-08-08 | Laval was disabled: reporting changed from three locations/118 orders/18,027.93 CAD to two locations/85 orders/13,500.87 CAD. Re-enabling restored the exact original totals. All 225 synthetic lines remained stored and all three Shopify locations remained active. |
 | Billing lifecycle | NOT RUN | Owner starts trial, approves charge, changes plan, cancels; Admin/Manager/Viewer cannot perform Billing/Plan actions. Only then enable public Partner Dashboard plans. |
 | Fresh install/reinstall | NOT RUN | Clean development store: install, OAuth, onboarding, first sync, reload, uninstall, reinstall, and retained/deleted state verified. |
 | Marketplace screencast | MISSING | Reviewer video shows install/onboarding, location setup, staff mapping, role behavior, reports, and billing. |
-| Final listing screenshots | REPLACE | Capture dashboard-only frames after role QA, using synthetic staff and no PII. |
+| Final listing screenshots | REPLACE | Capture dashboard-only frames after role QA, using synthetic staff and no PII. Do not expose the current Staff filter because it also lists identities from real synchronized data. |
 
 ## MUST FIX / COMPLETE
 
@@ -93,9 +93,9 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 
 Do not redesign the dashboard. The smallest safe path is:
 
-1. complete live location enable/disable/re-enable QA;
-2. provision or identify one real login for each non-owner role;
-3. execute the role matrix and fix only observed failures;
-4. execute billing and fresh-install lifecycle;
-5. capture focused Marketplace media from the now-proven flows;
-6. enable Partner Dashboard pricing and submit.
+1. identify one real non-owner login and test it successively as Viewer,
+   Manager, and Admin;
+2. execute the role matrix and fix only observed failures;
+3. execute billing and fresh-install lifecycle;
+4. capture focused Marketplace media from the now-proven flows;
+5. enable Partner Dashboard pricing and submit.
