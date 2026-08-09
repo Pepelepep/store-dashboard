@@ -55,19 +55,7 @@ export function ShopOpsChartTooltip({
   const value = Number(datum?.[valueKey] ?? 0);
 
   return (
-    <div
-      className="shopops-chart-tooltip"
-      style={{
-        background: "rgba(17, 24, 39, 0.96)",
-        border: "1px solid rgba(255, 255, 255, 0.12)",
-        borderRadius: 10,
-        boxShadow: "0 8px 24px rgba(15, 23, 42, 0.18)",
-        color: "white",
-        fontSize: 12,
-        lineHeight: 1.5,
-        padding: "9px 11px",
-      }}
-    >
+    <div className="shopops-chart-tooltip">
       <strong>
         {labelLabel ? `${labelLabel}: ` : ""}
         {datum?.tooltipLabel ?? String(label ?? "")}
@@ -82,21 +70,5 @@ export function ShopOpsChartTooltip({
 }
 
 export function ShopOpsChartEmptyState({ children }: { children: ReactNode }) {
-  return (
-    <div
-      className="shopops-chart-empty"
-      style={{
-        alignItems: "center",
-        background: "#fafafa",
-        border: "1px solid #e5e7eb",
-        borderRadius: 12,
-        color: "#707070",
-        display: "flex",
-        minHeight: 220,
-        padding: 16,
-      }}
-    >
-      {children}
-    </div>
-  );
+  return <div className="shopops-chart-empty">{children}</div>;
 }

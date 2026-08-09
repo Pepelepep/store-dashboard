@@ -39,35 +39,14 @@ function Table({
   const numericHeaders = new Set(["Available", "Sold", "Days left"]);
 
   return (
-    <div
-      style={{
-        overflowX: "auto",
-        overflowY: "auto",
-        maxHeight: 320,
-        border: "1px solid #f0f0f0",
-        borderRadius: 12,
-      }}
-    >
-      <table
-        style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}
-      >
+    <div className="shopops-data-table-scroll">
+      <table className="shopops-data-table">
         <thead>
           <tr>
             {headers.map((header) => (
               <th
+                data-align={numericHeaders.has(header) ? "right" : "left"}
                 key={header}
-                style={{
-                  textAlign: numericHeaders.has(header) ? "right" : "left",
-                  padding: "12px 10px",
-                  borderBottom: "1px solid #dcdcdc",
-                  color: "#616161",
-                  fontWeight: 800,
-                  whiteSpace: "nowrap",
-                  position: "sticky",
-                  top: 0,
-                  background: "white",
-                  zIndex: 1,
-                }}
               >
                 {header}
               </th>
@@ -80,15 +59,10 @@ function Table({
               <tr key={index}>
                 {row.map((cell, cellIndex) => (
                   <td
+                    data-align={
+                      numericHeaders.has(headers[cellIndex]) ? "right" : "left"
+                    }
                     key={cellIndex}
-                    style={{
-                      padding: "12px 10px",
-                      borderBottom: "1px solid #f0f0f0",
-                      verticalAlign: "top",
-                      textAlign: numericHeaders.has(headers[cellIndex])
-                        ? "right"
-                        : "left",
-                    }}
                   >
                     {cell}
                   </td>
@@ -98,8 +72,8 @@ function Table({
           ) : (
             <tr>
               <td
+                className="shopops-data-table__empty"
                 colSpan={headers.length}
-                style={{ padding: 16, color: "#707070" }}
               >
                 No data for this selection.
               </td>

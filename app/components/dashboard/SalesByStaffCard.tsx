@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 import {
   formatCurrency,
   formatNumber,
@@ -25,39 +23,17 @@ function SalesTable({
   selectedRowKey?: string | null;
   onRowClick?: (row: StaffSalesRow) => void;
 }) {
-  const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
   const numericHeaders = new Set(["Units", "Revenue", "Product sales"]);
 
   return (
-    <div
-      style={{
-        overflowX: "auto",
-        overflowY: "auto",
-        maxHeight: 320,
-        border: "1px solid #f0f0f0",
-        borderRadius: 12,
-      }}
-    >
-      <table
-        style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}
-      >
+    <div className="shopops-data-table-scroll">
+      <table className="shopops-data-table">
         <thead>
           <tr>
             {headers.map((header) => (
               <th
+                data-align={numericHeaders.has(header) ? "right" : "left"}
                 key={header}
-                style={{
-                  textAlign: numericHeaders.has(header) ? "right" : "left",
-                  padding: "12px 10px",
-                  borderBottom: "1px solid #dcdcdc",
-                  color: "#616161",
-                  fontWeight: 800,
-                  whiteSpace: "nowrap",
-                  position: "sticky",
-                  top: 0,
-                  background: "white",
-                  zIndex: 1,
-                }}
               >
                 {header}
               </th>
@@ -67,10 +43,10 @@ function SalesTable({
         <tbody>
           {rows.map((row) => {
             const isSelected = selectedRowKey === row.key;
-            const isHovered = hoveredRowKey === row.key;
-
             return (
               <tr
+                data-selectable={onRowClick ? "true" : "false"}
+                data-selected={isSelected ? "true" : "false"}
                 key={row.key}
                 title="Filter sales sections by this staff member"
                 role={onRowClick ? "button" : undefined}
@@ -83,28 +59,13 @@ function SalesTable({
                     onRowClick(row.source);
                   }
                 }}
-                onMouseEnter={() => setHoveredRowKey(row.key)}
-                onMouseLeave={() => setHoveredRowKey(null)}
-                style={{
-                  background: isSelected
-                    ? "#eff6ff"
-                    : isHovered && onRowClick
-                      ? "#fafafa"
-                      : undefined,
-                  cursor: onRowClick ? "pointer" : undefined,
-                }}
               >
                 {row.values.map((cell, cellIndex) => (
                   <td
+                    data-align={
+                      numericHeaders.has(headers[cellIndex]) ? "right" : "left"
+                    }
                     key={cellIndex}
-                    style={{
-                      padding: "12px 10px",
-                      borderBottom: "1px solid #f0f0f0",
-                      verticalAlign: "top",
-                      textAlign: numericHeaders.has(headers[cellIndex])
-                        ? "right"
-                        : "left",
-                    }}
                   >
                     {cell}
                   </td>
@@ -155,22 +116,12 @@ export function SalesByStaffCard({
           : undefined
       }
     >
-      <p style={{ color: "#616161", fontSize: 13, marginTop: 0 }}>
+      <p className="shopops-section-intro">
         Sales by Staff tracking begins after ShopOps POS attribution is
         activated.
       </p>
       {!staffAttributionAvailable ? (
-        <div
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            color: "#616161",
-            padding: 12,
-            marginBottom: 12,
-            background: "#fafafa",
-            lineHeight: 1.4,
-          }}
-        >
+        <div className="shopops-subtle-notice">
           Staff attribution is unavailable for this store. Sales remain grouped
           by location/source.
         </div>
@@ -191,14 +142,7 @@ export function SalesByStaffCard({
           }))}
         />
       ) : (
-        <div
-          style={{
-            border: "1px solid #f0f0f0",
-            borderRadius: 12,
-            color: "#707070",
-            padding: 16,
-          }}
-        >
+        <div className="shopops-table-empty-inline">
           No staff attribution available yet.
         </div>
       )}

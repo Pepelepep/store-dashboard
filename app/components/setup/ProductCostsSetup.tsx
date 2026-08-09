@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Form, useFetcher, useLocation, useNavigation } from "react-router";
 
@@ -39,25 +38,6 @@ function formatCurrency(value: number) {
 function formatNumber(value: number) {
   return new Intl.NumberFormat("fr-CA").format(value);
 }
-
-const previewCellStyle: CSSProperties = {
-  alignContent: "start",
-  background: "var(--shopops-surface-subdued)",
-  border: "1px solid var(--shopops-border)",
-  borderRadius: 12,
-  display: "grid",
-  gap: 8,
-  minHeight: 88,
-  padding: 14,
-};
-
-const previewValueStyle: CSSProperties = {
-  display: "block",
-  fontSize: 19,
-  fontVariantNumeric: "tabular-nums",
-  fontWeight: 800,
-  lineHeight: 1.25,
-};
 
 function formatTimestamp(value: string | null) {
   if (!value) return "Timestamp unavailable";
@@ -267,9 +247,9 @@ export function ProductCostsSetup({
                     value: option.enabled ? "estimate" : "shopify-only",
                   }}
                 >
-                  <span style={{ display: "grid", gap: 6 }}>
+                  <span className="shopops-form-stack">
                     <strong>{option.title}</strong>
-                    <span className="shopops-helper-text" style={{ margin: 0 }}>
+                    <span className="shopops-helper-text">
                       {option.description}
                     </span>
                   </span>
@@ -279,39 +259,18 @@ export function ProductCostsSetup({
           </div>
 
           {enabled ? (
-            <div
-              style={{
-                borderTop: "1px solid var(--shopops-border)",
-                display: "grid",
-                gap: 18,
-                marginTop: 18,
-                paddingTop: 18,
-              }}
-            >
-              <label
-                style={{
-                  display: "grid",
-                  fontWeight: 700,
-                  gap: 6,
-                  maxWidth: 280,
-                }}
-              >
+            <div className="shopops-form-option-details">
+              <label className="shopops-form-field shopops-form-field--compact">
                 Estimated cost rate
-                <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
+                <div className="shopops-form-control-row">
                   <input
                     max="100"
                     min="0"
                     onChange={(event) => setPercent(event.target.value)}
                     required
                     step="0.1"
-                    style={{
-                      border: percentIsValid
-                        ? "1px solid var(--shopops-border)"
-                        : "1px solid var(--p-color-border-critical, #d92d20)",
-                      borderRadius: 8,
-                      padding: 10,
-                      width: 120,
-                    }}
+                    className="shopops-form-control shopops-form-control--short"
+                    data-invalid={!percentIsValid}
                     type="number"
                     value={percent}
                   />
@@ -322,13 +281,7 @@ export function ProductCostsSetup({
                 </HelperText>
               </label>
 
-              <label
-                style={{
-                  alignItems: "flex-start",
-                  display: "flex",
-                  gap: 10,
-                }}
-              >
+              <label className="shopops-checkbox-field">
                 <input
                   aria-label="Estimate costs for custom sales"
                   checked={estimateCustomSales}
@@ -347,7 +300,7 @@ export function ProductCostsSetup({
               </label>
             </div>
           ) : data.coverage.missingLineCount > 0 ? (
-            <div style={{ marginTop: 18 }}>
+            <div className="shopops-notice-spaced">
               <InlineNotice tone="warning">
                 Profit remains unavailable while relevant product costs are
                 missing.
@@ -358,49 +311,34 @@ export function ProductCostsSetup({
           {enabled ? (
             <section
               aria-labelledby="estimated-impact-preview-title"
-              style={{
-                borderTop: "1px solid var(--shopops-border)",
-                marginTop: 20,
-                paddingTop: 18,
-              }}
+              className="shopops-preview"
             >
-              <h3
-                id="estimated-impact-preview-title"
-                style={{ fontSize: 16, margin: 0 }}
-              >
+              <h3 id="estimated-impact-preview-title">
                 Estimated impact preview
               </h3>
-              <div
-                className="product-cost-preview-grid"
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                  marginTop: 12,
-                }}
-              >
-                <div style={previewCellStyle}>
+              <div className="shopops-preview-grid product-cost-preview-grid">
+                <div className="shopops-preview-cell">
                   <HelperText>Affected sales lines</HelperText>
-                  <strong style={previewValueStyle}>
+                  <strong className="shopops-preview-value">
                     {formatNumber(preview.affectedLineCount)}
                   </strong>
                 </div>
-                <div style={previewCellStyle}>
+                <div className="shopops-preview-cell">
                   <HelperText>Estimated COGS</HelperText>
-                  <strong style={previewValueStyle}>
+                  <strong className="shopops-preview-value">
                     {formatCurrency(preview.estimatedCogs)}
                   </strong>
                 </div>
-                <div style={previewCellStyle}>
+                <div className="shopops-preview-cell">
                   <HelperText>Estimated profit</HelperText>
-                  <strong style={previewValueStyle}>
+                  <strong className="shopops-preview-value">
                     {preview.estimatedProfit === null
                       ? "Not calculable"
                       : formatCurrency(preview.estimatedProfit)}
                   </strong>
                 </div>
               </div>
-              <div style={{ marginTop: 10 }}>
+              <div className="shopops-preview-note">
                 <HelperText>
                   This preview is not saved until you confirm.
                 </HelperText>
@@ -441,36 +379,13 @@ export function ProductCostsSetup({
       </Form>
 
       <ContentCard title="Products missing costs">
-        <div
-          style={{
-            alignItems: "end",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 12,
-            justifyContent: "space-between",
-            marginTop: 14,
-          }}
-        >
-          <label
-            style={{
-              display: "grid",
-              fontSize: 13,
-              fontWeight: 700,
-              gap: 6,
-              maxWidth: 360,
-              width: "100%",
-            }}
-          >
+        <div className="shopops-table-toolbar">
+          <label className="shopops-form-field shopops-table-search">
             Search
             <input
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search product or variant"
-              style={{
-                border: "1px solid var(--shopops-border)",
-                borderRadius: 8,
-                padding: 10,
-                width: "100%",
-              }}
+              className="shopops-form-control"
               type="search"
               value={search}
             />
@@ -483,10 +398,8 @@ export function ProductCostsSetup({
                 )} of ${formatNumber(missingProducts.totalCount)}`}
           </div>
         </div>
-        <div className="shopops-table-scroll" style={{ marginTop: 12 }}>
-          <table
-            style={{ borderCollapse: "collapse", fontSize: 14, width: "100%" }}
-          >
+        <div className="shopops-data-table-scroll shopops-data-table-scroll--spaced">
+          <table className="shopops-data-table">
             <thead>
               <tr>
                 {[
@@ -497,21 +410,13 @@ export function ProductCostsSetup({
                   "Action",
                 ].map((header) => (
                   <th
+                    data-align={
+                      header === "Units sold" ||
+                      header === "Sales missing costs"
+                        ? "right"
+                        : undefined
+                    }
                     key={header}
-                    style={{
-                      background: "white",
-                      borderBottom: "1px solid #ddd",
-                      padding: 10,
-                      position: "sticky",
-                      textAlign:
-                        header === "Units sold" ||
-                        header === "Sales missing costs"
-                          ? "right"
-                          : "left",
-                      top: 0,
-                      whiteSpace: "nowrap",
-                      zIndex: 1,
-                    }}
                   >
                     {header}
                   </th>
@@ -521,54 +426,33 @@ export function ProductCostsSetup({
             <tbody>
               {missingProducts.rows.map((row) => (
                 <tr key={row.key}>
-                  <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
-                    {row.product}
-                  </td>
-                  <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
-                    {row.variant}
-                  </td>
-                  <td
-                    style={{
-                      borderBottom: "1px solid #eee",
-                      padding: 10,
-                      textAlign: "right",
-                    }}
-                  >
-                    {formatNumber(row.unitsSold)}
-                  </td>
-                  <td
-                    style={{
-                      borderBottom: "1px solid #eee",
-                      padding: 10,
-                      textAlign: "right",
-                    }}
-                  >
+                  <td>{row.product}</td>
+                  <td>{row.variant}</td>
+                  <td data-align="right">{formatNumber(row.unitsSold)}</td>
+                  <td data-align="right">
                     {formatCurrency(row.salesAffected)}
                   </td>
-                  <td style={{ borderBottom: "1px solid #eee", padding: 10 }}>
+                  <td>
                     {row.shopifyProductId ? (
                       <a
                         href={getShopifyAdminProductUrl(
                           shop,
                           row.shopifyProductId,
                         )}
-                        style={{
-                          color: "var(--shopops-accent)",
-                          fontWeight: 700,
-                        }}
+                        className="shopops-link"
                         target="_top"
                       >
                         Open in Shopify
                       </a>
                     ) : (
-                      <span style={{ color: "var(--shopops-muted)" }}>—</span>
+                      <span className="shopops-muted">—</span>
                     )}
                   </td>
                 </tr>
               ))}
               {missingProducts.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5}>
+                  <td className="shopops-data-table__empty" colSpan={5}>
                     <EmptyState
                       title={
                         search
@@ -582,14 +466,7 @@ export function ProductCostsSetup({
             </tbody>
           </table>
         </div>
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            justifyContent: "flex-end",
-            marginTop: 14,
-          }}
-        >
+        <div className="shopops-table-pagination">
           <AppButton
             compact
             disabled={isLoadingMissingProducts || missingProducts.page <= 1}

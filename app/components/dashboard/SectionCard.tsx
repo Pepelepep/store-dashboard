@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Card } from "../ui/primitives/card";
 
 function escapeCsvValue(value: unknown) {
   const stringValue = String(value ?? "");
@@ -39,22 +40,7 @@ function ExportButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      className="shopops-chart-export"
-      type="button"
-      onClick={onClick}
-      style={{
-        border: "1px solid #d1d5db",
-        background: "#ffffff",
-        borderRadius: 10,
-        padding: "7px 10px",
-        fontSize: 12,
-        fontWeight: 700,
-        cursor: "pointer",
-        color: "#202223",
-        whiteSpace: "nowrap",
-      }}
-    >
+    <button className="shopops-chart-export" type="button" onClick={onClick}>
       {label}
     </button>
   );
@@ -76,79 +62,27 @@ export function SectionCard({
   };
 }) {
   return (
-    <section
-      className="shopops-section-card"
-      style={{
-        background: "white",
-        border: "1px solid var(--shopops-border, #e5e7eb)",
-        borderRadius: 16,
-        padding: 20,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-      }}
-    >
-      <style>{`
-        .shopops-chart-interactive:focus-visible,
-        .shopops-chart-export:focus-visible,
-        .shopops-chart-point:focus-visible {
-          outline: 3px solid #93c5fd !important;
-          outline-offset: 2px;
-        }
-        .shopops-chart-scroll {
-          scrollbar-color: #cbd5e1 transparent;
-          scrollbar-width: thin;
-        }
-        .shopops-mirror-sales-chart:focus-visible,
-        .shopops-recharts .recharts-wrapper:focus-visible {
-          outline: 3px solid #93c5fd;
-          outline-offset: 2px;
-        }
-        @media (max-width: 640px) {
-          .shopops-section-card {
-            padding: 16px !important;
-          }
-          .shopops-chart-tooltip {
-            left: 70px !important;
-            right: auto !important;
-          }
-        }
-      `}</style>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "flex-start",
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>{title}</h2>
-          {subtitle ? (
-            <p
-              style={{
-                margin: "6px 0 0",
-                color: "#616161",
-                fontSize: 13,
-                lineHeight: 1.4,
-              }}
-            >
-              {subtitle}
-            </p>
+    <Card asChild>
+      <section className="shopops-section-card">
+        <div className="shopops-section-card__header">
+          <div>
+            <h2>{title}</h2>
+            {subtitle ? <p>{subtitle}</p> : null}
+          </div>
+          {exportConfig ? (
+            <ExportButton
+              onClick={() =>
+                downloadCsv(
+                  exportConfig.filename,
+                  exportConfig.headers,
+                  exportConfig.rows,
+                )
+              }
+            />
           ) : null}
         </div>
-        {exportConfig ? (
-          <ExportButton
-            onClick={() =>
-              downloadCsv(
-                exportConfig.filename,
-                exportConfig.headers,
-                exportConfig.rows,
-              )
-            }
-          />
-        ) : null}
-      </div>
-      {children}
-    </section>
+        {children}
+      </section>
+    </Card>
   );
 }

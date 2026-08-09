@@ -1520,6 +1520,10 @@ test("Product-cost controls use selection cards and hide preview in Shopify-only
     new URL("../app/components/setup/ProductCostsSetup.tsx", import.meta.url),
     "utf8",
   );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(component, /className="shopops-selectable-grid"/);
   assert.match(component, /<SelectableCard/);
@@ -1530,8 +1534,14 @@ test("Product-cost controls use selection cards and hide preview in Shopify-only
     component.indexOf("</ContentCard>", component.indexOf("<FormActions")),
   );
   assert.match(settingsCard, /\{enabled \? \([\s\S]*?Estimated impact preview/);
-  assert.match(settingsCard, /className="product-cost-preview-grid"/);
-  assert.match(component, /fontVariantNumeric: "tabular-nums"/);
+  assert.match(
+    settingsCard,
+    /className="shopops-preview-grid product-cost-preview-grid"/,
+  );
+  assert.match(
+    presentation,
+    /\.shopops-preview-value \{[^}]*font-variant-numeric: tabular-nums/,
+  );
   assert.match(settingsCard, /<FormActions/);
   for (const label of [
     "Affected sales lines",
@@ -1559,13 +1569,18 @@ test("missing-product table uses a bounded fetcher with pagination", () => {
     ),
     "utf8",
   );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(component, /useFetcher<MissingProductCostsPageData>/);
   assert.match(component, /Search product or variant/);
   assert.match(component, /Showing \$\{formatNumber\(showingStart\)\}/);
   assert.match(component, />\s*Previous\s*</);
   assert.match(component, />\s*Next\s*</);
-  assert.match(component, /position: "sticky"/);
+  assert.match(component, /className="shopops-data-table"/);
+  assert.match(presentation, /\.shopops-data-table th \{[^}]*position: sticky/);
   assert.match(resourceRoute, /capability: "manage_costs"/);
   assert.match(resourceRoute, /loadMissingProductCostsPage/);
 });
@@ -1622,7 +1637,7 @@ test("location comparison hides costs actions from reporting managers", () => {
   );
   assert.match(
     locations,
-    /const expensesNotice = !hasOperatingExpenses && canManageCosts/,
+    /const expensesNotice =\s*!hasOperatingExpenses && canManageCosts/,
   );
 });
 
@@ -2695,10 +2710,7 @@ test("Marketplace lifecycle registers uninstall cleanup and reacquires offline a
     "utf8",
   );
   const shopLevelAdmin = readFileSync(
-    new URL(
-      "../app/lib/shopify/shop-level-admin.server.ts",
-      import.meta.url,
-    ),
+    new URL("../app/lib/shopify/shop-level-admin.server.ts", import.meta.url),
     "utf8",
   );
   const appRoute = readFileSync(
@@ -3505,6 +3517,10 @@ test("People separates sales attribution from active ShopOps membership", () => 
     new URL("../app/components/ui/AppButton.tsx", import.meta.url),
     "utf8",
   );
+  const buttonPrimitive = readFileSync(
+    new URL("../app/components/ui/primitives/button.tsx", import.meta.url),
+    "utf8",
+  );
   const dashboardFilters = readFileSync(
     new URL(
       "../app/components/dashboard/DashboardFilters.tsx",
@@ -3559,9 +3575,10 @@ test("People separates sales attribution from active ShopOps membership", () => 
   assert.match(people, /variant=\{danger \? "danger" : primary \? "primary"/);
   assert.match(dashboardFilters, /<AppButton[\s\S]*?variant="primary"/);
   assert.match(
-    appButton,
-    /disabledBackground: "#e5e7eb"[\s\S]*?disabledColor: "#6b7280"/,
+    buttonPrimitive,
+    /disabled:bg-muted[\s\S]*?disabled:text-muted-foreground/,
   );
+  assert.match(appButton, /primary: "default"/);
   assert.match(
     presentation,
     /\.shopops-filter-pills button\[aria-pressed="true"\][^{]*\{[^}]*background: var\(--shopops-accent-selected\)[^}]*border-color: var\(--shopops-accent\)/,
@@ -4169,6 +4186,10 @@ test("premium headers, tabs, and button states are centralized and distinct", ()
     new URL("../app/components/ui/AppButton.tsx", import.meta.url),
     "utf8",
   );
+  const buttonPrimitive = readFileSync(
+    new URL("../app/components/ui/primitives/button.tsx", import.meta.url),
+    "utf8",
+  );
   const sync = readFileSync(
     new URL("../app/routes/app.admin.sync.tsx", import.meta.url),
     "utf8",
@@ -4184,11 +4205,11 @@ test("premium headers, tabs, and button states are centralized and distinct", ()
   );
   assert.match(
     presentation,
-    /\.shopops-page-header__icon \{[^}]*flex: 0 0 40px[^}]*height: 40px[^}]*width: 40px/,
+    /\.shopops-page-header__icon \{[^}]*flex: 0 0 44px[^}]*height: 44px[^}]*width: 44px/,
   );
   assert.match(
     presentation,
-    /\.shopops-page-header__icon \.Polaris-Icon \{[^}]*height: 21px[^}]*width: 21px/,
+    /\.shopops-page-header__icon \.Polaris-Icon \{[^}]*height: 23px[^}]*width: 23px/,
   );
   assert.match(
     presentation,
@@ -4200,16 +4221,53 @@ test("premium headers, tabs, and button states are centralized and distinct", ()
   );
   assert.match(
     buttons,
-    /primary: \{[\s\S]*?background: "#2563eb"[\s\S]*?disabledBackground: "#e5e7eb"[\s\S]*?disabledColor: "#6b7280"/,
+    /primary: "default"[\s\S]*?secondary: "outline"[\s\S]*?danger: "destructive"/,
   );
-  assert.doesNotMatch(
-    buttons.slice(
-      buttons.indexOf("primary: {"),
-      buttons.indexOf("secondary: {"),
-    ),
-    /disabledBackground: "#93c5fd"/,
-  );
+  assert.match(buttonPrimitive, /bg-primary text-primary-foreground/);
+  assert.match(buttonPrimitive, /disabled:bg-muted/);
   assert.match(sync, /\.sync-page \.primary:disabled\{background:#e5e7eb/);
+});
+
+test("shadcn foundation stays behind ShopOps components without resetting Polaris", () => {
+  const root = readFileSync(
+    new URL("../app/root.tsx", import.meta.url),
+    "utf8",
+  );
+  const tailwind = readFileSync(
+    new URL("../app/styles/tailwind.css", import.meta.url),
+    "utf8",
+  );
+  const vite = readFileSync(
+    new URL("../vite.config.ts", import.meta.url),
+    "utf8",
+  );
+  const appButton = readFileSync(
+    new URL("../app/components/ui/AppButton.tsx", import.meta.url),
+    "utf8",
+  );
+  const metricCards = readFileSync(
+    new URL("../app/components/dashboard/ReportKpiGrid.tsx", import.meta.url),
+    "utf8",
+  );
+  const configuration = JSON.parse(
+    readFileSync(new URL("../components.json", import.meta.url), "utf8"),
+  );
+
+  assert.match(vite, /import tailwindcss from "@tailwindcss\/vite"/);
+  assert.match(
+    vite,
+    /plugins: \[tailwindcss\(\), reactRouter\(\), tsconfigPaths\(\)\]/,
+  );
+  assert.match(root, /@shopify\/polaris\/build\/esm\/styles\.css/);
+  assert.match(root, /\.\/styles\/tailwind\.css/);
+  assert.match(tailwind, /tailwindcss\/theme\.css/);
+  assert.match(tailwind, /tailwindcss\/utilities\.css/);
+  assert.doesNotMatch(tailwind, /tailwindcss\/preflight\.css/);
+  assert.match(appButton, /from "\.\/primitives\/button"/);
+  assert.match(metricCards, /<ShopOpsTooltip content=\{item\.explanation\}>/);
+  assert.equal(configuration.rsc, false);
+  assert.equal(configuration.tailwind.css, "app/styles/tailwind.css");
+  assert.equal(configuration.aliases.ui, "@/components/ui/primitives");
 });
 
 test("Dashboard and Locations share compact filters and compact empty sales notices", () => {
@@ -4389,12 +4447,10 @@ test("shared report KPI order, labels, formatting, and categories are canonical"
   );
   assert.match(
     presentation,
-    /\.shopops-kpi-card\[data-category="commercial"\] \{[^}]*border-top-color: var\(--shopops-accent\)/,
+    /\.shopops-kpi-card__heading \{[^}]*display: flex/,
   );
-  assert.match(
-    presentation,
-    /\.shopops-kpi-card\[data-category="activity"\] \{[^}]*border-top-color: var\(--shopops-teal\)/,
-  );
+  assert.match(presentation, /\.shopops-kpi-info \{[^}]*cursor: help/);
+  assert.match(renderer, /export function MetricCard/);
 });
 
 test("Settings separates data freshness from scheduler state at the shared width", () => {
@@ -4747,10 +4803,16 @@ test("customer data request audit details never retain raw customer contact valu
     customerPhonePresent: true,
     ordersRequestedCount: 2,
   });
-  assert.doesNotMatch(JSON.stringify(details), /customer@example\.com|555-0100/);
+  assert.doesNotMatch(
+    JSON.stringify(details),
+    /customer@example\.com|555-0100/,
+  );
 
   const route = readFileSync(
-    new URL("../app/routes/webhooks.customers.data_request.tsx", import.meta.url),
+    new URL(
+      "../app/routes/webhooks.customers.data_request.tsx",
+      import.meta.url,
+    ),
     "utf8",
   );
   assert.match(route, /status:\s*"received"/);
@@ -4938,6 +5000,10 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
     new URL("../app/components/dashboard/SectionCard.tsx", import.meta.url),
     "utf8",
   );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
   const sharedChart = readFileSync(
     new URL("../app/components/dashboard/ShopOpsChart.tsx", import.meta.url),
     "utf8",
@@ -4963,8 +5029,12 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.equal(locationRoute.includes("conic-gradient"), false);
   assert.equal(locationRoute.includes("breakdownColors"), false);
   assert.match(locationRoute, /Net sales trend/);
-  assert.match(locationRoute, /LOCATION_CHART_CARD_STYLE/);
-  assert.match(locationRoute, /LOCATION_CHART_EMPTY_STYLE/);
+  assert.match(
+    locationRoute,
+    /shopops-section-card shopops-location-chart-card/,
+  );
+  assert.match(locationRoute, /className="shopops-chart-empty"/);
+  assert.match(presentation, /\.shopops-location-chart-header/);
   assert.match(locationRoute, /shopops-vendor-bars/);
   assert.match(locationRoute, /shopops-staff-leaderboard/);
   assert.notEqual(
@@ -4985,7 +5055,11 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
   assert.match(locationRoute, /\{ value: "week", label: "Week" \}/);
   assert.match(locationRoute, /\{ value: "month", label: "Month" \}/);
   assert.match(locationRoute, /\{ value: "year", label: "Year" \}/);
-  assert.match(trendSection, /overflowX: "auto"/);
+  assert.match(trendSection, /className="shopops-period-segmented-scroll"/);
+  assert.match(
+    locationRoute,
+    /\.shopops-period-segmented-scroll \{[\s\S]*?overflow-x: auto/,
+  );
   assert.doesNotMatch(trendSection, /<select/);
   assert.doesNotMatch(trendSection, /<option/);
 
@@ -5114,10 +5188,13 @@ test("shared mirrored charts use separate synchronized sales and order plots", (
     (mirrorChart.match(/isAnimationActive=\{false\}/g) ?? []).length >= 3,
   );
 
-  assert.match(sectionCard, /borderRadius: 16/);
+  assert.match(
+    presentation,
+    /\.shopops-section-card \{[^}]*border-radius: var\(--shopops-radius-card\)/,
+  );
   assert.equal(sectionCard.includes("minHeight: 420"), false);
-  assert.match(sectionCard, /shopops-recharts/);
-  assert.match(sectionCard, /shopops-mirror-sales-chart:focus-visible/);
+  assert.match(presentation, /shopops-recharts/);
+  assert.match(presentation, /shopops-mirror-sales-chart:focus-visible/);
   assert.match(sharedChart, /ShopOpsChartTooltip/);
   assert.match(sharedChart, /ShopOpsChartEmptyState/);
   assert.match(sharedChart, /SHOP_OPS_CHART_MARGIN/);

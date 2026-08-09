@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   Form,
@@ -13,6 +13,7 @@ import { LocationIcon } from "@shopify/polaris-icons";
 
 import { AppButton, AppButtonLink } from "../components/ui/AppButton";
 import { NetSalesTrendPlot } from "../components/dashboard/NetSalesTrendPlot";
+import { LocationsContentSkeleton } from "../components/dashboard/LocationsSkeleton";
 import {
   attachReportKpiDetails,
   ReportKpiGrid,
@@ -27,6 +28,7 @@ import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { SectionTabs } from "../components/ui/SectionTabs";
+import { ShopOpsDrilldownBar } from "../components/ui/ShopOpsDrilldownBar";
 import {
   ContentCard,
   CompactEmptyDataNotice,
@@ -1592,14 +1594,15 @@ function KpiGrid({
       ) : null}
     </ReportKpiNotice>
   ) : null;
-  const expensesNotice = !hasOperatingExpenses && canManageCosts ? (
-    <ReportKpiNotice tone="neutral">
-      <div>No operating expenses configured.</div>
-      <Link className="shopops-kpi-notice__action" to={expensesPath}>
-        Add expenses
-      </Link>
-    </ReportKpiNotice>
-  ) : null;
+  const expensesNotice =
+    !hasOperatingExpenses && canManageCosts ? (
+      <ReportKpiNotice tone="neutral">
+        <div>No operating expenses configured.</div>
+        <Link className="shopops-kpi-notice__action" to={expensesPath}>
+          Add expenses
+        </Link>
+      </ReportKpiNotice>
+    ) : null;
   const details: Partial<Record<ReportKpiId, ReactNode>> = {
     sales: isFinancialMetricsV2 ? (
       <>
@@ -1677,25 +1680,6 @@ function KpiGrid({
   );
 }
 
-const LOCATION_CHART_CARD_STYLE: CSSProperties = {
-  background: "white",
-  border: "1px solid var(--shopops-border, #e5e7eb)",
-  borderRadius: 16,
-  boxShadow: "0 1px 3px rgba(0, 0, 0, 0.06)",
-  padding: 20,
-};
-
-const LOCATION_CHART_EMPTY_STYLE: CSSProperties = {
-  alignItems: "center",
-  background: "#fafafa",
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
-  color: "#707070",
-  display: "flex",
-  minHeight: 180,
-  padding: 16,
-};
-
 function TrendChart({
   rows,
   period,
@@ -1714,57 +1698,21 @@ function TrendChart({
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const revenueLabel = isFinancialMetricsV2 ? "Net Sales" : "Revenue";
   return (
-    <section
-      className="shopops-location-chart-card"
-      style={{
-        ...LOCATION_CHART_CARD_STYLE,
-        marginBottom: 20,
-      }}
-    >
-      <div
-        style={{
-          alignItems: "start",
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 12,
-          justifyContent: "space-between",
-          marginBottom: 14,
-        }}
-      >
+    <section className="shopops-section-card shopops-location-trend-card">
+      <div className="shopops-location-chart-header">
         <div>
-          <h2 style={{ fontSize: 20, margin: 0 }}>
+          <h2>
             {isFinancialMetricsV2 ? "Net sales trend" : "Sales trend by period"}
           </h2>
-          <p
-            style={{
-              color: "#616161",
-              fontSize: 13,
-              lineHeight: 1.45,
-              margin: "4px 0 0",
-            }}
-          >
+          <p>
             {isFinancialMetricsV2
               ? "Includes order-level cash refunds. Select a period for order and unit details."
               : `${revenueLabel} grouped by ${period}. Orders are available in each period's details.`}
           </p>
         </div>
-        <div
-          style={{
-            alignItems: "center",
-            color: "#616161",
-            display: "flex",
-            fontSize: 13,
-            fontWeight: 800,
-            gap: 8,
-            maxWidth: "100%",
-            whiteSpace: "nowrap",
-          }}
-        >
+        <div className="shopops-location-chart-grouping">
           <span>Group by</span>
-          <div
-            style={{ maxWidth: "100%", overflowX: "auto" }}
-            className="shopops-period-segmented-scroll"
-          >
+          <div className="shopops-period-segmented-scroll">
             <div
               aria-label="Group by"
               className="shopops-period-segmented"
@@ -1894,61 +1842,28 @@ function LocationTable({
         current.key === key && current.direction === "desc" ? "asc" : "desc",
     }));
   };
-  const [hoveredLocation, setHoveredLocation] = useState<string | null>(null);
-
   return (
-    <section
-      style={{
-        background: "white",
-        border: "1px solid #e3e3e3",
-        borderRadius: 14,
-        padding: 18,
-      }}
-    >
-      <h2 style={{ fontSize: 18, margin: "0 0 14px" }}>Location comparison</h2>
-      <div
-        style={{
-          border: "1px solid #f0f0f0",
-          borderRadius: 12,
-          overflowX: "auto",
-        }}
-      >
-        <table
-          style={{ borderCollapse: "collapse", fontSize: 14, width: "100%" }}
-        >
+    <section className="shopops-section-card">
+      <div className="shopops-section-card__header">
+        <div>
+          <h2>Location comparison</h2>
+          <p>Compare commercial activity and profitability across stores.</p>
+        </div>
+      </div>
+      <div className="shopops-data-table-scroll">
+        <table className="shopops-data-table">
           <thead>
             <tr>
               {(isFinancialMetricsV2 ? [] : legacyHeaders).map((header) => (
                 <th
+                  data-align={header.key === "location" ? "left" : "right"}
                   key={header.key}
                   title={header.title}
-                  style={{
-                    background: "white",
-                    borderBottom: "1px solid #dcdcdc",
-                    color: "#616161",
-                    fontWeight: 800,
-                    padding: "12px 10px",
-                    position: "sticky",
-                    textAlign: header.key === "location" ? "left" : "right",
-                    top: 0,
-                    whiteSpace: "nowrap",
-                  }}
                 >
                   <button
+                    className="shopops-data-table__sort"
                     type="button"
                     onClick={() => updateSort(header.key)}
-                    style={{
-                      alignItems: "center",
-                      background: "transparent",
-                      border: 0,
-                      color: "inherit",
-                      cursor: "pointer",
-                      display: "inline-flex",
-                      font: "inherit",
-                      fontWeight: "inherit",
-                      gap: 4,
-                      padding: 0,
-                    }}
                   >
                     {header.label}
                     {sort.key === header.key
@@ -1962,6 +1877,7 @@ function LocationTable({
               {isFinancialMetricsV2
                 ? v2Headers.map((header) => (
                     <th
+                      data-align={header === "Location" ? "left" : "right"}
                       key={header}
                       title={
                         header === "Refunds"
@@ -1970,17 +1886,6 @@ function LocationTable({
                             ? "Gross Margin is based on Net Sales."
                             : undefined
                       }
-                      style={{
-                        background: "white",
-                        borderBottom: "1px solid #dcdcdc",
-                        color: "#616161",
-                        fontWeight: 800,
-                        padding: "12px 10px",
-                        position: "sticky",
-                        textAlign: header === "Location" ? "left" : "right",
-                        top: 0,
-                        whiteSpace: "nowrap",
-                      }}
                     >
                       {header}
                     </th>
@@ -1992,10 +1897,10 @@ function LocationTable({
             {rows.length > 0 ? (
               sortedRows.map((row) => {
                 const isSelected = selectedLocation === row.locationId;
-                const isHovered = hoveredLocation === row.locationId;
-
                 return isFinancialMetricsV2 ? (
                   <tr
+                    data-selectable={onSelectLocation ? "true" : "false"}
+                    data-selected={isSelected ? "true" : "false"}
                     key={row.locationId}
                     title="Filter charts by this location"
                     role={onSelectLocation ? "button" : undefined}
@@ -2008,17 +1913,6 @@ function LocationTable({
                         onSelectLocation(row);
                       }
                     }}
-                    onMouseEnter={() => setHoveredLocation(row.locationId)}
-                    onMouseLeave={() => setHoveredLocation(null)}
-                    style={{
-                      background: isSelected
-                        ? "#eff6ff"
-                        : isHovered && onSelectLocation
-                          ? "#fafafa"
-                          : undefined,
-                      cursor: onSelectLocation ? "pointer" : undefined,
-                      textAlign: "right",
-                    }}
                   >
                     <td
                       style={{
@@ -2027,7 +1921,7 @@ function LocationTable({
                         textAlign: "left",
                       }}
                     >
-                      <div style={{ display: "grid", gap: 4 }}>
+                      <div className="shopops-data-table__primary">
                         <strong>{row.locationName}</strong>
                         {row.netProfit !== null && row.netProfit < 0 ? (
                           <StatusBadge variant="warning">
@@ -2155,6 +2049,8 @@ function LocationTable({
                   </tr>
                 ) : (
                   <tr
+                    data-selectable={onSelectLocation ? "true" : "false"}
+                    data-selected={isSelected ? "true" : "false"}
                     key={row.locationId}
                     title="Filter charts by this location"
                     role={onSelectLocation ? "button" : undefined}
@@ -2167,17 +2063,6 @@ function LocationTable({
                         onSelectLocation(row);
                       }
                     }}
-                    onMouseEnter={() => setHoveredLocation(row.locationId)}
-                    onMouseLeave={() => setHoveredLocation(null)}
-                    style={{
-                      background: isSelected
-                        ? "#eff6ff"
-                        : isHovered && onSelectLocation
-                          ? "#fafafa"
-                          : undefined,
-                      cursor: onSelectLocation ? "pointer" : undefined,
-                      textAlign: "right",
-                    }}
                   >
                     <td
                       style={{
@@ -2186,7 +2071,7 @@ function LocationTable({
                         textAlign: "left",
                       }}
                     >
-                      <div style={{ display: "grid", gap: 4 }}>
+                      <div className="shopops-data-table__primary">
                         <strong>{row.locationName}</strong>
                         {row.netProfit !== null && row.netProfit < 0 ? (
                           <StatusBadge variant="warning">
@@ -2277,8 +2162,8 @@ function LocationTable({
             ) : (
               <tr>
                 <td
+                  className="shopops-data-table__empty"
                   colSpan={isFinancialMetricsV2 ? v2Headers.length : 10}
-                  style={{ color: "#707070", padding: 16 }}
                 >
                   No locations available.
                 </td>
@@ -2308,10 +2193,7 @@ function RankedBreakdownBars({
   const maxRevenue = Math.max(...rows.map((row) => row.revenue), 0);
 
   return (
-    <div
-      className="shopops-vendor-bars"
-      style={{ display: "grid", gap: 8, overflowX: "auto" }}
-    >
+    <div className="shopops-vendor-bars">
       {rows.map((row) => {
         const canSelect = Boolean(onSelect) && row.value !== "Others";
         const isSelected = selectedValue === row.value;
@@ -2345,79 +2227,23 @@ function RankedBreakdownBars({
             }}
             onMouseEnter={() => setHoveredValue(row.value)}
             onMouseLeave={() => setHoveredValue(null)}
-            style={{
-              alignItems: "center",
-              background: isSelected
-                ? "#eff6ff"
-                : hoveredValue === row.value && canSelect
-                  ? "#f8fafc"
-                  : undefined,
-              border: isSelected
-                ? "1px solid #93c5fd"
-                : "1px solid transparent",
-              borderRadius: 8,
-              cursor: canSelect ? "pointer" : undefined,
-              display: "grid",
-              gap: 8,
-              gridTemplateColumns:
-                "minmax(160px, 1fr) minmax(100px, 2fr) 150px",
-              minHeight: 38,
-              minWidth: 500,
-              padding: "6px 8px",
-            }}
+            data-selectable={canSelect ? "true" : "false"}
+            data-selected={isSelected ? "true" : "false"}
+            data-hovered={hoveredValue === row.value ? "true" : "false"}
           >
-            <span
-              style={{
-                color: "#202223",
-                fontSize: 13,
-                fontWeight: 700,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
+            <span className="shopops-vendor-row__label">
               {row.label}
-              {isSelected ? (
-                <small
-                  style={{
-                    color: "#1d4ed8",
-                    display: "block",
-                    fontSize: 10,
-                  }}
-                >
-                  Selected
-                </small>
-              ) : null}
+              {isSelected ? <small>Selected</small> : null}
             </span>
-            <div
-              aria-hidden="true"
-              style={{
-                alignSelf: "center",
-                background: "#eef2f7",
-                borderRadius: 999,
-                height: 12,
-                overflow: "hidden",
-              }}
-            >
+            <div aria-hidden="true" className="shopops-vendor-row__track">
               <div
+                className="shopops-vendor-row__fill"
                 style={{
-                  background: "#2563eb",
-                  borderRadius: 999,
-                  height: "100%",
                   width: `${width}%`,
                 }}
               />
             </div>
-            <span
-              style={{
-                color: "#616161",
-                fontSize: 12,
-                fontVariantNumeric: "tabular-nums",
-                fontWeight: 700,
-                textAlign: "right",
-                whiteSpace: "nowrap",
-              }}
-            >
+            <span className="shopops-vendor-row__value">
               {formatCurrency(row.revenue)} · {formatPercent(row.percent)}
             </span>
           </div>
@@ -2600,23 +2426,19 @@ function RevenueByVendorCard({
   const hasRevenue = rows.some((row) => row.revenue > 0);
 
   return (
-    <section
-      className="shopops-location-chart-card"
-      style={LOCATION_CHART_CARD_STYLE}
-    >
-      <h2 style={{ fontSize: 20, margin: "0 0 4px" }}>
-        {isFinancialMetricsV2 ? "Product sales by vendor" : "Revenue by vendor"}
-      </h2>
-      <p
-        style={{
-          color: "#616161",
-          fontSize: 13,
-          lineHeight: 1.45,
-          margin: "0 0 16px",
-        }}
-      >
-        Ranked {revenueLabel.toLocaleLowerCase()} for the current filters.
-      </p>
+    <section className="shopops-section-card shopops-location-chart-card">
+      <div className="shopops-section-card__header">
+        <div>
+          <h2>
+            {isFinancialMetricsV2
+              ? "Product sales by vendor"
+              : "Revenue by vendor"}
+          </h2>
+          <p>
+            Ranked {revenueLabel.toLocaleLowerCase()} for the current filters.
+          </p>
+        </div>
+      </div>
 
       {hasRevenue ? (
         <RankedBreakdownBars
@@ -2627,7 +2449,7 @@ function RevenueByVendorCard({
           onSelect={onSelectVendor}
         />
       ) : (
-        <div style={LOCATION_CHART_EMPTY_STYLE}>
+        <div className="shopops-chart-empty">
           No vendor {revenueLabel.toLocaleLowerCase()} available for this
           period.
         </div>
@@ -2652,23 +2474,19 @@ function RevenueByStaffCard({
   const hasRevenue = rows.some((row) => row.revenue > 0);
 
   return (
-    <section
-      className="shopops-location-chart-card"
-      style={LOCATION_CHART_CARD_STYLE}
-    >
-      <h2 style={{ fontSize: 20, margin: "0 0 4px" }}>
-        {isFinancialMetricsV2 ? "Product sales by staff" : "Revenue by staff"}
-      </h2>
-      <p
-        style={{
-          color: "#616161",
-          fontSize: 13,
-          lineHeight: 1.45,
-          margin: "0 0 16px",
-        }}
-      >
-        Ranked {revenueLabel.toLocaleLowerCase()} for the current filters.
-      </p>
+    <section className="shopops-section-card shopops-location-chart-card">
+      <div className="shopops-section-card__header">
+        <div>
+          <h2>
+            {isFinancialMetricsV2
+              ? "Product sales by staff"
+              : "Revenue by staff"}
+          </h2>
+          <p>
+            Ranked {revenueLabel.toLocaleLowerCase()} for the current filters.
+          </p>
+        </div>
+      </div>
 
       {hasRevenue ? (
         <StaffLeaderboard
@@ -2678,7 +2496,7 @@ function RevenueByStaffCard({
           onSelect={onSelectStaff}
         />
       ) : (
-        <div style={LOCATION_CHART_EMPTY_STYLE}>
+        <div className="shopops-chart-empty">
           No staff {revenueLabel.toLocaleLowerCase()} available for this period.
         </div>
       )}
@@ -2704,28 +2522,13 @@ function RevenueBreakdownSection({
   return (
     <>
       {financialMetricsVersion === "v2" ? (
-        <p
-          style={{
-            color: "#616161",
-            fontSize: 13,
-            lineHeight: 1.45,
-            margin: "0 0 10px",
-          }}
-        >
+        <p className="shopops-section-intro">
           Product sales include discounts and merchandise returns but exclude
           order-level cash refunds, which cannot be assigned reliably to a
           vendor or staff member.
         </p>
       ) : null}
-      <div
-        className="shopops-breakdown-grid"
-        style={{
-          display: "grid",
-          gap: 20,
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          marginBottom: 20,
-        }}
-      >
+      <div className="shopops-breakdown-grid">
         <RevenueByVendorCard
           rows={revenueByVendor}
           financialMetricsVersion={financialMetricsVersion}
@@ -2787,72 +2590,12 @@ function ActiveLocationsDrilldownChips({
     });
   }
 
-  if (chips.length === 0) return null;
-
   return (
-    <div
-      style={{
-        alignItems: "center",
-        background: "white",
-        border: "1px solid #e3e3e3",
-        borderRadius: 12,
-        display: "flex",
-        flexWrap: "wrap",
-        gap: 10,
-        justifyContent: "space-between",
-        marginBottom: 16,
-        padding: "10px 12px",
-      }}
-    >
-      <div
-        style={{
-          alignItems: "center",
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
-        <span style={{ color: "#616161", fontSize: 13, fontWeight: 700 }}>
-          Filtered by:
-        </span>
-        {chips.map((chip) => (
-          <StatusBadge
-            key={chip.key}
-            variant="info"
-            style={{ gap: 6, paddingRight: 6 }}
-          >
-            {chip.label}: {chip.value}
-            <button
-              type="button"
-              aria-label={`Clear ${chip.label} drilldown`}
-              onClick={() => onClearOne(chip.key)}
-              style={{
-                alignItems: "center",
-                background: "transparent",
-                border: 0,
-                borderRadius: 999,
-                color: "inherit",
-                cursor: "pointer",
-                display: "inline-flex",
-                fontSize: 13,
-                fontWeight: 900,
-                height: 18,
-                justifyContent: "center",
-                lineHeight: 1,
-                marginLeft: 2,
-                padding: 0,
-                width: 18,
-              }}
-            >
-              ×
-            </button>
-          </StatusBadge>
-        ))}
-      </div>
-      <AppButton variant="ghost" compact onClick={onClearAll}>
-        Clear all
-      </AppButton>
-    </div>
+    <ShopOpsDrilldownBar
+      chips={chips}
+      onClearAll={onClearAll}
+      onClearOne={onClearOne}
+    />
   );
 }
 
@@ -3172,6 +2915,8 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
           outline-offset: 2px;
         }
         .shopops-period-segmented-scroll {
+          max-width: 100%;
+          overflow-x: auto;
           scrollbar-color: #cbd5e1 transparent;
           scrollbar-width: thin;
         }
@@ -3300,7 +3045,7 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
             : []),
         ]}
       />
-      <ContentCard>
+      <ContentCard className="shopops-dashboard-filter-card">
         <ReportFilterPanel
           actions={
             <>
@@ -3466,7 +3211,7 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
         </ReportFilterPanel>
       </ContentCard>
 
-      <p style={{ color: "#707070", fontSize: 13, margin: "0 0 16px" }}>
+      <p className="shopops-data-scope-note">
         Expenses include active location-specific amounts. Global expenses are
         shared equally across all active locations.
         {financialMetricsVersion === "v2"
@@ -3475,33 +3220,9 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
       </p>
 
       {debugInfo ? (
-        <details
-          style={{
-            background: "white",
-            border: "1px solid #e3e3e3",
-            borderRadius: 12,
-            marginBottom: 20,
-            padding: 14,
-          }}
-        >
-          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-            Support diagnostics
-          </summary>
-          <pre
-            style={{
-              background: "#111827",
-              borderRadius: 10,
-              color: "#f9fafb",
-              fontSize: 12,
-              lineHeight: 1.45,
-              margin: "10px 0 0",
-              overflowX: "auto",
-              padding: 12,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {JSON.stringify(debugInfo, null, 2)}
-          </pre>
+        <details className="shopops-support-diagnostics">
+          <summary>Support diagnostics</summary>
+          <pre>{JSON.stringify(debugInfo, null, 2)}</pre>
         </details>
       ) : null}
 
@@ -3540,7 +3261,9 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
       ) : hasNoSalesForRange ? (
         <CompactEmptyDataNotice
           title={
-            isTodayRange ? "No sales yet today." : "No sales for this date range."
+            isTodayRange
+              ? "No sales yet today."
+              : "No sales for this date range."
           }
           guidance={
             isTodayRange
@@ -3558,66 +3281,70 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
       ) : null}
 
       {shouldShowAnalytics ? (
-        <>
-          <KpiGrid
-            kpis={kpis}
-            financialMetricsVersion={financialMetricsVersion}
-            hasOperatingExpenses={hasOperatingExpenses}
-            canManageCosts={data.canManageCosts}
-          />
-          <ActiveLocationsDrilldownChips
-            activeDrilldowns={activeDrilldowns}
-            onClearOne={(key) =>
-              setActiveDrilldowns((current) => ({
-                ...current,
-                [key]: null,
-              }))
-            }
-            onClearAll={() => setActiveDrilldowns({})}
-          />
-          <TrendChart
-            rows={drilldownTrendRows}
-            period={period}
-            financialMetricsVersion={financialMetricsVersion}
-            onFilterChange={() => setIsDirty(true)}
-            selectedPeriod={activeDrilldowns.period?.value ?? null}
-            onSelectPeriod={(row) =>
-              toggleDrilldown("period", {
-                value: row.period,
-                label: row.period,
-              })
-            }
-          />
-          <RevenueBreakdownSection
-            revenueByVendor={drilldownRevenueByVendor}
-            revenueByStaff={drilldownRevenueByStaff}
-            financialMetricsVersion={financialMetricsVersion}
-            activeDrilldowns={activeDrilldowns}
-            onSelectVendor={(row) =>
-              toggleDrilldown("vendor", {
-                value: row.value,
-                label: row.label,
-              })
-            }
-            onSelectStaff={(row) =>
-              toggleDrilldown("staff", {
-                value: row.value,
-                label: row.label,
-              })
-            }
-          />
-          <LocationTable
-            rows={drilldownLocationRows}
-            financialMetricsVersion={financialMetricsVersion}
-            selectedLocation={activeDrilldowns.location?.value ?? null}
-            onSelectLocation={(row) =>
-              toggleDrilldown("location", {
-                value: row.locationId,
-                label: row.locationName,
-              })
-            }
-          />
-        </>
+        isApplyingFilters ? (
+          <LocationsContentSkeleton />
+        ) : (
+          <>
+            <KpiGrid
+              kpis={kpis}
+              financialMetricsVersion={financialMetricsVersion}
+              hasOperatingExpenses={hasOperatingExpenses}
+              canManageCosts={data.canManageCosts}
+            />
+            <ActiveLocationsDrilldownChips
+              activeDrilldowns={activeDrilldowns}
+              onClearOne={(key) =>
+                setActiveDrilldowns((current) => ({
+                  ...current,
+                  [key]: null,
+                }))
+              }
+              onClearAll={() => setActiveDrilldowns({})}
+            />
+            <TrendChart
+              rows={drilldownTrendRows}
+              period={period}
+              financialMetricsVersion={financialMetricsVersion}
+              onFilterChange={() => setIsDirty(true)}
+              selectedPeriod={activeDrilldowns.period?.value ?? null}
+              onSelectPeriod={(row) =>
+                toggleDrilldown("period", {
+                  value: row.period,
+                  label: row.period,
+                })
+              }
+            />
+            <RevenueBreakdownSection
+              revenueByVendor={drilldownRevenueByVendor}
+              revenueByStaff={drilldownRevenueByStaff}
+              financialMetricsVersion={financialMetricsVersion}
+              activeDrilldowns={activeDrilldowns}
+              onSelectVendor={(row) =>
+                toggleDrilldown("vendor", {
+                  value: row.value,
+                  label: row.label,
+                })
+              }
+              onSelectStaff={(row) =>
+                toggleDrilldown("staff", {
+                  value: row.value,
+                  label: row.label,
+                })
+              }
+            />
+            <LocationTable
+              rows={drilldownLocationRows}
+              financialMetricsVersion={financialMetricsVersion}
+              selectedLocation={activeDrilldowns.location?.value ?? null}
+              onSelectLocation={(row) =>
+                toggleDrilldown("location", {
+                  value: row.locationId,
+                  label: row.locationName,
+                })
+              }
+            />
+          </>
+        )
       ) : null}
     </ShopOpsPage>
   );

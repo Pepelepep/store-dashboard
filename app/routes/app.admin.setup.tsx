@@ -578,21 +578,9 @@ export default function AdminSetupPage() {
                 <input type="hidden" name="id" value={formState.id} />
               ) : null}
 
-              <div
-                style={{
-                  display: "grid",
-                  gap: 16,
-                }}
-              >
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                    gap: 14,
-                    alignItems: "start",
-                  }}
-                >
-                  <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+              <div className="shopops-form-stack">
+                <div className="shopops-form-grid">
+                  <label className="shopops-form-field">
                     Name
                     <input
                       name="expense_name"
@@ -601,21 +589,14 @@ export default function AdminSetupPage() {
                       onChange={(event) =>
                         updateFormField("expense_name", event.target.value)
                       }
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: 10,
-                        borderRadius: 8,
-                        border: fieldErrors?.expense_name
-                          ? "1px solid #d92d20"
-                          : "1px solid #c9cccf",
-                      }}
+                      className="shopops-form-control"
+                      data-invalid={Boolean(fieldErrors?.expense_name)}
                     />
                     <HelperText>Use a clear recurring expense name.</HelperText>
                     <FieldError>{fieldErrors?.expense_name}</FieldError>
                   </label>
 
-                  <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  <label className="shopops-form-field">
                     Category
                     <select
                       name="expense_category"
@@ -623,14 +604,7 @@ export default function AdminSetupPage() {
                       onChange={(event) =>
                         updateFormField("expense_category", event.target.value)
                       }
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: 10,
-                        borderRadius: 8,
-                        border: "1px solid #c9cccf",
-                        background: "white",
-                      }}
+                      className="shopops-form-control"
                     >
                       <option value="">Select category</option>
                       {expenseCategories.map((category) => (
@@ -644,7 +618,7 @@ export default function AdminSetupPage() {
                     </HelperText>
                   </label>
 
-                  <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  <label className="shopops-form-field">
                     Monthly amount
                     <input
                       name="monthly_amount"
@@ -656,15 +630,8 @@ export default function AdminSetupPage() {
                       onChange={(event) =>
                         updateFormField("monthly_amount", event.target.value)
                       }
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: 10,
-                        borderRadius: 8,
-                        border: fieldErrors?.monthly_amount
-                          ? "1px solid #d92d20"
-                          : "1px solid #c9cccf",
-                      }}
+                      className="shopops-form-control"
+                      data-invalid={Boolean(fieldErrors?.monthly_amount)}
                     />
                     <HelperText>
                       Enter the fixed monthly amount before tax if applicable.
@@ -673,15 +640,8 @@ export default function AdminSetupPage() {
                   </label>
                 </div>
 
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                    gap: 14,
-                    alignItems: "start",
-                  }}
-                >
-                  <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                <div className="shopops-form-grid">
+                  <label className="shopops-form-field">
                     Start month
                     <input
                       name="start_month"
@@ -691,20 +651,13 @@ export default function AdminSetupPage() {
                       onChange={(event) =>
                         updateFormField("start_month", event.target.value)
                       }
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: 10,
-                        borderRadius: 8,
-                        border: fieldErrors?.start_month
-                          ? "1px solid #d92d20"
-                          : "1px solid #c9cccf",
-                      }}
+                      className="shopops-form-control"
+                      data-invalid={Boolean(fieldErrors?.start_month)}
                     />
                     <FieldError>{fieldErrors?.start_month}</FieldError>
                   </label>
 
-                  <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  <label className="shopops-form-field">
                     End month
                     <input
                       name="end_month"
@@ -713,21 +666,14 @@ export default function AdminSetupPage() {
                       onChange={(event) =>
                         updateFormField("end_month", event.target.value)
                       }
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: 10,
-                        borderRadius: 8,
-                        border: fieldErrors?.end_month
-                          ? "1px solid #d92d20"
-                          : "1px solid #c9cccf",
-                      }}
+                      className="shopops-form-control"
+                      data-invalid={Boolean(fieldErrors?.end_month)}
                     />
                     <HelperText>Leave blank for ongoing expenses.</HelperText>
                     <FieldError>{fieldErrors?.end_month}</FieldError>
                   </label>
 
-                  <label style={{ display: "grid", gap: 6, fontWeight: 700 }}>
+                  <label className="shopops-form-field">
                     Location
                     <select
                       name="shopify_location_id"
@@ -738,16 +684,8 @@ export default function AdminSetupPage() {
                           event.target.value,
                         )
                       }
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: 10,
-                        borderRadius: 8,
-                        border: fieldErrors?.shopify_location_id
-                          ? "1px solid #d92d20"
-                          : "1px solid #c9cccf",
-                        background: "white",
-                      }}
+                      className="shopops-form-control"
+                      data-invalid={Boolean(fieldErrors?.shopify_location_id)}
                     >
                       <option value="">Global / all locations</option>
                       {locations.map((location) => (
@@ -823,14 +761,8 @@ export default function AdminSetupPage() {
             title="Current expenses"
             description="Disable keeps the expense history but excludes it from future active calculations."
           >
-            <div className="shopops-table-scroll">
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  fontSize: 14,
-                }}
-              >
+            <div className="shopops-data-table-scroll">
+              <table className="shopops-data-table">
                 <thead>
                   <tr>
                     {[
@@ -844,14 +776,10 @@ export default function AdminSetupPage() {
                       "Actions",
                     ].map((header) => (
                       <th
+                        data-align={
+                          header === "Monthly amount" ? "right" : undefined
+                        }
                         key={header}
-                        style={{
-                          textAlign:
-                            header === "Monthly amount" ? "right" : "left",
-                          padding: 10,
-                          borderBottom: "1px solid #ddd",
-                          whiteSpace: "nowrap",
-                        }}
                       >
                         {header}
                       </th>
@@ -862,74 +790,23 @@ export default function AdminSetupPage() {
                 <tbody>
                   {expenses.map((expense) => (
                     <tr key={expense.id}>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                        }}
-                      >
-                        {expense.expense_name}
-                      </td>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                        }}
-                      >
-                        {expense.expense_category ?? "-"}
-                      </td>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                        }}
-                      >
-                        {expense.location_name ?? "Global"}
-                      </td>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                          textAlign: "right",
-                        }}
-                      >
+                      <td>{expense.expense_name}</td>
+                      <td>{expense.expense_category ?? "-"}</td>
+                      <td>{expense.location_name ?? "Global"}</td>
+                      <td data-align="right">
                         {formatCurrency(Number(expense.monthly_amount ?? 0))}
                       </td>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                        }}
-                      >
-                        {formatMonth(expense.start_month)}
-                      </td>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                        }}
-                      >
-                        {formatMonth(expense.end_month)}
-                      </td>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                        }}
-                      >
+                      <td>{formatMonth(expense.start_month)}</td>
+                      <td>{formatMonth(expense.end_month)}</td>
+                      <td>
                         <StatusBadge
                           variant={expense.is_active ? "success" : "neutral"}
                         >
                           {expense.is_active ? "Active" : "Inactive"}
                         </StatusBadge>
                       </td>
-                      <td
-                        style={{
-                          padding: 10,
-                          borderBottom: "1px solid #eee",
-                        }}
-                      >
-                        <div style={{ display: "flex", gap: 8 }}>
+                      <td>
+                        <div className="shopops-table-actions">
                           <AppButton
                             type="button"
                             variant="secondary"
@@ -988,7 +865,7 @@ export default function AdminSetupPage() {
 
                   {expenses.length === 0 ? (
                     <tr>
-                      <td colSpan={8}>
+                      <td className="shopops-data-table__empty" colSpan={8}>
                         <EmptyState
                           title="No expenses configured yet."
                           description="Add fixed expenses to calculate location profitability."

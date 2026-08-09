@@ -23,38 +23,19 @@ function Table({
   const textHeaders = new Set(["Order", "Date", "Product", "SKU", "Flags"]);
 
   return (
-    <div
-      style={{
-        overflowX: "auto",
-        overflowY: "auto",
-        maxHeight: 320,
-        border: "1px solid #f0f0f0",
-        borderRadius: 12,
-      }}
-    >
-      <table
-        style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}
-      >
+    <div className="shopops-data-table-scroll">
+      <table className="shopops-data-table">
         <thead>
           <tr>
             {headers.map((header) => (
               <th
+                data-align={textHeaders.has(header) ? "left" : "right"}
                 key={header}
                 style={{
-                  textAlign: textHeaders.has(header) ? "left" : "right",
-                  padding: "12px 10px",
-                  borderBottom: "1px solid #dcdcdc",
-                  color: "#616161",
-                  fontWeight: 800,
                   minWidth:
                     header === "Date" && dateColumnMinWidth
                       ? dateColumnMinWidth
                       : undefined,
-                  whiteSpace: "nowrap",
-                  position: "sticky",
-                  top: 0,
-                  background: "white",
-                  zIndex: 1,
                 }}
               >
                 {header}
@@ -68,10 +49,11 @@ function Table({
               <tr key={index}>
                 {row.map((cell, cellIndex) => (
                   <td
+                    data-align={
+                      textHeaders.has(headers[cellIndex]) ? "left" : "right"
+                    }
                     key={cellIndex}
                     style={{
-                      padding: "12px 10px",
-                      borderBottom: "1px solid #f0f0f0",
                       minWidth:
                         cellIndex === 1 && dateColumnMinWidth
                           ? dateColumnMinWidth
@@ -80,10 +62,6 @@ function Table({
                         cellIndex === 1 && dateColumnMinWidth
                           ? "nowrap"
                           : undefined,
-                      verticalAlign: "top",
-                      textAlign: textHeaders.has(headers[cellIndex])
-                        ? "left"
-                        : "right",
                     }}
                   >
                     {cell}
@@ -94,8 +72,8 @@ function Table({
           ) : (
             <tr>
               <td
+                className="shopops-data-table__empty"
                 colSpan={headers.length}
-                style={{ padding: 16, color: "#707070" }}
               >
                 No data for this selection.
               </td>

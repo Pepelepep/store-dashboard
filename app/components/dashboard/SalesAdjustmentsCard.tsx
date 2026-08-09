@@ -8,19 +8,9 @@ import { SectionCard } from "./SectionCard";
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        gap: 12,
-        padding: "6px 0",
-        fontSize: 14,
-      }}
-    >
-      <span style={{ color: "#5c5f62" }}>{label}</span>
-      <span style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
-        {value}
-      </span>
+    <div className="shopops-adjustment-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -60,7 +50,7 @@ export function SalesAdjustmentsCard({
         value={`-${formatCurrency(kpis.returns ?? 0)}`}
       />
       {kpis.refundAllocationWarning ? (
-        <div style={{ color: "#7a4b00", fontSize: 12, marginTop: 8 }}>
+        <div className="shopops-adjustment-warning">
           {kpis.refundAllocationWarning}
         </div>
       ) : null}

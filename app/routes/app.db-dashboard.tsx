@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLoaderData, useLocation } from "react-router";
+import { Link, useLoaderData, useLocation, useNavigation } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
@@ -30,6 +30,7 @@ import { SalesByHourCard } from "../components/dashboard/SalesByHourCard";
 import { SalesByStaffCard } from "../components/dashboard/SalesByStaffCard";
 import { SalesByVendorCard } from "../components/dashboard/SalesByVendorCard";
 import { StockAlertsCard } from "../components/dashboard/StockAlertsCard";
+import { DashboardContentSkeleton } from "../components/dashboard/DashboardSkeleton";
 import { PageNotice } from "../components/ui/PageNotice";
 import { RouteErrorNotice } from "../components/ui/RouteErrorNotice";
 import { AppButtonLink } from "../components/ui/AppButton";
@@ -866,6 +867,7 @@ const emptyDrilldowns: ActiveDrilldowns = {};
 
 export default function DbDashboardPage() {
   const location = useLocation();
+  const navigation = useNavigation();
   const {
     shop,
     locations,
@@ -991,6 +993,9 @@ export default function DbDashboardPage() {
     : hasSyncIssue || kpis.cogsIncomplete
       ? "Needs attention"
       : "Up to date";
+  const isDashboardRefreshing =
+    navigation.state === "loading" &&
+    navigation.location?.pathname === location.pathname;
 
   return (
     <ShopOpsPage>
@@ -1012,27 +1017,9 @@ export default function DbDashboardPage() {
       />
 
       {showOnboarding ? (
-        <details
-          open
-          style={{
-            background: "white",
-            border: "1px solid #d1d5db",
-            borderRadius: 12,
-            marginBottom: 18,
-            padding: "12px 16px",
-          }}
-        >
-          <summary style={{ cursor: "pointer", fontWeight: 800 }}>
-            Finish setting up ShopOps
-          </summary>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px 18px",
-              marginTop: 12,
-            }}
-          >
+        <details className="shopops-onboarding" open>
+          <summary>Finish setting up ShopOps</summary>
+          <div className="shopops-onboarding__items">
             {onboardingItems.map((item) => (
               <span key={item.label}>
                 {item.complete ? "✓ " : "○ "}
@@ -1079,7 +1066,9 @@ export default function DbDashboardPage() {
 
       {!readiness.noAssignedLocations && hasNoSalesForPeriod ? (
         <CompactEmptyDataNotice
-          title={isTodayRange ? "No sales yet today." : "No sales for this period."}
+          title={
+            isTodayRange ? "No sales yet today." : "No sales for this period."
+          }
           guidance={
             isTodayRange
               ? "Sales will appear here as today's Shopify orders are synced."
@@ -1106,121 +1095,113 @@ export default function DbDashboardPage() {
       ) : null}
 
       {!readiness.noAssignedLocations && !isFirstRunPreparing ? (
-        <>
-          {kpis.cogsIncomplete ? (
-            <div style={{ marginBottom: 14 }}>
-              <InlineNotice tone="warning">
-                {formatNumber(kpis.missingCogsLineCount)} sales{" "}
-                {kpis.missingCogsLineCount === 1 ? "line is" : "lines are"}{" "}
-                missing product costs for this period — profit and margin may
-                be understated.
-                {readiness.canAdmin ? (
-                  <>
-                    {" "}
-                    <Link to="/app/costs?tab=products">
-                      Review product costs
-                    </Link>
-                  </>
-                ) : null}
-              </InlineNotice>
-            </div>
-          ) : null}
+        isDashboardRefreshing ? (
+          <DashboardContentSkeleton />
+        ) : (
+          <>
+            {kpis.cogsIncomplete ? (
+              <div className="shopops-dashboard-notice">
+                <InlineNotice tone="warning">
+                  {formatNumber(kpis.missingCogsLineCount)} sales{" "}
+                  {kpis.missingCogsLineCount === 1 ? "line is" : "lines are"}{" "}
+                  missing product costs for this period — profit and margin may
+                  be understated.
+                  {readiness.canAdmin ? (
+                    <>
+                      {" "}
+                      <Link to="/app/costs?tab=products">
+                        Review product costs
+                      </Link>
+                    </>
+                  ) : null}
+                </InlineNotice>
+              </div>
+            ) : null}
 
-          <KpiCards
-            kpis={kpis}
-            financialMetricsVersion={financialMetricsVersion}
-            canAdmin={readiness.canAdmin}
-          />
+            <KpiCards
+              kpis={kpis}
+              financialMetricsVersion={financialMetricsVersion}
+              canAdmin={readiness.canAdmin}
+            />
 
-          {financialMetricsVersion === "v2" ? (
+            {financialMetricsVersion === "v2" ? (
+              <div className="shopops-dashboard-section">
+                <SalesAdjustmentsCard kpis={kpis} />
+              </div>
+            ) : null}
+
+            <ActiveDrilldownBadge
+              activeDrilldowns={activeDrilldowns}
+              onClearOne={(key) =>
+                setActiveDrilldowns((current) => ({
+                  ...current,
+                  [key]: null,
+                }))
+              }
+              onClearAll={() => setActiveDrilldowns(emptyDrilldowns)}
+            />
+
             <div style={{ marginBottom: 20 }}>
-              <SalesAdjustmentsCard kpis={kpis} />
+              <SalesByHourCard
+                salesByHour={drilldownSalesByHour}
+                financialMetricsVersion={financialMetricsVersion}
+                selectedHour={selectedHour}
+                onSelectHour={toggleHourDrilldown}
+              />
             </div>
-          ) : null}
 
-          <ActiveDrilldownBadge
-            activeDrilldowns={activeDrilldowns}
-            onClearOne={(key) =>
-              setActiveDrilldowns((current) => ({
-                ...current,
-                [key]: null,
-              }))
-            }
-            onClearAll={() => setActiveDrilldowns(emptyDrilldowns)}
-          />
+            <div className="shopops-dashboard-pair">
+              <BestSellersCard
+                bestSellers={drilldownBestSellers}
+                financialMetricsVersion={financialMetricsVersion}
+                selectedProductKey={selectedProductKey}
+                onSelectBestSeller={(row) =>
+                  toggleDrilldown("product", {
+                    value: getBestSellerDrilldownValue(row),
+                    label:
+                      row.sku && row.sku !== "-"
+                        ? `${row.product} / ${row.sku}`
+                        : row.product,
+                  })
+                }
+              />
 
-          <div style={{ marginBottom: 20 }}>
-            <SalesByHourCard
-              salesByHour={drilldownSalesByHour}
+              <StockAlertsCard stockAlerts={stockAlerts} />
+            </div>
+
+            <div className="shopops-dashboard-secondary-grid">
+              <SalesByStaffCard
+                salesByStaff={drilldownSalesByStaff}
+                financialMetricsVersion={financialMetricsVersion}
+                staffAttributionAvailable={staffAttributionAvailable}
+                selectedStaffKey={selectedStaffKey}
+                onSelectStaff={(row) =>
+                  toggleDrilldown("staff", {
+                    value: row.staffKey,
+                    label: row.staff,
+                  })
+                }
+              />
+
+              <SalesByVendorCard
+                salesByVendor={drilldownSalesByVendor}
+                financialMetricsVersion={financialMetricsVersion}
+                selectedVendorKey={selectedVendorKey}
+                onSelectVendor={(row) =>
+                  toggleDrilldown("vendor", {
+                    value: row.vendor,
+                    label: row.vendor,
+                  })
+                }
+              />
+            </div>
+
+            <RecentOrderLinesCard
+              recentOrders={drilldownRecentOrders}
               financialMetricsVersion={financialMetricsVersion}
-              selectedHour={selectedHour}
-              onSelectHour={toggleHourDrilldown}
             />
-          </div>
-
-          <div
-            className="shopops-dashboard-pair"
-            style={{
-              alignItems: "stretch",
-            }}
-          >
-            <BestSellersCard
-              bestSellers={drilldownBestSellers}
-              financialMetricsVersion={financialMetricsVersion}
-              selectedProductKey={selectedProductKey}
-              onSelectBestSeller={(row) =>
-                toggleDrilldown("product", {
-                  value: getBestSellerDrilldownValue(row),
-                  label:
-                    row.sku && row.sku !== "-"
-                      ? `${row.product} / ${row.sku}`
-                      : row.product,
-                })
-              }
-            />
-
-            <StockAlertsCard stockAlerts={stockAlerts} />
-          </div>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-              gap: 20,
-              marginBottom: 20,
-            }}
-          >
-            <SalesByStaffCard
-              salesByStaff={drilldownSalesByStaff}
-              financialMetricsVersion={financialMetricsVersion}
-              staffAttributionAvailable={staffAttributionAvailable}
-              selectedStaffKey={selectedStaffKey}
-              onSelectStaff={(row) =>
-                toggleDrilldown("staff", {
-                  value: row.staffKey,
-                  label: row.staff,
-                })
-              }
-            />
-
-            <SalesByVendorCard
-              salesByVendor={drilldownSalesByVendor}
-              financialMetricsVersion={financialMetricsVersion}
-              selectedVendorKey={selectedVendorKey}
-              onSelectVendor={(row) =>
-                toggleDrilldown("vendor", {
-                  value: row.vendor,
-                  label: row.vendor,
-                })
-              }
-            />
-          </div>
-
-          <RecentOrderLinesCard
-            recentOrders={drilldownRecentOrders}
-            financialMetricsVersion={financialMetricsVersion}
-          />
-        </>
+          </>
+        )
       ) : null}
     </ShopOpsPage>
   );

@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 import {
   formatCurrency,
   formatNumber,
@@ -26,39 +24,17 @@ function Table({
   selectedRowKey?: string | null;
   onRowClick?: (row: BestSellerRow) => void;
 }) {
-  const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
   const numericHeaders = new Set(["Units", "Revenue", "Product sales"]);
 
   return (
-    <div
-      style={{
-        overflowX: "auto",
-        overflowY: "auto",
-        maxHeight: 320,
-        border: "1px solid #f0f0f0",
-        borderRadius: 12,
-      }}
-    >
-      <table
-        style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}
-      >
+    <div className="shopops-data-table-scroll">
+      <table className="shopops-data-table">
         <thead>
           <tr>
             {headers.map((header) => (
               <th
+                data-align={numericHeaders.has(header) ? "right" : "left"}
                 key={header}
-                style={{
-                  textAlign: numericHeaders.has(header) ? "right" : "left",
-                  padding: "12px 10px",
-                  borderBottom: "1px solid #dcdcdc",
-                  color: "#616161",
-                  fontWeight: 800,
-                  whiteSpace: "nowrap",
-                  position: "sticky",
-                  top: 0,
-                  background: "white",
-                  zIndex: 1,
-                }}
               >
                 {header}
               </th>
@@ -69,10 +45,10 @@ function Table({
           {rows.length > 0 ? (
             rows.map((row) => {
               const isSelected = selectedRowKey === row.key;
-              const isHovered = hoveredRowKey === row.key;
-
               return (
                 <tr
+                  data-selectable={onRowClick ? "true" : "false"}
+                  data-selected={isSelected ? "true" : "false"}
                   key={row.key}
                   title="Filter sales sections by this product"
                   role={onRowClick ? "button" : undefined}
@@ -85,28 +61,15 @@ function Table({
                       onRowClick(row.source);
                     }
                   }}
-                  onMouseEnter={() => setHoveredRowKey(row.key)}
-                  onMouseLeave={() => setHoveredRowKey(null)}
-                  style={{
-                    background: isSelected
-                      ? "#eff6ff"
-                      : isHovered && onRowClick
-                        ? "#fafafa"
-                        : undefined,
-                    cursor: onRowClick ? "pointer" : undefined,
-                  }}
                 >
                   {row.values.map((cell, cellIndex) => (
                     <td
-                      key={cellIndex}
-                      style={{
-                        padding: "12px 10px",
-                        borderBottom: "1px solid #f0f0f0",
-                        verticalAlign: "top",
-                        textAlign: numericHeaders.has(headers[cellIndex])
+                      data-align={
+                        numericHeaders.has(headers[cellIndex])
                           ? "right"
-                          : "left",
-                      }}
+                          : "left"
+                      }
+                      key={cellIndex}
                     >
                       {cell}
                     </td>
@@ -117,8 +80,8 @@ function Table({
           ) : (
             <tr>
               <td
+                className="shopops-data-table__empty"
                 colSpan={headers.length}
-                style={{ padding: 16, color: "#707070" }}
               >
                 No data for this selection.
               </td>

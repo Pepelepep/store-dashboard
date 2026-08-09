@@ -67,7 +67,7 @@ export function DashboardHeader({
         icon={ChartVerticalIcon}
         title="Overview"
       />
-      <ContentCard>
+      <ContentCard className="shopops-dashboard-filter-card">
         <DashboardFilters
           locations={locations}
           selectedLocationId={selectedLocationId}
@@ -86,7 +86,7 @@ export function DashboardHeader({
             `Current location: ${selectedLocationName ?? "-"}`,
             `Range: ${formatStoreDate(startDate)} → ${formatStoreDate(endDate)}`,
             `${formatNumber(selectedDays)} ${selectedDays > 1 ? "days" : "day"}`,
-            `Data updated: ${
+            `Updated: ${
               lastSuccessfulSync
                 ? formatStoreDateTime(lastSuccessfulSync)
                 : "unavailable"
