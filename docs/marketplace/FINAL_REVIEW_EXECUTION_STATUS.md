@@ -34,7 +34,7 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | --- | --- | --- |
 | Demo staff attribution | FIXED 2026-08-08 | 225/225 synthetic lines map to six synthetic sellers across three locations. Preserve via `001_staging_demo_data.sql`. |
 | Viewer experience | LIVE PASS 2026-08-08 | Viewer was locked to Laval, with no global selector, comparison, access management, Costs, Settings, or direct ShopOps Billing access. Live result: 33 orders and 4,527.06 CAD net for the selected period. |
-| Manager experience | LIVE PASS; LOW-RISK FIX IN BRANCH | Manager saw Overview and compared exactly the two assigned locations: Laval + Montreal, 85 orders and 12,499.86 CAD. A forbidden `Review product costs` CTA was discovered in Compare Locations and is now capability-gated. |
+| Manager experience | LIVE PASS AFTER FIX 2026-08-08 | Manager saw Overview and compared exactly the two assigned locations: Laval + Montreal, 85 orders and 12,499.86 CAD. A forbidden `Review product costs` CTA was discovered in Compare Locations, capability-gated, deployed, and live-retested absent together with `Add expenses` and the Costs navigation item. |
 | Admin experience | LIVE PASS 2026-08-08 | Admin saw all three locations, 118 orders and 18,027.93 CAD, plus the administrative areas. ShopOps Plan & billing was read-only with no Manage plan action. |
 | Owner-sensitive actions | LIVE PASS WITH DOCUMENTED SHOPIFY BOUNDARY | Owner restored QA Pilot after the controlled Solo test. ShopOps only exposes and confirms plan changes for Owner. Direct Shopify-hosted billing remains governed by Shopify staff permissions and cannot be represented as a ShopOps role guarantee. |
 | Shopify compliance webhooks | CODE PASS; LIVE DELIVERY NEEDED | Send and verify customers/data_request, customers/redact, shop/redact with valid HMAC and inspect minimal audit records. |
@@ -132,9 +132,10 @@ or other personal data. Marketplace media must use the synthetic demo staff.
   Locations, People, Costs, Settings, or ShopOps Billing; canonical database
   membership is active `viewer`, non-owner, with one Laval `can_view` grant and
   no `can_manage` grant.
-- Low-risk fixes added after live discovery: Compare Locations cost/expense CTAs
-  are now gated by `manage_costs`, and billing copy distinguishes ShopOps
-  owner-only controls from Shopify-hosted staff billing permissions.
+- Low-risk fixes added after live discovery and deployed in stable commit
+  `0938e57`: Compare Locations cost/expense CTAs are gated by `manage_costs`,
+  and billing copy distinguishes ShopOps owner-only controls from
+  Shopify-hosted staff billing permissions. Both fixes passed live rechecks.
 
 ## Smallest next fix scope
 
@@ -142,8 +143,7 @@ Do not redesign the dashboard. The smallest safe path is:
 
 1. keep Lifecycle B uninstalled and verify the real `shop/redact` result after
    48 hours;
-2. deploy the two low-risk role/billing-copy fixes and recheck the Manager CTA;
-3. verify Partner Dashboard scopes, protected-data declarations, public pricing,
+2. verify Partner Dashboard scopes, protected-data declarations, public pricing,
    screencast, and listing validation;
-4. capture focused Marketplace media from the proven flows;
-5. run final automated pre-submission checks and submit.
+3. capture focused Marketplace media from the proven flows;
+4. run final automated pre-submission checks and submit.
