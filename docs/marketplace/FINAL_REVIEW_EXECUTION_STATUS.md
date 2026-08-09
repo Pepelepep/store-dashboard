@@ -25,7 +25,7 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Fresh install/reinstall | NOT RUN | Clean development store: install, OAuth, onboarding, first sync, reload, uninstall, reinstall, and retained/deleted state verified. |
 | Marketplace screencast | MISSING | Reviewer video shows install/onboarding, location setup, staff mapping, role behavior, reports, and billing. |
 | Final listing screenshots | REPLACE | Capture dashboard-only frames after role QA, using synthetic staff and no PII. Do not expose the current Staff filter because it also lists identities from real synchronized data. |
-| Automatic maintenance scheduler | BLOCKED | No successful maintenance tick since 2026-07-26 UTC. Manual sync succeeds, but the Render cron/secret/service configuration must be restored and two consecutive ticks observed. |
+| Automatic maintenance scheduler | INTENTIONALLY PAUSED FOR DEMO | Render service `shopops-maintenance-tick` is attached to `marketplace/stable-prep`, runs `npm run cron:maintenance` every five minutes, has `CRON_SECRET` and `SHOPIFY_APP_URL`, and had consecutive successful runs before the merchant suspended it to avoid demo charges. Resume it before reviewer access and observe two successful ticks; do not submit while the app displays “Delayed”. |
 | Live compliance webhooks | BLOCKED | Operational queue is healthy (157 done, zero pending/failed), but the demo shop has no recorded customers/data_request, customers/redact, or shop/redact delivery proof. |
 
 ## MUST FIX / COMPLETE
