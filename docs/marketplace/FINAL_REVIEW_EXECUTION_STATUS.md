@@ -20,6 +20,7 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Item | Status | Proof required before submission |
 | --- | --- | --- |
 | Live Owner/Admin/Manager/Viewer role QA | PASSED 2026-08-08 | The same authenticated non-owner Shopify account was exercised as Manager, Admin, and Viewer. Manager saw only Laval + Montreal and could compare them; Admin saw all three locations and administration; Viewer saw only Laval with no global selector, comparison, People, Costs, or Settings. Direct ShopOps Billing URLs were denied to Manager/Viewer and read-only for Admin. The account was restored to active Viewer · Laval only and the canonical DB graph was verified. |
+| Chrome Incognito authentication and Viewer smoke | PASSED 2026-08-08 | A new private Chrome session authenticated as the non-owner test account with no normal-profile state. After a clean reload, direct Settings, People, Costs, and Compare Locations URLs were denied. Overview rendered only Laval, with no Montreal, third location, all-locations selector, Compare, Costs, People, or Settings navigation. |
 | Reporting-location lifecycle | PASSED 2026-08-08 | Laval was disabled: reporting changed from three locations/118 orders/18,027.93 CAD to two locations/85 orders/13,500.87 CAD. Re-enabling restored the exact original totals. All 225 synthetic lines remained stored and all three Shopify locations remained active. |
 | Billing lifecycle | LIVE PASS WITH PLATFORM BOUNDARY 2026-08-08 | Two clean stores selected and approved the hosted Growth trial at $0 in development. Uninstall changed the subscription to canceling and the app rendered that state correctly after reinstall. The secondary account that reached Shopify's hosted pricing had the high-trust Shopify `Store administrator` system role; it was not a low-privilege Shopify user. Those elevated roles were removed, leaving the custom `App users` role with ShopOps Studio access and neither `Approve app charges` nor app-management permission. Shopify still exposes $0 test approvals on this development store, so production paid-charge denial must be evaluated from Shopify's documented `Approve app charges` permission rather than inferred from dev-store test pricing. ShopOps plan controls and callback confirmation remain owner-only. |
 | Fresh install/reinstall | PASSED 2026-08-08 | Two clean development stores completed install, managed OAuth, hosted pricing, first sync, reload, and uninstall. Lifecycle A also completed immediate reinstall, automatic expiring offline-token acquisition, successful post-reinstall sync, idempotent retained data, and a second uninstall. |
@@ -172,10 +173,7 @@ Do not redesign the dashboard. The smallest safe path is:
    48 hours;
 2. capture an authenticated embedded Dashboard performance trace and reduce the
    measured LCP if the 3,552 ms result reproduces;
-3. finish true Chrome Incognito after enabling the Codex extension's `Allow in
-   Incognito` permission; the normal-profile Owner People/Costs/navigation
-   smoke already passes;
-4. verify Partner Dashboard scopes, protected-data declarations, public pricing,
+3. verify Partner Dashboard scopes, protected-data declarations, public pricing,
    screencast, and listing validation;
-5. capture focused Marketplace media from the proven flows;
-6. run final automated pre-submission checks and submit.
+4. capture focused Marketplace media from the proven flows;
+5. run final automated pre-submission checks and submit.
