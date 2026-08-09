@@ -19,9 +19,9 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 
 | Item | Status | Proof required before submission |
 | --- | --- | --- |
-| Live Owner/Admin/Manager/Viewer role QA | PARTIAL | Owner successfully changed the existing non-owner membership Viewer → Manager (two locations) → Admin (all locations) → revoked → Viewer (Laval only), with canonical DB state verified after restoration. Visibility and direct-URL denial still require signing in as that non-owner Shopify account. |
+| Live Owner/Admin/Manager/Viewer role QA | PASSED 2026-08-08 | The same authenticated non-owner Shopify account was exercised as Manager, Admin, and Viewer. Manager saw only Laval + Montreal and could compare them; Admin saw all three locations and administration; Viewer saw only Laval with no global selector, comparison, People, Costs, or Settings. Direct ShopOps Billing URLs were denied to Manager/Viewer and read-only for Admin. The account was restored to active Viewer · Laval only and the canonical DB graph was verified. |
 | Reporting-location lifecycle | PASSED 2026-08-08 | Laval was disabled: reporting changed from three locations/118 orders/18,027.93 CAD to two locations/85 orders/13,500.87 CAD. Re-enabling restored the exact original totals. All 225 synthetic lines remained stored and all three Shopify locations remained active. |
-| Billing lifecycle | PARTIAL LIVE PASS 2026-08-08 | Two clean stores selected and approved the hosted Growth trial at $0 in development. Uninstall changed the subscription to canceling and the app rendered that state correctly after reinstall. Plan change and non-Owner denial still need live proof. |
+| Billing lifecycle | LIVE PASS WITH PLATFORM BOUNDARY 2026-08-08 | Two clean stores selected and approved the hosted Growth trial at $0 in development. Uninstall changed the subscription to canceling and the app rendered that state correctly after reinstall. On ShopOps Demo, the non-owner Admin had no ShopOps plan action but Shopify itself allowed that staff account to approve Solo from Shopify's directly hosted pricing URL. ShopOps rejected the non-owner callback; the owner restored QA Pilot successfully. Copy now states the exact boundary: ShopOps plan controls are owner-only, while Shopify may separately authorize staff with billing/app permissions to manage app charges. |
 | Fresh install/reinstall | PASSED 2026-08-08 | Two clean development stores completed install, managed OAuth, hosted pricing, first sync, reload, and uninstall. Lifecycle A also completed immediate reinstall, automatic expiring offline-token acquisition, successful post-reinstall sync, idempotent retained data, and a second uninstall. |
 | Marketplace screencast | MISSING | Reviewer video shows install/onboarding, location setup, staff mapping, role behavior, reports, and billing. |
 | Final listing screenshots | REPLACE | Capture dashboard-only frames after role QA, using synthetic staff and no PII. Do not expose the current Staff filter because it also lists identities from real synchronized data. |
@@ -33,10 +33,10 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Item | Status | Next action |
 | --- | --- | --- |
 | Demo staff attribution | FIXED 2026-08-08 | 225/225 synthetic lines map to six synthetic sellers across three locations. Preserve via `001_staging_demo_data.sql`. |
-| Viewer experience | AUTOMATED PASS; LIVE QA NEEDED | Viewer sees only assigned locations, no location-access management and no global comparison. |
-| Manager experience | AUTOMATED PASS; LIVE QA NEEDED | Manager sees Overview and compares only assigned locations. |
-| Admin experience | AUTOMATED PASS; LIVE QA NEEDED | Admin has global reporting and people/location administration, without Owner-only billing authority. |
-| Owner-sensitive actions | AUTOMATED PASS; LIVE QA NEEDED | Verify Billing/Plan and destructive lifecycle actions separately from Admin. |
+| Viewer experience | LIVE PASS 2026-08-08 | Viewer was locked to Laval, with no global selector, comparison, access management, Costs, Settings, or direct ShopOps Billing access. Live result: 33 orders and 4,527.06 CAD net for the selected period. |
+| Manager experience | LIVE PASS; LOW-RISK FIX IN BRANCH | Manager saw Overview and compared exactly the two assigned locations: Laval + Montreal, 85 orders and 12,499.86 CAD. A forbidden `Review product costs` CTA was discovered in Compare Locations and is now capability-gated. |
+| Admin experience | LIVE PASS 2026-08-08 | Admin saw all three locations, 118 orders and 18,027.93 CAD, plus the administrative areas. ShopOps Plan & billing was read-only with no Manage plan action. |
+| Owner-sensitive actions | LIVE PASS WITH DOCUMENTED SHOPIFY BOUNDARY | Owner restored QA Pilot after the controlled Solo test. ShopOps only exposes and confirms plan changes for Owner. Direct Shopify-hosted billing remains governed by Shopify staff permissions and cannot be represented as a ShopOps role guarantee. |
 | Shopify compliance webhooks | CODE PASS; LIVE DELIVERY NEEDED | Send and verify customers/data_request, customers/redact, shop/redact with valid HMAC and inspect minimal audit records. |
 | API/scopes/privacy declarations | MANUAL CONFIRMATION NEEDED | Partner Dashboard declarations must exactly match deployed scopes and Protected Customer Data/read_all_orders approvals. |
 | Listing validation | INCOMPLETE | Resolve feature media, final screenshots, active pricing plans, and screencast URL. |
@@ -76,7 +76,8 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | View location/staff reports | All | All | Assigned only | Assigned only |
 | Configure reporting locations | Yes | Yes | No | No |
 | Configure people/access | Yes | Yes | No | No |
-| Billing/Plan actions | Yes | No | No | No |
+| ShopOps Plan actions | Yes | Read-only | No access | No access |
+| Direct Shopify-hosted app charges | Shopify decides | Shopify staff permissions decide | Shopify staff permissions decide | Shopify staff permissions decide |
 | See Access Location management UX | Yes | Yes | No | No |
 
 ## Exact live QA sequence
@@ -85,12 +86,14 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 2. Disable one location in ShopOps reporting settings (not in Shopify itself).
 3. Confirm Dashboard totals, comparison choices, and staff tables exclude it.
 4. Confirm its historical rows remain stored and no Shopify source data changed.
-5. Sign in as Viewer and confirm only the assigned location is reachable by UI
-   and direct URL; confirm there is no access-management or comparison UI.
-6. Sign in as Manager and confirm two assigned locations are comparable while a
-   third is rejected by both UI and server.
-7. Sign in as Admin and confirm all locations and People/Location setup are
-   available, but Billing/Plan mutation is rejected.
+5. **Passed:** Viewer reached only Laval through UI and server-enforced scope;
+   there was no access-management or comparison UI and direct ShopOps Billing
+   was rejected.
+6. **Passed:** Manager compared Laval and Montreal only; the third location was
+   absent from the UI and server scope.
+7. **Passed:** Admin reached all locations and People/Location setup. ShopOps
+   Billing was read-only. Shopify's direct hosted pricing page remained subject
+   to the Shopify staff account's own billing/app permissions.
 8. Re-enable the location as Owner/Admin and confirm reports and role scopes
    recover without a resync-related duplication.
 9. Run Owner-only billing lifecycle, then uninstall/reinstall on a clean store.
@@ -111,8 +114,27 @@ or other personal data. Marketplace media must use the synthetic demo staff.
   reinstalled before the scheduled post-48-hour `shop/redact` verification.
   Immediate baseline: 0 sessions, 1 membership, 2 locations, 17 products, 5
   sync runs, 0 orders, and 0 order lines.
-- Local release gates after the lifecycle fixes: typecheck passed, lint passed,
-  production build passed, and all 126 P0/Marketplace tests passed.
+- Local release gates after the latest live-role fixes: typecheck passed, lint
+  passed, production build passed, and all 127 P0/Marketplace tests passed.
+
+## Live role and plan evidence — 2026-08-08
+
+- Manager: exactly two assigned locations (Laval and Montreal), 85 orders and
+  12,499.86 CAD; direct ShopOps Plan & billing URL denied.
+- Admin: all three reporting locations, 118 orders and 18,027.93 CAD; ShopOps
+  Plan & billing rendered QA Pilot read-only with no plan-management action.
+- Controlled plan test: the Shopify-hosted page allowed the non-owner Shopify
+  staff account to approve Solo, demonstrating that Shopify staff permissions
+  are a separate authority from ShopOps roles. ShopOps refused non-owner plan
+  confirmation. The owner then selected and approved QA Pilot; ShopOps rendered
+  QA Pilot Active with all three locations and both ShopOps users within plan.
+- Viewer final state: Laval only, no global location picker, no Compare
+  Locations, People, Costs, Settings, or ShopOps Billing; canonical database
+  membership is active `viewer`, non-owner, with one Laval `can_view` grant and
+  no `can_manage` grant.
+- Low-risk fixes added after live discovery: Compare Locations cost/expense CTAs
+  are now gated by `manage_costs`, and billing copy distinguishes ShopOps
+  owner-only controls from Shopify-hosted staff billing permissions.
 
 ## Smallest next fix scope
 
@@ -120,7 +142,7 @@ Do not redesign the dashboard. The smallest safe path is:
 
 1. keep Lifecycle B uninstalled and verify the real `shop/redact` result after
    48 hours;
-2. finish live non-owner Manager/Admin denial tests and Owner plan-change proof;
+2. deploy the two low-risk role/billing-copy fixes and recheck the Manager CTA;
 3. verify Partner Dashboard scopes, protected-data declarations, public pricing,
    screencast, and listing validation;
 4. capture focused Marketplace media from the proven flows;

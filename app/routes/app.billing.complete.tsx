@@ -162,7 +162,7 @@ export function ErrorBoundary() {
           temporarilyUnavailable
             ? "Shopify could not confirm the store's current plan right now. Nothing was changed. Retry in a moment."
             : ownerRequired
-              ? "Only the Shopify store owner can confirm or manage the ShopOps Studio plan."
+              ? "Only the Shopify store owner can complete plan confirmation in ShopOps Studio. Shopify may separately allow staff with billing and app permissions to manage app charges in Shopify admin."
               : confirmationRejected
                 ? "Shopify did not confirm the plan from this return link. ShopOps did not assign a plan from the link."
                 : "ShopOps could not finish confirming the plan. Nothing was changed."

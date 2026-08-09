@@ -1158,7 +1158,7 @@ test("ShopOps roles use one exact merchant-facing capability matrix", () => {
   );
   assert.equal(
     SHOP_OPS_ROLE_DEFINITIONS.admin.description,
-    "Manage reporting, people, costs, synchronization, and settings. Billing remains owner-only.",
+    "Manage reporting, people, costs, synchronization, and settings. ShopOps plan controls remain owner-only.",
   );
   assert.deepEqual(ASSIGNABLE_SHOP_OPS_ROLES, ["viewer", "manager", "admin"]);
   assert.equal(ASSIGNABLE_SHOP_OPS_ROLES.includes("owner"), false);
@@ -1602,6 +1602,27 @@ test("dashboard notices live only in their relevant profit KPI cards", () => {
   assert.doesNotMatch(
     detailsSection,
     /grossMargin:[\s\S]*?Review product costs/,
+  );
+});
+
+test("location comparison hides costs actions from reporting managers", () => {
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    locations,
+    /canManageCosts: permissions\.capabilities\.manage_costs/,
+  );
+  assert.match(locations, /canManageCosts=\{data\.canManageCosts\}/);
+  assert.ok(
+    (locations.match(/\{canManageCosts \? \(/g) ?? []).length >= 2,
+    "Every product-cost action in the comparison KPI must be capability-gated",
+  );
+  assert.match(
+    locations,
+    /const expensesNotice = !hasOperatingExpenses && canManageCosts/,
   );
 });
 
@@ -3286,8 +3307,9 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
   assert.match(billingRequired, /view: "owner_setup"/);
   assert.match(
     billingRequired,
-    /Only the Shopify store owner can choose or manage the ShopOps/,
+    /Only the Shopify store owner can complete plan selection in/,
   );
+  assert.match(billingRequired, /staff with billing[\s\n]+and app permissions/);
   assert.match(billingRequired, /error instanceof OwnerBootstrapError/);
   assert.ok(
     billingComplete.indexOf("await assertOwnerAccess") <
@@ -4447,7 +4469,8 @@ test("Plan and billing is summary-only, owner-priced, contextual, and uses a one
   assert.match(plan, /Subscription status/);
   assert.match(plan, /<StatusBadge/);
   assert.match(plan, /formatStoreDate/);
-  assert.match(plan, /Only the Shopify store owner can change this plan/);
+  assert.match(plan, /ShopOps exposes plan changes only to the store owner/);
+  assert.match(plan, /staff with billing and app permissions/);
   assert.match(plan, /Trial ends/);
   assert.match(plan, /Cancels at the end of the billing cycle/);
   assert.match(presentation, /usage > limit/);
@@ -4467,6 +4490,10 @@ test("Plan and billing is summary-only, owner-priced, contextual, and uses a one
   assert.match(settings, /label: "Data sync"/);
   assert.match(settings, /label: "Plan & billing"/);
   assert.match(callback, /assertOwnerAccess/);
+  assert.match(
+    callback,
+    /Only the Shopify store owner can complete plan confirmation in ShopOps Studio/,
+  );
   assert.match(callback, /setPlanConfirmedFlash/);
   assert.match(callback, /\/app\/settings/);
   assert.match(callback, /Retry confirmation/);

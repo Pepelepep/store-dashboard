@@ -178,9 +178,10 @@ export default function BillingRequired() {
             <p
               style={{ color: "#45484d", lineHeight: 1.6, margin: "0 0 22px" }}
             >
-              Only the Shopify store owner can choose or manage the ShopOps
-              Studio plan. Ask the store owner to open the app and complete plan
-              selection.
+              Only the Shopify store owner can complete plan selection in
+              ShopOps Studio. Shopify may separately allow staff with billing
+              and app permissions to manage app charges in Shopify admin. Ask
+              the store owner to open ShopOps Studio and confirm the plan.
             </p>
             <a href={data.supportUrl}>Contact support</a>
           </>

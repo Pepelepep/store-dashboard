@@ -166,7 +166,9 @@ export function PlanSetup({ data }: { data: PlanSetupData }) {
         </dl>
         {!data.canManagePlan ? (
           <p className="shopops-helper-text" style={{ marginBottom: 0 }}>
-            Only the Shopify store owner can change this plan in Shopify.
+            ShopOps exposes plan changes only to the store owner. Shopify may
+            separately allow staff with billing and app permissions to manage
+            app charges in Shopify admin.
           </p>
         ) : null}
       </ContentCard>

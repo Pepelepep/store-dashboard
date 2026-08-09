@@ -59,7 +59,7 @@ export const SHOP_OPS_ROLE_DEFINITIONS = {
   admin: {
     label: "Admin",
     description:
-      "Manage reporting, people, costs, synchronization, and settings. Billing remains owner-only.",
+      "Manage reporting, people, costs, synchronization, and settings. ShopOps plan controls remain owner-only.",
     defaultPath: "/app/db-dashboard",
     capabilities: {
       view_dashboard: true,

@@ -201,6 +201,7 @@ type SortKey =
 
 type LoaderData = {
   view: "performance";
+  canManageCosts: boolean;
   canManageReportingLocations: boolean;
   canManageSync: boolean;
   dashboardAccessNotice: boolean;
@@ -1452,6 +1453,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     view: "performance",
+    canManageCosts: permissions.capabilities.manage_costs,
     canManageReportingLocations: permissions.capabilities.manage_settings,
     canManageSync,
     dashboardAccessNotice:
@@ -1546,10 +1548,12 @@ function KpiGrid({
   kpis,
   financialMetricsVersion,
   hasOperatingExpenses,
+  canManageCosts,
 }: {
   kpis: LoaderData["kpis"];
   financialMetricsVersion: FinancialMetricsVersion;
   hasOperatingExpenses: boolean;
+  canManageCosts: boolean;
 }) {
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const location = useLocation();
@@ -1572,19 +1576,23 @@ function KpiGrid({
         {kpis.missingCogsLineCount === 1 ? "line is" : "lines are"} missing
         product costs.
       </div>
-      <Link className="shopops-kpi-notice__action" to={productCostsPath}>
-        Review product costs
-      </Link>
+      {canManageCosts ? (
+        <Link className="shopops-kpi-notice__action" to={productCostsPath}>
+          Review product costs
+        </Link>
+      ) : null}
     </ReportKpiNotice>
   ) : kpis.includesEstimatedCogs ? (
     <ReportKpiNotice tone="info">
       <div>Includes estimated product costs</div>
-      <Link className="shopops-kpi-notice__action" to={productCostsPath}>
-        Review product costs
-      </Link>
+      {canManageCosts ? (
+        <Link className="shopops-kpi-notice__action" to={productCostsPath}>
+          Review product costs
+        </Link>
+      ) : null}
     </ReportKpiNotice>
   ) : null;
-  const expensesNotice = !hasOperatingExpenses ? (
+  const expensesNotice = !hasOperatingExpenses && canManageCosts ? (
     <ReportKpiNotice tone="neutral">
       <div>No operating expenses configured.</div>
       <Link className="shopops-kpi-notice__action" to={expensesPath}>
@@ -3548,6 +3556,7 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
             kpis={kpis}
             financialMetricsVersion={financialMetricsVersion}
             hasOperatingExpenses={hasOperatingExpenses}
+            canManageCosts={data.canManageCosts}
           />
           <ActiveLocationsDrilldownChips
             activeDrilldowns={activeDrilldowns}
