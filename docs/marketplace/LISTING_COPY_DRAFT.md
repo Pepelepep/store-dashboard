@@ -52,20 +52,23 @@ The app is designed for Shopify retailers with physical stores, pop-ups, warehou
 
 ## Pricing Copy
 
-First submission plan:
+Public plans:
 
-- Plan name: ShopOps Studio
-- Price: `$59.99/month`
-- Trial: 14 days
-- Billing: Shopify managed app subscription
+| Plan           |           Price | Trial   | Capacity                                                 |
+| -------------- | --------------: | ------- | -------------------------------------------------------- |
+| Solo           | `$19 USD/month` | 14 days | 1 reporting location, 1 ShopOps user                     |
+| Growth         | `$49 USD/month` | 14 days | Up to 5 reporting locations and 5 ShopOps users          |
+| Multi-location | `$99 USD/month` | 14 days | Up to 10 reporting locations and unlimited ShopOps users |
+
+Billing is managed through Shopify.
 
 Suggested pricing description:
 
-ShopOps Studio is available for `$59.99/month` after a 14-day free trial. Billing is managed through Shopify. Reports are merchant-facing and informational, and merchants remain responsible for validating financial outputs in their accounting, tax, legal, payroll, or financial systems.
+ShopOps Studio plans start at `$19 USD/month` after a 14-day free trial. Choose Solo, Growth, or Multi-location based on the number of reporting locations and ShopOps users your operation needs. Billing is managed through Shopify. Reports are merchant-facing and informational, and merchants remain responsible for validating financial outputs in their accounting, tax, legal, payroll, or financial systems.
 
 Implementation note:
 
-- Billing code is prepared but remains disabled by default with `BILLING_ENABLED=false` until the marketplace submission flow is ready for billing review.
+- Shopify App Pricing is enabled for the Marketplace preview and production flow. `BILLING_ENABLED=false` remains local-development-only.
 
 ## Support Details
 

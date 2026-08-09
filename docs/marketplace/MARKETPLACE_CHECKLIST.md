@@ -6,7 +6,7 @@ Draft status: marketplace preparation checklist.
 
 - [x] Created first-submission-ready listing package for ShopOps Studio.
 - [x] Finalized App Store positioning around Shopify reporting, margin, COGS, refunds, discounts, returns, and Data Health.
-- [x] Added first-submission pricing copy: ShopOps Studio, `$59.99/month`, 14-day free trial.
+- [x] Added current public pricing copy: Solo `$19`, Growth `$49`, and Multi-location `$99` USD/month, each with a 14-day free trial.
 - [x] Added support, privacy, terms, and support URLs for marketplace preview.
 - [x] Added reviewer note for `read_orders`, `read_all_orders`, public-app removal of `read_users`, protected customer/order data processing, shop isolation, and no data sale/third-party marketing sharing.
 - [x] Finalized first-submission screenshot sequence.

@@ -1,13 +1,40 @@
-import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import type {
+  LinksFunction,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
 import { Link, redirect } from "react-router";
+import {
+  ArrowRight,
+  BarChart3,
+  Check,
+  CircleDollarSign,
+  DatabaseZap,
+  MapPin,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
+
+import marketingStylesHref from "./marketing.css?url";
+
+export const links: LinksFunction = () => [
+  { rel: "stylesheet", href: marketingStylesHref },
+];
 
 export const meta: MetaFunction = () => [
-  { title: "ShopOps Studio | Shopify reporting for multi-location retailers" },
+  { title: "ShopOps Studio | Profit clarity for every Shopify location" },
   {
     name: "description",
     content:
-      "ShopOps Studio gives Shopify merchants a clearer view of store performance: sales, margins, COGS, refunds, returns, discounts, inventory, expenses, staff attribution, and location-aware permissions.",
+      "Turn Shopify sales, COGS, margins, expenses, inventory, and location performance into one clear operational view.",
   },
+  { property: "og:title", content: "ShopOps Studio" },
+  {
+    property: "og:description",
+    content:
+      "Profit clarity for every Shopify location — without rebuilding another spreadsheet.",
+  },
+  { property: "og:type", content: "website" },
 ];
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -18,296 +45,399 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return null;
 }
 
-const pageStyle = {
-  background: "#f6f7f8",
-  color: "#202223",
-  fontFamily:
-    'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  minHeight: "100vh",
-} as const;
-
-const shellStyle = {
-  margin: "0 auto",
-  maxWidth: 1080,
-  padding: "0 18px",
-} as const;
-
-const linkStyle = {
-  color: "#1f5fbf",
-  fontWeight: 700,
-  textDecoration: "none",
-} as const;
-
-const navBarStyle = {
-  alignItems: "center",
-  display: "flex",
-  justifyContent: "space-between",
-  padding: "22px 0",
-} as const;
-
-const navLinksStyle = {
-  alignItems: "center",
-  display: "flex",
-  gap: 22,
-} as const;
-
-const primaryButtonStyle = {
-  background: "#1f5fbf",
-  borderRadius: 8,
-  color: "white",
-  display: "inline-block",
-  fontWeight: 700,
-  padding: "12px 22px",
-  textDecoration: "none",
-} as const;
-
-const secondaryButtonStyle = {
-  ...primaryButtonStyle,
-  background: "transparent",
-  border: "1px solid #dde1e5",
-  color: "#202223",
-} as const;
-
-const cardStyle = {
-  background: "white",
-  border: "1px solid #dde1e5",
-  borderRadius: 10,
-  boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-  padding: "24px",
-} as const;
-
-const sectionHeadingStyle = {
-  fontSize: 28,
-  margin: "0 0 8px",
-} as const;
-
-const sectionLeadStyle = {
-  color: "#5c5f62",
-  lineHeight: 1.6,
-  margin: "0 0 32px",
-  maxWidth: 640,
-} as const;
-
 const CONTACT_HREF =
   "mailto:support@shopopsstudio.com?subject=ShopOps%20Studio%20-%20Getting%20started";
+const SCREENSHOT_ROOT = "/marketplace/screenshots/2026-08-final";
 
-const BENEFITS = [
+const FEATURES = [
   {
-    title: "See margins, not just sales",
-    body: "COGS, gross profit, and gross margin computed from real Shopify cost and order data, per location.",
+    icon: CircleDollarSign,
+    title: "Know what you actually keep",
+    body: "See net sales, COGS, gross profit, gross margin, fixed expenses, and net profit in one consistent view.",
+    tone: "emerald",
   },
   {
+    icon: MapPin,
     title: "Compare every location",
-    body: "One dashboard for downtown stores, malls, pop-ups, or warehouses — filter by location and date range.",
+    body: "Spot which stores lead or lag with clear sales share, profitability, and versus-average comparisons.",
+    tone: "blue",
   },
   {
-    title: "Trust your numbers",
-    body: "Data Health flags missing costs, stale syncs, and reporting gaps before they reach a spreadsheet.",
+    icon: BarChart3,
+    title: "Understand what drives sales",
+    body: "Explore hourly performance, best sellers, vendors, order lines, discounts, refunds, and returns.",
+    tone: "violet",
   },
   {
-    title: "Discounts, refunds, returns",
-    body: "Reporting accounts for discounts, refunds, and returns instead of showing gross sales as if nothing changed.",
-  },
-  {
-    title: "Give managers their own view",
-    body: "Location-scoped permissions mean a store manager sees their store's performance — nothing more, nothing less.",
-  },
-  {
-    title: "Know your true profit",
-    body: "Add fixed expenses by location or globally to see net profit, not just gross margin.",
+    icon: Users,
+    title: "Give each team the right view",
+    body: "Connect POS sales attribution and control ShopOps access by role and reporting location.",
+    tone: "amber",
   },
 ] as const;
 
-const FEATURES = [
-  "Dashboard: sales, net sales, COGS, gross profit, gross margin, expenses, net profit",
-  "Location performance for stores, pop-ups, warehouses, or any Shopify location",
-  "Product, SKU, vendor, and best-seller reporting",
-  "Inventory visibility and low-stock signals",
-  "Discount, refund, return, and transaction-aware reporting",
-  "Fixed expense management, global or per location",
-  "Best-effort Sales by Staff where Shopify order data supports it",
-  "Location-based permissions managed by staff email",
-  "Data Health checks for sync freshness and reporting gaps",
+const PLANS = [
+  {
+    name: "Solo",
+    price: "$19",
+    summary: "For one owner operating one location.",
+    features: ["1 reporting location", "1 ShopOps user", "All core reporting"],
+    featured: false,
+  },
+  {
+    name: "Growth",
+    price: "$49",
+    summary: "For growing teams that need shared visibility.",
+    features: [
+      "Up to 5 locations",
+      "Up to 5 ShopOps users",
+      "Location-aware access",
+    ],
+    featured: true,
+  },
+  {
+    name: "Multi-location",
+    price: "$99",
+    summary: "For established retail operations.",
+    features: [
+      "Up to 10 locations",
+      "Unlimited ShopOps users",
+      "Full multi-location reporting",
+    ],
+    featured: false,
+  },
+] as const;
+
+const PRODUCT_VIEWS = [
+  {
+    title: "Overview",
+    body: "A complete operational picture, with period-over-period context built into the metrics that matter.",
+    image: `${SCREENSHOT_ROOT}/01-overview-kpis-1600x900.png`,
+    alt: "ShopOps Studio overview with sales, profit, cost, refund, and period comparison metrics",
+  },
+  {
+    title: "Location performance",
+    body: "Compare stores across sales, orders, COGS, margin, expenses, and net profit — on one screen.",
+    image: `${SCREENSHOT_ROOT}/05-location-comparison-1600x900.png`,
+    alt: "ShopOps Studio multi-location comparison table",
+  },
+  {
+    title: "Costs and expenses",
+    body: "Complete missing product costs and allocate recurring operating expenses without leaving Shopify.",
+    image: `${SCREENSHOT_ROOT}/07-operating-expenses-1600x900.png`,
+    alt: "ShopOps Studio operating expense management",
+  },
+  {
+    title: "People and access",
+    body: "Keep reporting useful and focused with role-based access and location assignments.",
+    image: `${SCREENSHOT_ROOT}/09-location-access-1600x900.png`,
+    alt: "ShopOps Studio people and location access management",
+  },
 ] as const;
 
 export default function MarketingHome() {
   return (
-    <main style={pageStyle}>
-      <div style={shellStyle}>
-        <header style={navBarStyle}>
-          <span style={{ fontSize: 20, fontWeight: 800 }}>ShopOps Studio</span>
-          <nav aria-label="Primary" style={navLinksStyle}>
-            <a href="#features" style={linkStyle}>
-              Features
-            </a>
-            <a href="#pricing" style={linkStyle}>
-              Pricing
-            </a>
-            <Link style={linkStyle} to="/support">
-              Support
-            </Link>
-            <a href={CONTACT_HREF} style={primaryButtonStyle}>
-              Get started
-            </a>
+    <main className="marketing-page">
+      <header className="marketing-nav-wrap">
+        <div className="marketing-shell marketing-nav">
+          <a className="brand" href="#top" aria-label="ShopOps Studio home">
+            <img
+              src="/marketplace/shopops-studio-app-icon-1200.png"
+              alt=""
+              width="42"
+              height="42"
+            />
+            <span>ShopOps Studio</span>
+          </a>
+          <nav className="marketing-nav-links" aria-label="Primary navigation">
+            <a href="#product">Product</a>
+            <a href="#pricing">Pricing</a>
+            <Link to="/support">Support</Link>
           </nav>
-        </header>
+          <a
+            className="marketing-button marketing-button-small"
+            href={CONTACT_HREF}
+          >
+            Get started <ArrowRight aria-hidden="true" size={16} />
+          </a>
+        </div>
+      </header>
 
-        <section style={{ padding: "48px 0 56px" }}>
-          <p
-            style={{
-              background: "#e7f0ff",
-              borderRadius: 999,
-              color: "#1f5fbf",
-              display: "inline-block",
-              fontSize: 13,
-              fontWeight: 700,
-              margin: "0 0 18px",
-              padding: "6px 14px",
-            }}
-          >
-            Built for multi-location Shopify retailers
-          </p>
-          <h1
-            style={{
-              fontSize: "clamp(32px, 5vw, 52px)",
-              lineHeight: 1.1,
-              margin: "0 0 20px",
-              maxWidth: 760,
-            }}
-          >
-            Shopify reporting for margins, COGS, refunds, returns, discounts,
-            and Data Health.
-          </h1>
-          <p
-            style={{
-              color: "#5c5f62",
-              fontSize: 18,
-              lineHeight: 1.6,
-              margin: "0 0 30px",
-              maxWidth: 640,
-            }}
-          >
-            ShopOps Studio gives Shopify merchants with physical stores a
-            clear, location-aware view of performance — so owners see it
-            all, and store managers see exactly their own store.
-          </p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-            <a href={CONTACT_HREF} style={primaryButtonStyle}>
-              Get started
-            </a>
-            <a href="#pricing" style={secondaryButtonStyle}>
-              See pricing
-            </a>
+      <section className="marketing-hero" id="top">
+        <div className="marketing-shell hero-grid">
+          <div className="hero-copy">
+            <div className="eyebrow">
+              <span className="eyebrow-dot" /> Built for Shopify retailers
+            </div>
+            <h1>Profit clarity for every Shopify location.</h1>
+            <p className="hero-lead">
+              Turn sales, COGS, margins, expenses, inventory, and team
+              performance into one clear operational view — without rebuilding
+              another spreadsheet.
+            </p>
+            <div className="hero-actions">
+              <a className="marketing-button" href={CONTACT_HREF}>
+                Start with ShopOps <ArrowRight aria-hidden="true" size={18} />
+              </a>
+              <a
+                className="marketing-button marketing-button-secondary"
+                href="#product"
+              >
+                See the product
+              </a>
+            </div>
+            <div className="hero-proof" aria-label="Product highlights">
+              <span>
+                <Check aria-hidden="true" size={16} /> 14-day free trial
+              </span>
+              <span>
+                <Check aria-hidden="true" size={16} /> Shopify-managed billing
+              </span>
+              <span>
+                <Check aria-hidden="true" size={16} /> No setup fee
+              </span>
+            </div>
           </div>
-        </section>
 
-        <section id="features" style={{ padding: "8px 0 56px" }}>
-          <h2 style={sectionHeadingStyle}>Everything a multi-location merchant needs to trust their numbers</h2>
-          <p style={sectionLeadStyle}>
-            Reports are informational and built to support operational
-            review — not accounting, tax, legal, or payroll advice.
-          </p>
-          <div
-            style={{
-              display: "grid",
-              gap: 18,
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-            }}
-          >
-            {BENEFITS.map((benefit) => (
-              <div key={benefit.title} style={cardStyle}>
-                <h3 style={{ fontSize: 17, margin: "0 0 8px" }}>
-                  {benefit.title}
-                </h3>
-                <p style={{ color: "#5c5f62", lineHeight: 1.6, margin: 0 }}>
-                  {benefit.body}
-                </p>
+          <div className="hero-visual">
+            <div className="hero-glow" aria-hidden="true" />
+            <div className="product-frame hero-frame">
+              <div className="frame-toolbar" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+                <div>ShopOps Studio</div>
               </div>
+              <img
+                src={`${SCREENSHOT_ROOT}/01-overview-kpis-1600x900.png`}
+                alt="ShopOps Studio profitability overview"
+                width="1600"
+                height="900"
+              />
+            </div>
+            <div className="hero-float hero-float-profit">
+              <span>Net profit</span>
+              <strong>$4,471.73</strong>
+              <small>↑ 2.8% vs previous period</small>
+            </div>
+            <div className="hero-float hero-float-status">
+              <ShieldCheck aria-hidden="true" size={18} /> Data up to date
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="trust-strip" aria-label="ShopOps capabilities">
+        <div className="marketing-shell trust-grid">
+          <div>
+            <DatabaseZap aria-hidden="true" />
+            <span>
+              <strong>Automatic sync</strong> for orders, products, inventory,
+              and locations
+            </span>
+          </div>
+          <div>
+            <ShieldCheck aria-hidden="true" />
+            <span>
+              <strong>Location-aware access</strong> for owners and store teams
+            </span>
+          </div>
+          <div>
+            <BarChart3 aria-hidden="true" />
+            <span>
+              <strong>Operational reporting</strong> designed to be reviewed,
+              not decoded
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section className="marketing-section" id="product">
+        <div className="marketing-shell">
+          <div className="section-heading section-heading-center">
+            <span className="section-kicker">One operational workspace</span>
+            <h2>From top-line sales to the details that explain them.</h2>
+            <p>
+              ShopOps keeps performance, profitability, people, and reporting
+              readiness connected inside Shopify.
+            </p>
+          </div>
+          <div className="feature-grid">
+            {FEATURES.map(({ icon: Icon, title, body, tone }) => (
+              <article className="feature-card" key={title}>
+                <div className={`feature-icon feature-icon-${tone}`}>
+                  <Icon aria-hidden="true" size={22} />
+                </div>
+                <h3>{title}</h3>
+                <p>{body}</p>
+              </article>
             ))}
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section style={{ padding: "8px 0 56px" }}>
-          <div style={{ ...cardStyle, padding: "32px clamp(20px, 4vw, 44px)" }}>
-            <h2 style={{ fontSize: 22, margin: "0 0 18px" }}>
-              What&apos;s included
-            </h2>
-            <ul
-              style={{
-                columnGap: 32,
-                columns: "1",
-                lineHeight: 1.9,
-                margin: 0,
-                paddingLeft: 22,
-              }}
+      <section className="marketing-section product-tour">
+        <div className="marketing-shell product-tour-list">
+          {PRODUCT_VIEWS.map((view, index) => (
+            <article
+              className={`product-view ${index % 2 === 1 ? "product-view-reverse" : ""}`}
+              key={view.title}
             >
-              {FEATURES.map((feature) => (
-                <li key={feature}>{feature}</li>
-              ))}
+              <div className="product-view-copy">
+                <span className="view-number">0{index + 1}</span>
+                <h2>{view.title}</h2>
+                <p>{view.body}</p>
+              </div>
+              <div className="product-frame product-view-frame">
+                <img
+                  src={view.image}
+                  alt={view.alt}
+                  width="1600"
+                  height="900"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="marketing-section data-section">
+        <div className="marketing-shell data-grid">
+          <div className="data-copy">
+            <span className="section-kicker">
+              Confidence before conclusions
+            </span>
+            <h2>Know when your reporting is ready.</h2>
+            <p>
+              ShopOps surfaces data freshness, missing product costs, and sync
+              status so gaps are visible before they become decisions.
+            </p>
+            <ul className="check-list">
+              <li>
+                <Check aria-hidden="true" /> Orders, products, inventory, and
+                locations
+              </li>
+              <li>
+                <Check aria-hidden="true" /> Clear cost coverage and
+                estimated-cost context
+              </li>
+              <li>
+                <Check aria-hidden="true" /> Recent activity and actionable
+                status messages
+              </li>
             </ul>
           </div>
-        </section>
+          <div className="product-frame data-frame">
+            <img
+              src={`${SCREENSHOT_ROOT}/11-data-sync-1600x900.png`}
+              alt="ShopOps Studio data synchronization status"
+              width="1600"
+              height="900"
+              loading="lazy"
+            />
+          </div>
+        </div>
+      </section>
 
-        <section id="pricing" style={{ padding: "8px 0 64px" }}>
-          <h2 style={sectionHeadingStyle}>Simple, predictable pricing</h2>
-          <p style={sectionLeadStyle}>
-            One plan. No setup fees. Billing is managed securely through
-            Shopify.
+      <section className="marketing-section pricing-section" id="pricing">
+        <div className="marketing-shell">
+          <div className="section-heading section-heading-center">
+            <span className="section-kicker">Simple pricing</span>
+            <h2>Start with the operation you have today.</h2>
+            <p>
+              Every public plan includes a 14-day free trial and Shopify-managed
+              billing.
+            </p>
+          </div>
+          <div className="pricing-grid">
+            {PLANS.map((plan) => (
+              <article
+                className={`pricing-card ${plan.featured ? "pricing-card-featured" : ""}`}
+                key={plan.name}
+              >
+                {plan.featured ? (
+                  <span className="popular-label">Most popular</span>
+                ) : null}
+                <h3>{plan.name}</h3>
+                <p className="plan-summary">{plan.summary}</p>
+                <p className="plan-price">
+                  <strong>{plan.price}</strong>
+                  <span> USD / month</span>
+                </p>
+                <ul>
+                  {plan.features.map((feature) => (
+                    <li key={feature}>
+                      <Check aria-hidden="true" size={17} /> {feature}
+                    </li>
+                  ))}
+                </ul>
+                <a
+                  className={`marketing-button ${plan.featured ? "" : "marketing-button-secondary"}`}
+                  href={CONTACT_HREF}
+                >
+                  Start free trial
+                </a>
+              </article>
+            ))}
+          </div>
+          <p className="pricing-note">
+            Cancel or change plans through Shopify. No setup fees.
           </p>
-          <div
-            style={{
-              ...cardStyle,
-              maxWidth: 380,
-              padding: "32px clamp(20px, 4vw, 40px)",
-            }}
-          >
-            <p style={{ color: "#5c5f62", fontWeight: 700, margin: "0 0 4px" }}>
-              ShopOps Studio
-            </p>
-            <p style={{ margin: "0 0 4px" }}>
-              <span style={{ fontSize: 40, fontWeight: 800 }}>$59.99</span>
-              <span style={{ color: "#5c5f62" }}>/month</span>
-            </p>
-            <p style={{ color: "#5c5f62", margin: "0 0 22px" }}>
-              14-day free trial. Cancel anytime through Shopify.
-            </p>
+        </div>
+      </section>
+
+      <section className="marketing-section final-cta-section">
+        <div className="marketing-shell">
+          <div className="final-cta">
+            <div>
+              <span className="section-kicker">
+                Built for clearer decisions
+              </span>
+              <h2>Run every location with the same view of the truth.</h2>
+              <p>
+                Bring sales, costs, profit, inventory, and teams together inside
+                Shopify.
+              </p>
+            </div>
             <a
+              className="marketing-button marketing-button-light"
               href={CONTACT_HREF}
-              style={{ ...primaryButtonStyle, display: "block", textAlign: "center" }}
             >
-              Get started
+              Talk to ShopOps <ArrowRight aria-hidden="true" size={18} />
             </a>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <footer
-          style={{
-            borderTop: "1px solid #e5e7eb",
-            padding: "26px 0 40px",
-          }}
-        >
-          <nav
-            aria-label="Legal"
-            style={{ display: "flex", flexWrap: "wrap", gap: 16, marginBottom: 12 }}
-          >
-            <Link style={linkStyle} to="/privacy">
-              Privacy
-            </Link>
-            <Link style={linkStyle} to="/terms">
-              Terms
-            </Link>
-            <Link style={linkStyle} to="/support">
-              Support
-            </Link>
+      <footer className="marketing-footer">
+        <div className="marketing-shell footer-grid">
+          <div>
+            <a className="brand brand-footer" href="#top">
+              <img
+                src="/marketplace/shopops-studio-app-icon-1200.png"
+                alt=""
+                width="38"
+                height="38"
+              />
+              <span>ShopOps Studio</span>
+            </a>
+            <p>Operational reporting for Shopify retailers.</p>
+          </div>
+          <nav aria-label="Legal and support">
+            <Link to="/privacy">Privacy</Link>
+            <Link to="/terms">Terms</Link>
+            <Link to="/support">Support</Link>
           </nav>
-          <p style={{ color: "#8a8f93", fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-            ShopOps Studio provides operational reporting for Shopify
-            merchants. It is not accounting, tax, legal, payroll, or
-            financial advice. Merchants remain responsible for validating
-            reports before business use.
-          </p>
-        </footer>
-      </div>
+        </div>
+        <div className="marketing-shell footer-disclaimer">
+          <span>© {new Date().getFullYear()} ShopOps Studio.</span>
+          <span>
+            Reports are informational and do not constitute accounting, tax,
+            legal, payroll, or financial advice.
+          </span>
+        </div>
+      </footer>
     </main>
   );
 }

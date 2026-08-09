@@ -1,6 +1,6 @@
 # Screenshot Plan
 
-Status: Three final first-submission assets prepared on 2026-08-09.
+Status: Final 11-image source set normalized on 2026-08-09.
 
 ## Capture Rules
 
@@ -145,16 +145,20 @@ Working capture recommendations:
 ## Final Asset Checklist
 
 - [x] App icon.
-- [x] Feature image: `00-feature-overview-1600x900.png`.
-- [x] Dashboard overview screenshot: `01-overview-1600x900.png`.
-- [x] Location performance screenshot: `02-compare-locations-1600x900.png`.
-- [ ] Data Health screenshot.
-- [x] Expenses / COGS screenshot: `03-costs-1600x900.png`.
-- [ ] Permissions screenshot.
-- [ ] Billing or onboarding screenshot if needed.
-- [ ] Optional Sync Center support screenshot if requested by reviewer.
+- [x] Dashboard overview screenshots.
+- [x] Location performance screenshots.
+- [x] Product cost and operating expense screenshots.
+- [x] People, attribution, and location access screenshots.
+- [x] Plan and billing screenshot.
+- [x] Data sync screenshot.
 - [x] All prepared screenshots use demo operational data only.
 - [x] All prepared screenshots checked for customer personal data.
 - [x] All prepared screenshots checked for client production data.
 - [x] Final dimensions confirmed.
 - [x] Listing copy and prepared screenshots tell the same story.
+
+## Final normalized source set
+
+All final source captures are stored in
+`public/marketplace/screenshots/2026-08-final/` and are exactly `1600x900`.
+The originals remain untouched in the operator's Desktop capture folder.
