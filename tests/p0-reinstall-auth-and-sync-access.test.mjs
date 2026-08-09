@@ -1041,6 +1041,10 @@ test("merchant navigation is the exact capability-aware information architecture
     new URL("../app/routes/app.tsx", import.meta.url),
     "utf8",
   );
+  const appIndexRoute = readFileSync(
+    new URL("../app/routes/app._index.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.deepEqual(
     getShopOpsNavigation("viewer").map((item) => item.label),
@@ -3534,6 +3538,10 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
     new URL("../app/routes/app.tsx", import.meta.url),
     "utf8",
   );
+  const appIndexRoute = readFileSync(
+    new URL("../app/routes/app._index.tsx", import.meta.url),
+    "utf8",
+  );
   const dashboard = readFileSync(
     new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
     "utf8",
@@ -3633,6 +3641,9 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   assert.match(appRoute, /if \(!permissions\.isActiveMember\)/);
   assert.match(appRoute, /ShopOps access required/);
   assert.doesNotMatch(appRoute, /Shopify user ID/);
+  assert.match(appIndexRoute, /getPermissionContext/);
+  assert.doesNotMatch(appIndexRoute, /assertDashboardAccess/);
+  assert.match(appIndexRoute, /!permissions\.isActiveMember/);
   assert.match(routeError, /title: "ShopOps access required"/);
   assert.match(routeError, /title: "Location access denied"/);
   assert.match(routeError, /label: "Return to dashboard"/);
