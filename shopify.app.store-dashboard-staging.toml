@@ -9,6 +9,10 @@ embedded = true
 api_version = "2026-07"
 
   [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
   uri = "/webhooks/inventory-levels/update"
   topics = [ "inventory_levels/update" ]
 

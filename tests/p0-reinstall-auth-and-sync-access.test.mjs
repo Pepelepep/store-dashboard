@@ -2664,6 +2664,35 @@ test("uninstall cache invalidation makes reinstall without a subscription gated"
   assert.match(uninstallRoute, /clearBillingCache\(shop\)/);
 });
 
+test("Marketplace lifecycle registers uninstall cleanup and reacquires offline auth", () => {
+  const marketplaceConfig = readFileSync(
+    new URL("../shopify.app.shopops-marketplace.toml", import.meta.url),
+    "utf8",
+  );
+  const shopifyServer = readFileSync(
+    new URL("../app/shopify.server.ts", import.meta.url),
+    "utf8",
+  );
+  const shopLevelAdmin = readFileSync(
+    new URL(
+      "../app/lib/shopify/shop-level-admin.server.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const appRoute = readFileSync(
+    new URL("../app/routes/app.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(marketplaceConfig, /topics = \["app\/uninstalled"\]/);
+  assert.match(marketplaceConfig, /uri = "\/webhooks\/app\/uninstalled"/);
+  assert.match(shopifyServer, /RequestedTokenType\.OfflineAccessToken/);
+  assert.match(shopifyServer, /expiring: true/);
+  assert.match(shopLevelAdmin, /await acquireOfflineSession/);
+  assert.match(appRoute, /searchParams\.get\("id_token"\)/);
+});
+
 test("billing callback matching rejects forged and mismatched plan handles", () => {
   const active = {
     state: "active",

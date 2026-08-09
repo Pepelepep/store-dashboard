@@ -70,6 +70,11 @@ export const middleware: MiddlewareFunction[] = [
     }
 
     const { session } = await authenticate.admin(request);
+    const requestUrl = new URL(request.url);
+    const authorization = request.headers.get("authorization");
+    const sessionToken =
+      requestUrl.searchParams.get("id_token") ??
+      (authorization?.match(/^Bearer\s+(.+)$/i)?.[1] || undefined);
     const supabase = getSupabaseAdminClient();
     let permissions: PermissionContext;
     try {
@@ -93,6 +98,7 @@ export const middleware: MiddlewareFunction[] = [
     const billingAdmin = await getShopLevelAdminClient({
       shop: session.shop,
       route: "app.billing-middleware",
+      sessionToken,
     });
     const access = await requireBillingAccess({
       admin: billingAdmin,
