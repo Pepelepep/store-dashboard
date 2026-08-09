@@ -89,6 +89,13 @@ function getRouteErrorCopy(error: unknown) {
 export function RouteErrorNotice() {
   const error = useRouteError();
   const copy = getRouteErrorCopy(error);
+  const canReturnToDashboard =
+    isRouteErrorResponse(error) &&
+    (error.status === 401 || error.status === 403) &&
+    error.data !== "ShopOps access required." &&
+    error.data !==
+      "Your ShopOps access needs to be updated by the store owner." &&
+    error.data !== "Forbidden: no location access configured";
 
   return (
     <main
@@ -102,6 +109,11 @@ export function RouteErrorNotice() {
         title={copy.title}
         message={copy.message}
         bullets={copy.bullets}
+        cta={
+          canReturnToDashboard
+            ? { to: "/app", label: "Return to dashboard" }
+            : undefined
+        }
         tone={copy.tone}
         style={{ margin: "0 auto", maxWidth: 920 }}
       />

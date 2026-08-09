@@ -3635,6 +3635,8 @@ test("email-first ShopOps access reuses people, binds verified identity, and kee
   assert.doesNotMatch(appRoute, /Shopify user ID/);
   assert.match(routeError, /title: "ShopOps access required"/);
   assert.match(routeError, /title: "Location access denied"/);
+  assert.match(routeError, /label: "Return to dashboard"/);
+  assert.match(routeError, /to: "\/app"/);
 
   assert.match(appRoute, /getShopLevelAdminClient/);
   assert.match(entitlements, /getShopLevelAdminClient/);
