@@ -27,7 +27,7 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Final listing screenshots | REPLACE | Capture dashboard-only frames after role QA, using synthetic staff and no PII. Do not expose the current Staff filter because it also lists identities from real synchronized data. |
 | Automatic maintenance scheduler | PASSED 2026-08-08 | Render service `shopops-maintenance-tick` is active and completed successful maintenance runs while the two lifecycle stores synchronized. Keep it active through review. |
 | Live compliance webhooks | IN PROGRESS | `app/uninstalled` was missing from the deployed Shopify configuration and was fixed in app version `shopops-studio-15`. Live retest proved both online and offline sessions drop to zero within seconds. Lifecycle B remains uninstalled from 2026-08-09 01:50 UTC for the real Shopify `shop/redact` delivery after 48 hours; an automated verification is scheduled for 2026-08-11 02:05 UTC. |
-| Embedded-admin performance | NEEDS TRACE | Shopify reports LCP 3,552 ms, above the 2,500 ms Built for Shopify target. Warm public-service TTFB is healthy (root 169 ms; public legal/support pages 150-273 ms), so the number must be decomposed inside the authenticated embedded Dashboard before attributing it to hosting, data loading, JavaScript, or rendering. The required Chrome DevTools trace connection is not configured in this workspace; do not optimize from bundle size alone. |
+| Embedded-admin performance | TRACE PENDING AFTER RESTART | Shopify reports seven-day LCP p75 3,552 ms; Aug 9 is 3,556 ms across 28 loads. INP is good at 34 ms and CLS is 0.0. Render Starter is not saturated (roughly 20-30% memory, normally under 5% CPU with brief ~20% peaks); Supabase Micro is also not saturated (8% CPU, 42% memory, 1% disk I/O). Business queries are generally below 7 ms, with observed maxima below 20 ms. The Chrome DevTools trace server is now configured in Codex but requires an app restart before its tools are available. Do not upgrade infrastructure before the authenticated trace identifies the LCP phase. |
 
 ## MUST FIX / COMPLETE
 
@@ -39,7 +39,7 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Admin experience | LIVE PASS 2026-08-08 | Admin saw all three locations, 118 orders and 18,027.93 CAD, plus the administrative areas. ShopOps Plan & billing was read-only with no Manage plan action. |
 | Owner-sensitive actions | LIVE PASS WITH DOCUMENTED SHOPIFY BOUNDARY | Owner restored QA Pilot after the controlled Solo test. ShopOps only exposes and confirms plan changes for Owner. Direct Shopify-hosted billing remains governed by Shopify staff permissions and cannot be represented as a ShopOps role guarantee. |
 | Plan capacity enforcement | LIVE SOLO PASS; DEPLOYED GUARDS VERIFIED | Solo was activated temporarily with 3 reporting locations and 2 ShopOps users. ShopOps showed `3 of 1` and `2 of 1` over-capacity states, blocked Viewer reports, rejected a third ShopOps user without leaving any person/membership/grant row, and rejected saving all three locations without changing the current selection. QA Pilot was restored active with 3 locations and 2 users within capacity. The deployed database functions enforce serialized user/location limits and are executable only by `service_role`. Growth remains 5 locations/5 users; Multi-location remains 10 locations/unlimited users; QA Pilot is private and unmetered. |
-| Shopify compliance webhooks | CODE PASS; LIVE DATA REQUEST PASS; REDACT PENDING | Shopify CLI delivered a valid-HMAC `customers/data_request` sample to production at 2026-08-09 02:37 UTC. Supabase recorded one minimal `received` audit event for Shopify's fixed dummy domain `shop.myshopify.com`; raw customer contact values were not retained. Before sending destructive samples, all 20 redaction tables and the Prisma `Session` table were verified to contain zero rows for that dummy domain. `customers/redact` and `shop/redact` still require explicit destructive-test approval; Lifecycle B remains the real 48-hour `shop/redact` proof. |
+| Shopify compliance webhooks | LIVE HANDLER PASS; REAL 48-HOUR DELIVERY PENDING | Shopify CLI delivered valid-HMAC samples for all three mandatory topics to production. `customers/data_request` was recorded as `received`; `customers/redact` completed with zero matching dummy orders; `shop/redact` completed with zero dummy rows and session deletion confirmed. Audit records retain no raw contact values. Lifecycle B remains the real automatic 48-hour `shop/redact` delivery proof. |
 | API/scopes/privacy declarations | MANUAL CONFIRMATION NEEDED | Partner Dashboard declarations must exactly match deployed scopes and Protected Customer Data/read_all_orders approvals. |
 | Listing validation | INCOMPLETE | Resolve feature media, final screenshots, active pricing plans, and screencast URL. |
 | Shopify extension validation | CANDIDATE PASS 2026-08-08 | POS extension API `2026-01` was paired with stale `@shopify/ui-extensions` 2025.10 types, which blocked Shopify CLI validation. The dependency is now aligned to 2026.1.5; `shopify app build` passes and the extension bundle is ~9.1 KB compressed. Shopify accepted the complete non-live candidate version `shopops-studio-16-candidate`; release remains pending until the final smoke gate. |
@@ -60,6 +60,10 @@ or other personal data. Marketplace media must use the synthetic demo staff.
   Shopify admin shell and avoid empty surrounding UI.
 - Use six obviously fictional names in screenshots. Blur is a final safety net,
   not the primary privacy strategy.
+- Supabase reports four unindexed access-graph foreign keys and seven duplicate
+  indexes. These do not explain the current LCP, but should be cleaned through
+  a reviewed migration after checking query plans; do not resize compute as a
+  substitute.
 
 ## ACCEPTABLE FOR V1
 
@@ -126,6 +130,11 @@ or other personal data. Marketplace media must use the synthetic demo staff.
   normalizing the generated declaration comment, production build passed,
   Shopify POS extension build passed, all 127 P0/Marketplace tests passed, and
   the production dependency audit reported zero vulnerabilities.
+- Live Owner route smoke on 2026-08-08: Overview, Compare Locations, Costs,
+  People, and Settings all rendered without 404/500. People showed eight
+  sales-only profiles as `No access`, zero `Needs attention`, and the active
+  Viewer remained scoped to Laval. Costs contained no obsolete `50% fallback`
+  wording.
 
 ## Live role and plan evidence — 2026-08-08
 
@@ -163,7 +172,9 @@ Do not redesign the dashboard. The smallest safe path is:
    48 hours;
 2. capture an authenticated embedded Dashboard performance trace and reduce the
    measured LCP if the 3,552 ms result reproduces;
-3. finish the true Chrome Incognito and Owner People/Costs/navigation smoke;
+3. finish true Chrome Incognito after enabling the Codex extension's `Allow in
+   Incognito` permission; the normal-profile Owner People/Costs/navigation
+   smoke already passes;
 4. verify Partner Dashboard scopes, protected-data declarations, public pricing,
    screencast, and listing validation;
 5. capture focused Marketplace media from the proven flows;
