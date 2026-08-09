@@ -334,16 +334,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const canManageSync = permissions.capabilities.manage_sync;
 
   const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
-    canManageSync
-      ? await supabase
-          .from("sync_runs")
-          .select("finished_at")
-          .eq("shop_domain", session.shop)
-          .eq("status", "success")
-          .order("finished_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-      : { data: null, error: null };
+    await supabase
+      .from("sync_runs")
+      .select("finished_at")
+      .eq("shop_domain", session.shop)
+      .eq("status", "success")
+      .order("finished_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
   if (lastSuccessfulSyncError) {
     throw new Error(
@@ -753,6 +751,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     vendorOptions,
     startDate,
     endDate,
+    isTodayRange: startDate === today && endDate === today,
     preservedSearchParams,
     lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
     readiness: {
@@ -879,6 +878,7 @@ export default function DbDashboardPage() {
     vendorOptions,
     startDate,
     endDate,
+    isTodayRange,
     preservedSearchParams,
     lastSuccessfulSync,
     readiness,
@@ -1079,8 +1079,12 @@ export default function DbDashboardPage() {
 
       {!readiness.noAssignedLocations && hasNoSalesForPeriod ? (
         <CompactEmptyDataNotice
-          title="No sales for this period."
-          guidance="Try another date range or confirm sync status."
+          title={isTodayRange ? "No sales yet today." : "No sales for this period."}
+          guidance={
+            isTodayRange
+              ? "Sales will appear here as today's Shopify orders are synced."
+              : "Try another date range or confirm sync status."
+          }
           action={
             syncCenterCta ? (
               <AppButtonLink compact to={syncCenterCta.to} variant="secondary">

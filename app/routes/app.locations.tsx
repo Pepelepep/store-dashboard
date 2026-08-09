@@ -213,6 +213,7 @@ type LoaderData = {
   vendorOptions: DashboardFilterOption[];
   startDate: string;
   endDate: string;
+  isTodayRange: boolean;
   preservedSearchParams: Array<{ name: string; value: string }>;
   lastSuccessfulSync: string | null;
   selectedDays: number;
@@ -1249,16 +1250,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   ]);
 
   const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
-    canManageSync
-      ? await supabase
-          .from("sync_runs")
-          .select("finished_at")
-          .eq("shop_domain", session.shop)
-          .eq("status", "success")
-          .order("finished_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-      : { data: null, error: null };
+    await supabase
+      .from("sync_runs")
+      .select("finished_at")
+      .eq("shop_domain", session.shop)
+      .eq("status", "success")
+      .order("finished_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
   if (lastSuccessfulSyncError) {
     throw new Error(
       `Latest successful sync could not be loaded: ${lastSuccessfulSyncError.message}`,
@@ -1466,6 +1465,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     vendorOptions,
     startDate,
     endDate,
+    isTodayRange: startDate === today && endDate === today,
     preservedSearchParams,
     lastSuccessfulSync: lastSuccessfulSyncRun?.finished_at ?? null,
     selectedDays,
@@ -2993,6 +2993,7 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
     vendorOptions,
     startDate,
     endDate,
+    isTodayRange,
     preservedSearchParams,
     lastSuccessfulSync,
     kpis,
@@ -3538,8 +3539,14 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
         />
       ) : hasNoSalesForRange ? (
         <CompactEmptyDataNotice
-          title="No sales for this date range."
-          guidance="Try another date range or confirm sync status."
+          title={
+            isTodayRange ? "No sales yet today." : "No sales for this date range."
+          }
+          guidance={
+            isTodayRange
+              ? "Sales will appear here as today's Shopify orders are synced."
+              : "Try another date range or confirm sync status."
+          }
           action={
             dataSyncPath ? (
               <AppButtonLink compact to={dataSyncPath} variant="secondary">

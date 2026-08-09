@@ -4258,12 +4258,29 @@ test("Dashboard and Locations share compact filters and compact empty sales noti
   assert.match(presentation, /export function CompactEmptyDataNotice/);
   assert.match(
     dashboard,
-    /hasNoSalesForPeriod \? \([\s\S]*?<CompactEmptyDataNotice[\s\S]*?No sales for this period\./,
+    /hasNoSalesForPeriod \? \([\s\S]*?<CompactEmptyDataNotice[\s\S]*?No sales yet today\.[\s\S]*?No sales for this period\./,
   );
   assert.match(
     locations,
-    /hasNoSalesForRange \? \([\s\S]*?<CompactEmptyDataNotice[\s\S]*?No sales for this date range\./,
+    /hasNoSalesForRange \? \([\s\S]*?<CompactEmptyDataNotice[\s\S]*?No sales yet today\.[\s\S]*?No sales for this date range\./,
   );
+  for (const report of [dashboard, locations]) {
+    assert.match(
+      report,
+      /isTodayRange: startDate === today && endDate === today/,
+    );
+    assert.match(
+      report,
+      /Sales will appear here as today's Shopify orders are synced\./,
+    );
+    assert.doesNotMatch(
+      report.slice(
+        report.indexOf("const { data: lastSuccessfulSyncRun"),
+        report.indexOf("if (lastSuccessfulSyncError)"),
+      ),
+      /canManageSync\s*\?/,
+    );
+  }
   assert.doesNotMatch(
     dashboard.slice(
       dashboard.indexOf(

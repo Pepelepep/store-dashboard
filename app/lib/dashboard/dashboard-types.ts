@@ -217,6 +217,7 @@ export type DashboardLoaderData = {
   vendorOptions: DashboardFilterOption[];
   startDate: string;
   endDate: string;
+  isTodayRange: boolean;
   preservedSearchParams: Array<{ name: string; value: string }>;
   lastSuccessfulSync: string | null;
   readiness: {
