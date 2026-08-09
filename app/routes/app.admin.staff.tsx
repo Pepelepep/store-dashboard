@@ -7,7 +7,7 @@ import {
   useLocation,
   useNavigation,
 } from "react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "@shopify/polaris";
 import { PersonIcon, PersonLockIcon } from "@shopify/polaris-icons";
 
@@ -1923,6 +1923,13 @@ export default function StaffPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [menu, setMenu] = useState<string | null>(null);
+  useEffect(() => {
+    if (result?.ok && navigation.state === "idle") {
+      setOverlay(null);
+      setSelectedId(null);
+      setMenu(null);
+    }
+  }, [navigation.state, result]);
   const selected =
     data.profiles.find((profile) => profile.id === selectedId) ?? null;
   const selectedFilter = (tab === "access"
@@ -1992,6 +1999,13 @@ export default function StaffPage() {
     setMenu(null);
   };
   const locationLabel = (profile: StaffProfile) => {
+    if (
+      profile.accessState === "no_access" ||
+      profile.accessState === "revoked" ||
+      profile.accessState === "archived"
+    ) {
+      return "—";
+    }
     if (profile.hasAccessIntegrityIssue) return "Needs repair";
     if (
       profile.membership &&

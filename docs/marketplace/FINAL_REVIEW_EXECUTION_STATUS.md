@@ -19,12 +19,14 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 
 | Item | Status | Proof required before submission |
 | --- | --- | --- |
-| Live Owner/Admin/Manager/Viewer role QA | BLOCKED | Four real sign-in identities (or Shopify staff accounts) complete the role matrix below. Fake seed emails are reporting identities, not login accounts. |
+| Live Owner/Admin/Manager/Viewer role QA | PARTIAL | Owner successfully changed the existing non-owner membership Viewer → Manager (two locations) → Admin (all locations) → revoked → Viewer (Laval only), with canonical DB state verified after restoration. Visibility and direct-URL denial still require signing in as that non-owner Shopify account. |
 | Reporting-location lifecycle | PASSED 2026-08-08 | Laval was disabled: reporting changed from three locations/118 orders/18,027.93 CAD to two locations/85 orders/13,500.87 CAD. Re-enabling restored the exact original totals. All 225 synthetic lines remained stored and all three Shopify locations remained active. |
 | Billing lifecycle | NOT RUN | Owner starts trial, approves charge, changes plan, cancels; Admin/Manager/Viewer cannot perform Billing/Plan actions. Only then enable public Partner Dashboard plans. |
 | Fresh install/reinstall | NOT RUN | Clean development store: install, OAuth, onboarding, first sync, reload, uninstall, reinstall, and retained/deleted state verified. |
 | Marketplace screencast | MISSING | Reviewer video shows install/onboarding, location setup, staff mapping, role behavior, reports, and billing. |
 | Final listing screenshots | REPLACE | Capture dashboard-only frames after role QA, using synthetic staff and no PII. Do not expose the current Staff filter because it also lists identities from real synchronized data. |
+| Automatic maintenance scheduler | BLOCKED | No successful maintenance tick since 2026-07-26 UTC. Manual sync succeeds, but the Render cron/secret/service configuration must be restored and two consecutive ticks observed. |
+| Live compliance webhooks | BLOCKED | Operational queue is healthy (157 done, zero pending/failed), but the demo shop has no recorded customers/data_request, customers/redact, or shop/redact delivery proof. |
 
 ## MUST FIX / COMPLETE
 
@@ -38,6 +40,10 @@ or other personal data. Marketplace media must use the synthetic demo staff.
 | Shopify compliance webhooks | CODE PASS; LIVE DELIVERY NEEDED | Send and verify customers/data_request, customers/redact, shop/redact with valid HMAC and inspect minimal audit records. |
 | API/scopes/privacy declarations | MANUAL CONFIRMATION NEEDED | Partner Dashboard declarations must exactly match deployed scopes and Protected Customer Data/read_all_orders approvals. |
 | Listing validation | INCOMPLETE | Resolve feature media, final screenshots, active pricing plans, and screencast URL. |
+| Privileged Supabase RPC grants | FIXED 2026-08-08 | Five SECURITY DEFINER functions were executable by anon/authenticated in the remote DB. Grants are now service-role-only and the security advisor has no remaining WARN findings. |
+| Historical inventory identity | FIXED 2026-08-08 | Repaired 19 inventory-level rows with legacy `-` variant IDs through their canonical inventory-item relationship; the critical data-quality count is now zero. |
+| People access semantics | FIXED IN BRANCH | Sales-only staff without dashboard membership now show “No access” instead of false “Needs attention” alerts. Successful access saves close the modal; revoked users no longer display stale assigned locations. Deployment verification remains. |
+| Estimated-cost diagnostic copy | FIXED IN BRANCH | Removed the obsolete hard-coded “50% fallback” wording; the diagnostic now refers to the store-configured estimate. Deployment verification remains. |
 
 ## SHOULD FIX IF LOW RISK
 

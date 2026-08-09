@@ -1,4 +1,5 @@
 export type ShopOpsAccessState =
+  | "no_access"
   | "pending"
   | "active"
   | "revoked"
@@ -7,6 +8,7 @@ export type ShopOpsAccessState =
 
 export type ShopOpsAccessPresentation = {
   label:
+    | "No access"
     | "Waiting for first sign-in"
     | "Active"
     | "Access revoked"
@@ -114,7 +116,7 @@ export function getShopOpsAccessState({
   if (membershipStatus === "active") {
     return shopifyUserId ? "active" : "pending";
   }
-  return "needs_attention";
+  return "no_access";
 }
 
 export function getShopOpsAccessPresentation({
@@ -126,6 +128,13 @@ export function getShopOpsAccessPresentation({
 }): ShopOpsAccessPresentation {
   if (state === "active") {
     return { label: "Active", showConfiguredRole: true, tone: "success" };
+  }
+  if (state === "no_access") {
+    return {
+      label: "No access",
+      showConfiguredRole: false,
+      tone: "neutral",
+    };
   }
   if (state === "pending") {
     return {

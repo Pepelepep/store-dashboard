@@ -2803,7 +2803,7 @@ test("ShopOps access normalizes merchant email and requires verified Shopify ema
   assert.equal(missingEmail.isEmailVerified, true);
 });
 
-test("ShopOps access states distinguish pending, active, revoked, archived, and attention", () => {
+test("ShopOps access states distinguish no access, pending, active, revoked, archived, and attention", () => {
   assert.equal(
     getShopOpsAccessState({
       isOwner: false,
@@ -2848,7 +2848,19 @@ test("ShopOps access states distinguish pending, active, revoked, archived, and 
       membershipStatus: null,
       shopifyUserId: null,
     }),
-    "needs_attention",
+    "no_access",
+  );
+
+  assert.deepEqual(
+    getShopOpsAccessPresentation({
+      state: "no_access",
+      hasApprovedAccess: false,
+    }),
+    {
+      label: "No access",
+      showConfiguredRole: false,
+      tone: "neutral",
+    },
   );
 
   assert.deepEqual(

@@ -191,9 +191,9 @@ export async function loadDataQualityReport({
     buildIssue({
       report,
       key: "orderLinesUsingFallbackCost",
-      title: "Order lines using fallback cost",
+      title: "Order lines using estimated cost",
       explanation:
-        "These rows use the 50% fallback because no current cost exists.",
+        "These rows use the store's configured estimate because no current Shopify cost exists.",
       severity: "warning",
     }),
     buildIssue({
