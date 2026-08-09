@@ -4,6 +4,9 @@
 --
 -- This script does NOT create locations, products, variants, inventory,
 -- fixed expenses, sync_runs, or user_location_access/dashboard_memberships.
+-- It does create/update clearly synthetic staff_people and identity aliases
+-- (@demo-shopops.test) so the canonical staff reports resolve names instead of
+-- grouping all demo POS sales under "Unassigned".
 -- shopops-demo.myshopify.com is a real, actively-installed Shopify store with
 -- its own real synced catalog, real order history, real sync jobs, and real
 -- canonical access (owner + a Laval-scoped viewer) already correctly set up
@@ -116,16 +119,69 @@ begin
     staff_slot int,
     staff_name text,
     staff_email text,
+    person_id uuid,
+    effective_staff_id text,
     primary key (location_idx, staff_slot)
   ) on commit drop;
 
   for i in 0..(v_location_count - 1) loop
     for s in 0..1 loop
-      insert into tmp_staff (location_idx, staff_slot, staff_name, staff_email)
-      values (i, s, v_staff_names[v_name_idx], v_staff_emails[v_name_idx]);
+      insert into tmp_staff (
+        location_idx, staff_slot, staff_name, staff_email, effective_staff_id
+      ) values (
+        i, s, v_staff_names[v_name_idx], v_staff_emails[v_name_idx],
+        'demo-pos-user-' || (i + 1)::text || '-' || (s + 1)::text
+      );
       v_name_idx := v_name_idx + 1;
     end loop;
   end loop;
+
+  -- Canonicalize the demo sellers using the same identity path as POS session
+  -- attribution in production: effective id + pos_user_id alias -> staff person.
+  -- Existing real people and aliases are never deleted or overwritten.
+  update public.staff_people person
+  set display_name = staff.staff_name,
+      is_active = true,
+      updated_at = now()
+  from tmp_staff staff
+  where person.shop_domain = demo_shop
+    and lower(person.email) = lower(staff.staff_email);
+
+  insert into public.staff_people (shop_domain, display_name, email, is_active)
+  select demo_shop, staff_name, staff_email, true
+  from tmp_staff staff
+  where not exists (
+    select 1
+    from public.staff_people person
+    where person.shop_domain = demo_shop
+      and lower(person.email) = lower(staff.staff_email)
+  );
+
+  update tmp_staff staff
+  set person_id = person.id
+  from public.staff_people person
+  where person.shop_domain = demo_shop
+    and lower(person.email) = lower(staff.staff_email);
+
+  insert into public.staff_identity_aliases (
+    shop_domain, person_id, alias_type, alias_value, source,
+    first_seen_at, last_seen_at, last_location_id, review_status,
+    suggestion_dismissed_at, updated_at
+  )
+  select
+    demo_shop, staff.person_id, 'pos_user_id', staff.effective_staff_id,
+    'demo_seed', now() - interval '30 days', now(), location.location_id,
+    'mapped', null, now()
+  from tmp_staff staff
+  join tmp_locations location on location.idx = staff.location_idx
+  on conflict (shop_domain, alias_type, alias_value) do update
+  set person_id = excluded.person_id,
+      source = excluded.source,
+      last_seen_at = excluded.last_seen_at,
+      last_location_id = excluded.last_location_id,
+      review_status = 'mapped',
+      suggestion_dismissed_at = null,
+      updated_at = now();
 
   -- Generate 100 orders spread over the last 30 days, each with full staff
   -- attribution, so Sales by Staff / by Location / by Vendor all have real
@@ -174,7 +230,10 @@ begin
         unit_cost, cogs, gross_profit, cost_source,
         gross_sales, discounts, discount_amount, net_sales,
         returned_quantity, refunded_amount, returns,
-        staff_member_name, staff_member_email, staff_source, created_at
+        staff_member_name, staff_member_email, staff_source,
+        shopops_user_id, shopops_effective_staff_id,
+        shopops_attribution_source, shopops_staff_label,
+        shopops_pos_location_id, created_at
       ) values (
         demo_shop, v_order_id, 'gid://shopify/LineItem/9865' || lpad(v_line_item_seq::text, 6, '0'),
         v_order_name, v_order_ts,
@@ -188,7 +247,9 @@ begin
         v_line_gross, v_line_discount, v_line_discount,
         v_line_gross - v_line_discount - coalesce(v_refund_amount, 0),
         v_returned_qty, v_refund_amount, v_refund_amount,
-        v_staff.staff_name, v_staff.staff_email, 'pos_session', now()
+        v_staff.staff_name, v_staff.staff_email, 'pos_session',
+        v_staff.effective_staff_id, v_staff.effective_staff_id,
+        'pos_session', v_staff.staff_name, v_loc.location_id, now()
       );
     end loop;
 
