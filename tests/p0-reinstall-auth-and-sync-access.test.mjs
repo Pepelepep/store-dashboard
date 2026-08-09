@@ -4466,6 +4466,14 @@ test("KPI comparisons use the exact preceding period and metric-aware tones", ()
     new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
     "utf8",
   );
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+  const presentation = readFileSync(
+    new URL("../app/components/ui/ShopOpsPage.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(
     dashboardMetrics,
@@ -4482,6 +4490,20 @@ test("KPI comparisons use the exact preceding period and metric-aware tones", ()
   assert.match(
     dashboard,
     /comparison: \{[\s\S]*?revenue: previousRevenue[\s\S]*?refunds: previousRefunds[\s\S]*?salesByHour: previousSalesByHour/,
+  );
+  assert.match(
+    locations,
+    /const previousPeriod = getPreviousPeriodDateRange\(\{ startDate, endDate \}\)/,
+  );
+  assert.match(
+    locations,
+    /const comparisonKpis = computeGlobalKpis\([\s\S]*?orderLines: previousSalesRows[\s\S]*?refundsByLocation: previousRefundsByLocation/,
+  );
+  assert.match(locations, /addComparison\(\s*"sales"/);
+  assert.match(locations, /addComparison\(\s*"averageOrderValue"/);
+  assert.match(
+    presentation,
+    /\.shopops-location-comparison-table th:first-child[^}]*min-width: 190px[^}]*position: sticky/,
   );
 });
 

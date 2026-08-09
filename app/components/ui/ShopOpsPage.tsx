@@ -529,8 +529,12 @@ const SHOPOPS_PRESENTATION_CSS = `
   .shopops-data-table__empty { color: var(--shopops-muted); padding: 16px !important; text-align: left !important; }
   .shopops-data-table__sort { align-items: center; background: transparent; border: 0; color: inherit; cursor: pointer; display: inline-flex; font: inherit; font-weight: inherit; gap: 4px; padding: 0; text-transform: inherit; }
   .shopops-data-table__primary { display: grid; gap: 4px; }
-  .shopops-location-benchmark { align-items: center; color: var(--shopops-muted); display: flex; flex-wrap: wrap; font-size: 10px; font-weight: 650; gap: 4px 7px; line-height: 1.35; }
-  .shopops-location-benchmark strong { border-radius: 999px; font-size: 10px; padding: 2px 6px; }
+  .shopops-location-comparison-table th:first-child, .shopops-location-comparison-table td:first-child { background: var(--shopops-surface); box-shadow: 1px 0 0 var(--shopops-border); left: 0; min-width: 190px; position: sticky; width: 190px; z-index: 1; }
+  .shopops-location-comparison-table th:first-child { background: #f9fafb; z-index: 2; }
+  .shopops-location-comparison-table .shopops-data-table__primary > strong { font-size: 13px; line-height: 1.3; }
+  .shopops-location-benchmark { align-items: flex-start; color: var(--shopops-muted); display: grid; font-size: 10px; font-weight: 650; gap: 4px; line-height: 1.25; justify-items: start; }
+  .shopops-location-benchmark span, .shopops-location-benchmark strong { white-space: nowrap; }
+  .shopops-location-benchmark strong { border-radius: 999px; font-size: 10px; padding: 3px 7px; }
   .shopops-location-benchmark strong[data-tone="above"] { background: #dcfce7; color: #067647; }
   .shopops-location-benchmark strong[data-tone="below"] { background: #fff7ed; color: #b54708; }
   .shopops-location-benchmark strong[data-tone="neutral"] { background: #e5e7eb; color: #4b5563; }

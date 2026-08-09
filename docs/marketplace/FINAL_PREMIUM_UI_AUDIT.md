@@ -107,4 +107,12 @@ client-only drill-downs do not alter the server-side comparison scope.
 
 Locations adds portfolio-relative context without another data query: each row
 shows its share of selected sales, variance from the selected-location average,
-and a proportional Net Sales bar.
+and a proportional Net Sales bar. The location column now has a stable minimum
+width and remains visible during horizontal scrolling; its benchmark copy uses
+compact, non-wrapping `sales share` and `above/below avg` labels.
+
+The Locations KPI block now uses the same exact preceding-period contract as
+Dashboard. All eleven metrics compare against a period of identical length,
+including matching reporting locations, staff, vendor, refunds, COGS, and
+prorated operating expenses. Cost/refund reductions use the favorable tone;
+sales, activity, margin, profit, and AOV increases use the favorable tone.

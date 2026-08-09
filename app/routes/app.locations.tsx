@@ -70,6 +70,7 @@ import {
   getLineNetSales,
   getLineReturnedQuantity,
   getLineReturns,
+  getPreviousPeriodDateRange,
   getStaffDisplayLabel,
   getStaffFilterValue,
   getTodayStoreDate,
@@ -98,9 +99,11 @@ import { reconcileTrendRowsWithCashRefunds } from "../lib/dashboard/location-tre
 import { limitRankedBreakdownRows } from "../lib/dashboard/ranked-breakdown";
 import { formatTrendPeriodLabel } from "../lib/dashboard/chart-formatters";
 import {
+  buildReportKpiComparison,
   buildLocationOnlyReportKpiItems,
   buildSharedReportKpiItems,
   REPORT_METRIC_DEFINITIONS,
+  type ReportKpiComparison,
   type ReportKpiId,
 } from "../lib/dashboard/kpi-presentation";
 
@@ -221,6 +224,7 @@ type LoaderData = {
   selectedDays: number;
   period: Period;
   kpis: Omit<LocationMetricRow, "locationId" | "locationName">;
+  comparisonKpis: Omit<LocationMetricRow, "locationId" | "locationName">;
   hasOperatingExpenses: boolean;
   financialMetricsVersion: FinancialMetricsVersion;
   locationRows: LocationMetricRow[];
@@ -539,6 +543,40 @@ function filterOrderLines({
 
     return staffMatches && vendorMatches;
   });
+}
+
+function toLocationsSalesRows(
+  orderLines: OrderLineDbRow[],
+  financialMetricsVersion: FinancialMetricsVersion,
+): LocationsSalesRow[] {
+  const isFinancialMetricsV2 = financialMetricsVersion === "v2";
+
+  return orderLines.map((row) => ({
+    created_at_shopify: row.created_at_shopify,
+    retail_location_id: row.retail_location_id,
+    retail_location_name: row.retail_location_name,
+    vendor: row.vendor,
+    staff_member_id: row.staff_member_id,
+    staff_member_name: row.staff_member_name,
+    staff_member_email: row.staff_member_email,
+    resolved_staff_display_name: row.resolved_staff_display_name,
+    resolved_staff_status: row.resolved_staff_status,
+    resolved_staff_key: row.resolved_staff_key,
+    shopify_order_id: row.shopify_order_id,
+    quantity: Number(row.quantity ?? 0),
+    revenue: isFinancialMetricsV2
+      ? getLineNetSales(row)
+      : Number(row.revenue ?? 0),
+    cogs: getLineCogsV2(row),
+    gross_sales: isFinancialMetricsV2 ? getLineGrossSales(row) : undefined,
+    discounts: isFinancialMetricsV2 ? getLineDiscounts(row) : undefined,
+    returns: isFinancialMetricsV2 ? getLineReturns(row) : undefined,
+    net_sales: isFinancialMetricsV2 ? getLineNetSales(row) : undefined,
+    returned_quantity: getLineReturnedQuantity(row),
+    cost_at_sale: row.cost_at_sale,
+    unit_cost: row.unit_cost,
+    cost_source: row.cost_source,
+  }));
 }
 
 function getVendorDrilldownValue(row: LocationsSalesRow) {
@@ -1175,6 +1213,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   );
   const startDateUtc = storeDateToUtcIso(startDate);
   const endExclusiveUtc = storeDateToUtcIso(nextDate(endDate));
+  const previousPeriod = getPreviousPeriodDateRange({ startDate, endDate });
+  const previousStartDateUtc = storeDateToUtcIso(previousPeriod.startDate);
+  const previousEndExclusiveUtc = storeDateToUtcIso(
+    nextDate(previousPeriod.endDate),
+  );
   const financialMetricsVersion = normalizeFinancialMetricsVersion(
     process.env.FINANCIAL_METRICS_VERSION,
   );
@@ -1220,36 +1263,48 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const shouldFilterOrderLinesByLocation = true;
   const canManageSync = permissions.capabilities.manage_sync;
 
-  const [orderLinesResult, expenses] = await Promise.all([
-    selectedLocationIds.length > 0
-      ? fetchLocationOrderLines({
-          supabase,
-          shop: session.shop,
-          startDateUtc,
-          endExclusiveUtc,
-          selectedLocationIds,
-          shouldFilterByLocation: shouldFilterOrderLinesByLocation,
-          financialMetricsVersion,
-        })
-      : Promise.resolve({ data: [], error: null }),
-    fetchAllSupabasePages<FixedExpenseDbRow & { id: string }>({
-      label: "Location performance expenses",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("fixed_expenses")
-          .select(
-            "id, expense_name, expense_category, monthly_amount, shopify_location_id, location_name, start_month, end_month, is_active",
-          )
-          .eq("shop_domain", session.shop)
-          .eq("is_active", true)
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: Array<FixedExpenseDbRow & { id: string }> | null;
-          error: { message: string } | null;
-        }>,
-    }),
-  ]);
+  const [orderLinesResult, previousOrderLinesResult, expenses] =
+    await Promise.all([
+      selectedLocationIds.length > 0
+        ? fetchLocationOrderLines({
+            supabase,
+            shop: session.shop,
+            startDateUtc,
+            endExclusiveUtc,
+            selectedLocationIds,
+            shouldFilterByLocation: shouldFilterOrderLinesByLocation,
+            financialMetricsVersion,
+          })
+        : Promise.resolve({ data: [], error: null }),
+      selectedLocationIds.length > 0
+        ? fetchLocationOrderLines({
+            supabase,
+            shop: session.shop,
+            startDateUtc: previousStartDateUtc,
+            endExclusiveUtc: previousEndExclusiveUtc,
+            selectedLocationIds,
+            shouldFilterByLocation: shouldFilterOrderLinesByLocation,
+            financialMetricsVersion,
+          })
+        : Promise.resolve({ data: [], error: null }),
+      fetchAllSupabasePages<FixedExpenseDbRow & { id: string }>({
+        label: "Location performance expenses",
+        getRowKey: (row) => row.id,
+        fetchPage: (from, to) =>
+          supabase
+            .from("fixed_expenses")
+            .select(
+              "id, expense_name, expense_category, monthly_amount, shopify_location_id, location_name, start_month, end_month, is_active",
+            )
+            .eq("shop_domain", session.shop)
+            .eq("is_active", true)
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: Array<FixedExpenseDbRow & { id: string }> | null;
+            error: { message: string } | null;
+          }>,
+      }),
+    ]);
 
   const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
     await supabase
@@ -1267,12 +1322,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   const rawOrderLines = (orderLinesResult.data ?? []) as OrderLineDbRow[];
+  const rawPreviousOrderLines = (previousOrderLinesResult.data ??
+    []) as OrderLineDbRow[];
   const staffAliasesByKey = await fetchStaffIdentityAliasesForOrderLines({
     supabase,
     shop: session.shop,
-    orderLines: rawOrderLines,
+    orderLines: [...rawOrderLines, ...rawPreviousOrderLines],
   });
-  const orderLines = rawOrderLines.map((row) => {
+  const resolveOrderLineStaff = (row: OrderLineDbRow) => {
     const resolution = resolveStaffDisplayNameForOrderLine(
       row,
       staffAliasesByKey,
@@ -1283,7 +1340,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       resolved_staff_status: resolution.status,
       resolved_staff_key: resolution.staffKey,
     };
-  });
+  };
+  const orderLines = rawOrderLines.map(resolveOrderLineStaff);
+  const previousOrderLines = rawPreviousOrderLines.map(resolveOrderLineStaff);
   if (allLocations.length === 0 || orderLines.length === 0) {
     logEmptyDataState({
       route: "app.locations",
@@ -1307,32 +1366,19 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selectedStaff,
     selectedVendor,
   });
-  const salesRows: LocationsSalesRow[] = filteredOrderLines.map((row) => ({
-    created_at_shopify: row.created_at_shopify,
-    retail_location_id: row.retail_location_id,
-    retail_location_name: row.retail_location_name,
-    vendor: row.vendor,
-    staff_member_id: row.staff_member_id,
-    staff_member_name: row.staff_member_name,
-    staff_member_email: row.staff_member_email,
-    resolved_staff_display_name: row.resolved_staff_display_name,
-    resolved_staff_status: row.resolved_staff_status,
-    resolved_staff_key: row.resolved_staff_key,
-    shopify_order_id: row.shopify_order_id,
-    quantity: Number(row.quantity ?? 0),
-    revenue: isFinancialMetricsV2
-      ? getLineNetSales(row)
-      : Number(row.revenue ?? 0),
-    cogs: getLineCogsV2(row),
-    gross_sales: isFinancialMetricsV2 ? getLineGrossSales(row) : undefined,
-    discounts: isFinancialMetricsV2 ? getLineDiscounts(row) : undefined,
-    returns: isFinancialMetricsV2 ? getLineReturns(row) : undefined,
-    net_sales: isFinancialMetricsV2 ? getLineNetSales(row) : undefined,
-    returned_quantity: getLineReturnedQuantity(row),
-    cost_at_sale: row.cost_at_sale,
-    unit_cost: row.unit_cost,
-    cost_source: row.cost_source,
-  }));
+  const filteredPreviousOrderLines = filterOrderLines({
+    orderLines: previousOrderLines,
+    selectedStaff,
+    selectedVendor,
+  });
+  const salesRows = toLocationsSalesRows(
+    filteredOrderLines,
+    financialMetricsVersion,
+  );
+  const previousSalesRows = toLocationsSalesRows(
+    filteredPreviousOrderLines,
+    financialMetricsVersion,
+  );
   const orderIdsForRefunds = Array.from(
     new Set(
       salesRows
@@ -1340,20 +1386,43 @@ export async function loader({ request }: LoaderFunctionArgs) {
         .filter((value): value is string => Boolean(value)),
     ),
   );
-  const refundTransactions =
+  const previousOrderIdsForRefunds = Array.from(
+    new Set(
+      previousSalesRows
+        .map((row) => row.shopify_order_id)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const [refundTransactions, previousRefundTransactions] = await Promise.all([
     isFinancialMetricsV2 && orderIdsForRefunds.length > 0
-      ? await fetchRefundTransactionsForOrders({
+      ? fetchRefundTransactionsForOrders({
           supabase,
           shop: session.shop,
           orderIds: orderIdsForRefunds,
           startDateUtc,
           endExclusiveUtc,
         })
-      : [];
+      : Promise.resolve([]),
+    isFinancialMetricsV2 && previousOrderIdsForRefunds.length > 0
+      ? fetchRefundTransactionsForOrders({
+          supabase,
+          shop: session.shop,
+          orderIds: previousOrderIdsForRefunds,
+          startDateUtc: previousStartDateUtc,
+          endExclusiveUtc: previousEndExclusiveUtc,
+        })
+      : Promise.resolve([]),
+  ]);
   const refundsByLocation = isFinancialMetricsV2
     ? allocateRefundsByLocation({
         orderLines: salesRows,
         refundTransactions,
+      })
+    : new Map<string, number>();
+  const previousRefundsByLocation = isFinancialMetricsV2
+    ? allocateRefundsByLocation({
+        orderLines: previousSalesRows,
+        refundTransactions: previousRefundTransactions,
       })
     : new Map<string, number>();
   const expensesByLocation = allocateExpensesByLocation({
@@ -1364,10 +1433,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     startDate,
     endDate,
   });
+  const previousExpensesByLocation = allocateExpensesByLocation({
+    expenses,
+    activeLocationIds: allLocations.map(
+      (location) => location.shopify_location_id,
+    ),
+    startDate: previousPeriod.startDate,
+    endDate: previousPeriod.endDate,
+  });
   const selectedExpensesByLocation = new Map(
     selectedLocationIds.map((locationId) => [
       locationId,
       expensesByLocation.get(locationId) ?? 0,
+    ]),
+  );
+  const selectedPreviousExpensesByLocation = new Map(
+    selectedLocationIds.map((locationId) => [
+      locationId,
+      previousExpensesByLocation.get(locationId) ?? 0,
     ]),
   );
   const metrics = computeMetrics({
@@ -1382,6 +1465,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     expensesByLocation: selectedExpensesByLocation,
     financialMetricsVersion,
     refundsByLocation,
+  });
+  const comparisonKpis = computeGlobalKpis({
+    orderLines: previousSalesRows,
+    expensesByLocation: selectedPreviousExpensesByLocation,
+    financialMetricsVersion,
+    refundsByLocation: previousRefundsByLocation,
   });
   const trend = computeTrendRows({
     orderLines: salesRows,
@@ -1474,6 +1563,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     period,
     financialMetricsVersion,
     kpis,
+    comparisonKpis,
     hasOperatingExpenses: Array.from(selectedExpensesByLocation.values()).some(
       (amount) => amount > 0,
     ),
@@ -1548,11 +1638,15 @@ export function ErrorBoundary() {
 
 function KpiGrid({
   kpis,
+  comparisonKpis,
+  selectedDays,
   financialMetricsVersion,
   hasOperatingExpenses,
   canManageCosts,
 }: {
   kpis: LoaderData["kpis"];
+  comparisonKpis: LoaderData["comparisonKpis"];
+  selectedDays: number;
   financialMetricsVersion: FinancialMetricsVersion;
   hasOperatingExpenses: boolean;
   canManageCosts: boolean;
@@ -1644,6 +1738,56 @@ function KpiGrid({
       ? "Requires complete product costs"
       : (expensesNotice ?? "Gross profit minus expenses"),
   };
+  const comparisonLabel =
+    selectedDays === 1
+      ? "vs previous day"
+      : `vs previous ${selectedDays}-day period`;
+  const comparisons: Partial<Record<ReportKpiId, ReportKpiComparison>> = {};
+  const addComparison = (
+    id: ReportKpiId,
+    current: number | null | undefined,
+    previous: number | null | undefined,
+    lowerIsBetter = false,
+  ) => {
+    if (current === null || current === undefined) return;
+    if (previous === null || previous === undefined) return;
+
+    comparisons[id] = buildReportKpiComparison({
+      current,
+      previous,
+      label: comparisonLabel,
+      lowerIsBetter,
+    });
+  };
+
+  addComparison("sales", kpis.revenue, comparisonKpis.revenue);
+  addComparison(
+    "refunds",
+    kpis.refunds,
+    comparisonKpis.refunds,
+    true,
+  );
+  addComparison("returns", kpis.returns, comparisonKpis.returns, true);
+  addComparison("orders", kpis.ordersCount, comparisonKpis.ordersCount);
+  addComparison("unitsSold", kpis.unitsSold, comparisonKpis.unitsSold);
+  addComparison("cogs", kpis.cogs, comparisonKpis.cogs, true);
+  addComparison(
+    "grossProfit",
+    kpis.grossProfit,
+    comparisonKpis.grossProfit,
+  );
+  addComparison(
+    "grossMargin",
+    kpis.grossMarginPct,
+    comparisonKpis.grossMarginPct,
+  );
+  addComparison("expenses", kpis.expenses, comparisonKpis.expenses, true);
+  addComparison("netProfit", kpis.netProfit, comparisonKpis.netProfit);
+  addComparison(
+    "averageOrderValue",
+    kpis.averageOrderValue,
+    comparisonKpis.averageOrderValue,
+  );
   const items = attachReportKpiDetails(
     [
       ...buildSharedReportKpiItems({
@@ -1656,6 +1800,7 @@ function KpiGrid({
       }),
     ],
     details,
+    comparisons,
   );
 
   return (
@@ -1769,11 +1914,13 @@ function LocationSalesBenchmark({
 
   return (
     <div className="shopops-location-benchmark">
-      <span>{formatPercent(share)} of selected sales</span>
+      <span>{formatPercent(share)} sales share</span>
       <strong data-tone={tone}>
         {tone === "neutral"
-          ? "At portfolio average"
-          : `${delta > 0 ? "↑" : "↓"} ${formatPercent(Math.abs(delta))} vs avg`}
+          ? "At average"
+          : `${delta > 0 ? "↑" : "↓"} ${formatPercent(Math.abs(delta))} ${
+              delta > 0 ? "above" : "below"
+            } avg`}
       </strong>
     </div>
   );
@@ -1905,7 +2052,7 @@ function LocationTable({
         </div>
       </div>
       <div className="shopops-data-table-scroll">
-        <table className="shopops-data-table">
+        <table className="shopops-data-table shopops-location-comparison-table">
           <thead>
             <tr>
               {(isFinancialMetricsV2 ? [] : legacyHeaders).map((header) => (
@@ -3357,6 +3504,8 @@ function LocationPerformancePage({ data }: { data: LoaderData }) {
           <>
             <KpiGrid
               kpis={kpis}
+              comparisonKpis={data.comparisonKpis}
+              selectedDays={data.selectedDays}
               financialMetricsVersion={financialMetricsVersion}
               hasOperatingExpenses={hasOperatingExpenses}
               canManageCosts={data.canManageCosts}
