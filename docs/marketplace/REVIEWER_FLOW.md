@@ -9,6 +9,8 @@ Reviewer test shop: provide the assigned Shopify review shop domain in the App S
 Required demo data:
 
 - At least 2 active Shopify locations.
+- At least 1 active Shopify POS location and a POS device/session available for
+  the extension test.
 - Products with vendors, variants, and SKUs.
 - Inventory levels across locations.
 - Orders with discounts.
@@ -80,6 +82,33 @@ Expected outcome:
 - Embedded app frame loads successfully.
 - Main navigation is visible.
 - Dashboard is the default app experience.
+
+## Configure and Verify the Shopify POS Extension
+
+Installing ShopOps Studio makes its POS extension available, but it does not
+automatically place the ShopOps tile on every POS Smart Grid.
+
+1. In Shopify Admin, go to **Point of Sale > Settings > POS app**.
+2. Select the Smart Grid template assigned to the review location.
+3. Click **Add tile > Embedded Apps** and select **ShopOps Studio / ShopOps POS
+   attribution**.
+4. Add the **ShopOps** tile and save the template.
+5. Confirm that the template is assigned to the POS location used for review.
+6. Open or refresh Shopify POS at that location and confirm the tile appears.
+7. Sign in as a POS staff member, add an eligible product to the cart, open the
+   ShopOps tile, and confirm that staff attribution is active.
+8. Complete one labeled test sale, sync it, then verify it under **People >
+   Sales attribution**.
+
+Expected outcome:
+
+- New eligible POS sales can be attributed from the signed-in POS session.
+- The tile must be added to each Smart Grid template that is used by locations
+  where staff attribution should run. A single shared template can cover
+  several locations.
+- POS sellers do not need ShopOps reporting access.
+- Historical sales created before setup remain unassigned unless supported
+  source data provides attribution.
 
 ## First-Run / Onboarding Expectation
 
@@ -257,6 +286,10 @@ Expected outcome:
 - Explain that permissions use current Shopify session identity plus ShopOps Studio DB assignments. Email is the main identity, Shopify user IDs are aliases, and access labels are display-only.
 - Explain that staff sales attribution is best-effort based on available order/session data. If Shopify blocks `staffMember`, the app falls back to location/source reporting and financial totals remain accurate.
 - Explain that advanced Shopify staff directory sync is future-only for custom/Plus/Advanced implementations.
+- Explain that Shopify POS is required for the POS staff-attribution feature.
+- Explain that the ShopOps tile must be added after installation through
+  **Point of Sale > Settings > POS app > Smart Grid > Add tile > Embedded Apps**
+  and that the configured template must be assigned to the review location.
 - Explain that protected customer/order data may be processed because Shopify order records can include customer/order information needed to calculate and validate sales, refund, return, discount, product, location, and margin reports.
 - Explain that no individual protected customer field access is needed because customer name, address, email, and phone are not displayed or stored.
 - Explain that `orders.shipping` is a shipping amount, not a customer shipping address.

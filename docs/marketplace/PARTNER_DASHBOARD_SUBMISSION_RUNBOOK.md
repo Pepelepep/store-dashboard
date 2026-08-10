@@ -136,7 +136,7 @@ Recommended sequence:
 
 For the People screenshot, never show a Viewer with access-management controls. Viewer behavior must be represented as direct scoped reporting only.
 
-**Manual proof required:** upload final screenshots in the exact dimensions shown by the current listing form and a short review screencast covering install, billing, sync, Viewer, Manager, Admin and Owner behavior.
+**Manual proof required:** upload final screenshots in the exact dimensions shown by the current listing form and a short review screencast covering install, billing, sync, Viewer, Manager, Admin and Owner behavior. Because the listing requires Shopify POS, the screencast must also show the ShopOps tile being added to the Smart Grid template assigned to the review location, a signed-in POS staff session, and one new attributed POS test sale appearing in ShopOps.
 
 ## 7. Reviewer Instructions
 
@@ -148,6 +148,11 @@ Use `REVIEWER_TEST_SCRIPT.md`, replacing every placeholder before submission. Pr
 - seeded date range containing orders;
 - exact steps for initial billing approval;
 - expected first-sync duration and what the reviewer should do while it runs;
+- exact POS setup path: **Point of Sale > Settings > POS app > Smart Grid > Add
+  tile > Embedded Apps > ShopOps**, followed by assignment of that template to
+  the review location;
+- a POS test staff identity, location and order that can be used to verify a new
+  attributed sale;
 - role identities or a safe method to demonstrate Viewer, Manager, Admin and Owner;
 - short screencast URL;
 - support contact for review.
@@ -163,6 +168,9 @@ Never provide real merchant/customer data or production client credentials.
 - [ ] Protected Customer Data and `read_all_orders` are approved.
 - [ ] Typecheck, lint, P0 tests and production build pass from a clean checkout.
 - [ ] Fresh install, OAuth, owner bootstrap, first sync and embedded navigation pass.
+- [ ] ShopOps POS tile is present in the Smart Grid template assigned to the
+  reviewer location, and a new signed-in POS staff sale is attributed after
+  sync.
 - [ ] Viewer, Manager, Admin and Owner matrix passes with server-side URL tampering tests.
 - [ ] Shopify App Pricing lifecycle passes.
 - [ ] Uninstall deletes sessions; reinstall reauthenticates and refreshes billing.

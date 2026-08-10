@@ -27,6 +27,58 @@ Expected result:
 - Requested scopes do not include `read_users`.
 - If the demo data has not synced yet, reviewer sees "Your data is being prepared."
 
+## Enable the Shopify POS Tile (Required for POS Staff Attribution)
+
+ShopOps Studio includes a Shopify POS UI extension. Installing the app in
+Shopify Admin makes the extension available, but the **ShopOps** tile must also
+be added to the Smart Grid template used by the review POS location.
+
+Prerequisites:
+
+- Use a store with the Point of Sale sales channel and at least one active POS
+  location.
+- Sign in as the store owner, or use a staff account allowed to customize the
+  POS Smart Grid.
+- Use a released ShopOps Studio app version that includes the
+  `shopops-pos-attribution` extension.
+
+Admin setup:
+
+1. In Shopify Admin, open **Point of Sale > Settings**.
+2. Under **Customization**, open **POS app**.
+3. Under **Smart Grid**, select the template assigned to the POS location used
+   for review.
+4. On the desired tile page, click **Add tile**.
+5. Select **Embedded Apps**, then select **ShopOps Studio / ShopOps POS
+   attribution**.
+6. Add the **ShopOps** tile and click **Save**.
+7. Confirm that this Smart Grid template is assigned to the intended review
+   location. Repeat for any other template used by a POS location that should
+   track staff attribution.
+
+POS verification:
+
+1. Open or refresh Shopify POS on a device signed in to the same store and POS
+   location.
+2. Confirm the **ShopOps** tile is visible on the Smart Grid.
+3. Sign in as a POS staff member and add an eligible product to the cart.
+4. Confirm the tile detects the staff session and cart line. Tap it to open the
+   status modal.
+5. Complete a clearly identified test sale.
+6. Return to ShopOps Studio, allow the order sync to complete, then open
+   **People > Sales attribution** and confirm the sale is available for staff
+   attribution.
+
+Expected result:
+
+- The ShopOps tile is visible only on locations using a Smart Grid template to
+  which it was added.
+- The status modal states that staff attribution is active.
+- Eligible new POS cart lines are stamped from the signed-in POS session.
+- POS sellers do not need ShopOps dashboard access for attribution to work.
+- Historical orders created before the tile was enabled are not retroactively
+  attributed.
+
 ## Expected Empty State
 
 Use this path only if the reviewer sees an empty/new shop state.
@@ -197,6 +249,13 @@ Expected result:
 - `read_users` is not requested for the public App Store app.
 - Staff attribution is best-effort. If Shopify blocks `staffMember`, ShopOps Studio falls back to location/source reporting and financial totals remain accurate.
 - Advanced Shopify staff sync is future-only for custom/Plus/Advanced implementations.
+- Shopify POS is required to test the shipped POS staff-attribution feature.
+- After installing ShopOps Studio, add the ShopOps tile to every Smart Grid
+  template used by a POS location that should track staff sales. A template
+  shared by several locations only needs to be configured once and assigned to
+  those locations.
+- The reviewer account must be the store owner or have permission to customize
+  the POS Smart Grid.
 - Compliance webhooks validate Shopify HMAC through Shopify webhook authentication. Valid requests return 200; invalid HMAC requests return 401.
 - Render Cron should call `/internal/cron/process-sync-jobs` every 5 minutes with `Authorization: Bearer <cron secret>`.
 - Existing webhook processing is separate at `/internal/cron/process-webhook-events`.
