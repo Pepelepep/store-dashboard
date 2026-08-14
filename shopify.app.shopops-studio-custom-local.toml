@@ -1,0 +1,70 @@
+# Custom distribution config for ShopOps Studio Custom - Local (friend's store test deployment).
+# Do not deploy this config to the production/staging/marketplace apps.
+
+client_id = "6118e23f4a7a1fc0f1f95dc80bf3532a"
+name = "ShopOps Studio Custom - Local"
+application_url = "https://shopops-studio-custom-local.onrender.com"
+embedded = true
+
+[webhooks]
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "/webhooks/app/uninstalled"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create"]
+uri = "/webhooks/orders/create"
+
+[[webhooks.subscriptions]]
+topics = ["orders/updated"]
+uri = "/webhooks/orders/updated"
+
+[[webhooks.subscriptions]]
+topics = ["inventory_levels/update"]
+uri = "/webhooks/inventory-levels/update"
+
+[[webhooks.subscriptions]]
+topics = ["inventory_items/update"]
+uri = "/webhooks/inventory-items/update"
+
+[[webhooks.subscriptions]]
+topics = ["products/create"]
+uri = "/webhooks/products/create"
+
+[[webhooks.subscriptions]]
+topics = ["products/update"]
+uri = "/webhooks/products/update"
+
+[[webhooks.subscriptions]]
+topics = ["products/delete"]
+uri = "/webhooks/products/delete"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request"]
+uri = "/webhooks/customers/data_request"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/redact"]
+uri = "/webhooks/customers/redact"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["shop/redact"]
+uri = "/webhooks/shop/redact"
+
+[access_scopes]
+scopes = "read_orders,read_all_orders,read_products,read_inventory,read_locations"
+
+[auth]
+redirect_urls = [
+  "https://shopops-studio-custom-local.onrender.com/auth/callback",
+  "https://shopops-studio-custom-local.onrender.com/auth/shopify/callback",
+  "https://shopops-studio-custom-local.onrender.com/api/auth/callback"
+]
+
+[pos]
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = false

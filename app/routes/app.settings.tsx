@@ -55,7 +55,7 @@ export async function loader(args: LoaderFunctionArgs) {
     admin: billingAdmin,
     shop: session.shop,
   });
-  if (!isAccessibleBillingState(billing)) {
+  if (billing.state !== "disabled" && !isAccessibleBillingState(billing)) {
     throw new Response("An active ShopOps Studio plan is required.", {
       status: 402,
     });
@@ -70,11 +70,16 @@ export async function loader(args: LoaderFunctionArgs) {
     permissions.isOwner && permissions.identity.isShopifyAccountOwner;
   const payload = {
     plan: {
-      currentPlanName: billing.plan.displayName,
-      state: billing.state,
-      trialEndsAt: billing.trialEndsAt,
-      cycleEndsAt: billing.currentBillingCycle?.endTime ?? null,
-      pendingPlanName: billing.pendingPlan?.displayName ?? null,
+      currentPlanName:
+        billing.state === "disabled" ? "Billing disabled" : billing.plan.displayName,
+      state: billing.state === "disabled" ? "active" : billing.state,
+      trialEndsAt: billing.state === "disabled" ? null : billing.trialEndsAt,
+      cycleEndsAt:
+        billing.state === "disabled"
+          ? null
+          : (billing.currentBillingCycle?.endTime ?? null),
+      pendingPlanName:
+        billing.state === "disabled" ? null : (billing.pendingPlan?.displayName ?? null),
       activeLocations: {
         usage: entitlements.activeReportingLocations,
         limit: entitlements.limits.activeLocations,
@@ -83,10 +88,11 @@ export async function loader(args: LoaderFunctionArgs) {
         usage: entitlements.activeDashboardUsers,
         limit: entitlements.limits.dashboardUsers,
       },
-      managePlanUrl: canManagePlan
-        ? buildHostedPricingUrl({ shop: session.shop })
-        : null,
-      canManagePlan,
+      managePlanUrl:
+        canManagePlan && billing.state !== "disabled"
+          ? buildHostedPricingUrl({ shop: session.shop })
+          : null,
+      canManagePlan: canManagePlan && billing.state !== "disabled",
       owner: entitlements.owner,
       resolutionRequired: entitlements.resolutionRequired,
       userLimitExceeded: entitlements.userLimitExceeded,
