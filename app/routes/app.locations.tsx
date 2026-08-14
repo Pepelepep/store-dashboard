@@ -1205,8 +1205,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const selectedStaff = url.searchParams.get("staff") || "";
   const selectedVendor = url.searchParams.get("vendor") || "";
   const requestedLocationIds = new Set(
-    url.searchParams
-      .getAll("locations")
+    [...url.searchParams.getAll("locations"), ...url.searchParams.getAll("locationId")]
       .flatMap((value) => value.split(","))
       .map((value) => value.trim())
       .filter(Boolean),
