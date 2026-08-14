@@ -1,4 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { chunkArray, mapWithConcurrency } from "../db/batch-query.server";
+
+const REDACT_BATCH_CONCURRENCY = 4;
 
 export const SHOP_REDACTION_TABLES = [
   "webhook_events",
@@ -70,16 +73,6 @@ function getOrderIdCandidates(
   return Array.from(candidates);
 }
 
-function chunkArray<T>(values: T[], size: number) {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
 export async function recordComplianceWebhookEvent({
   supabase,
   shop,
@@ -142,29 +135,46 @@ export async function redactCustomerOrderDisplayFields({
     };
   }
 
+  // .in() here is unavoidable (this redacts a specific customer's orders, not
+  // a shop-wide date range), but batches no longer run one after another:
+  // each batch's two updates run concurrently, and batches themselves run
+  // with bounded concurrency, so one slow/failed batch doesn't stall every
+  // batch after it. Any error still aborts the whole redaction (no silent
+  // partial success) — same failure semantics as before.
+  const batchResults = await mapWithConcurrency(
+    chunkArray(orderIdCandidates, 100),
+    REDACT_BATCH_CONCURRENCY,
+    async (batch) => {
+      const [ordersResult, orderLinesResult] = await Promise.all([
+        supabase
+          .from("orders")
+          .update({ order_name: "Redacted order" })
+          .eq("shop_domain", shop)
+          .in("shopify_order_id", batch)
+          .select("id"),
+        supabase
+          .from("order_lines")
+          .update({ order_name: "Redacted order" })
+          .eq("shop_domain", shop)
+          .in("shopify_order_id", batch)
+          .select("id"),
+      ]);
+
+      if (ordersResult.error) throw ordersResult.error;
+      if (orderLinesResult.error) throw orderLinesResult.error;
+
+      return {
+        ordersUpdated: ordersResult.data?.length ?? 0,
+        orderLinesUpdated: orderLinesResult.data?.length ?? 0,
+      };
+    },
+  );
+
   let ordersUpdated = 0;
   let orderLinesUpdated = 0;
-
-  for (const batch of chunkArray(orderIdCandidates, 100)) {
-    const { data: orders, error: ordersError } = await supabase
-      .from("orders")
-      .update({ order_name: "Redacted order" })
-      .eq("shop_domain", shop)
-      .in("shopify_order_id", batch)
-      .select("id");
-
-    if (ordersError) throw ordersError;
-    ordersUpdated += orders?.length ?? 0;
-
-    const { data: orderLines, error: orderLinesError } = await supabase
-      .from("order_lines")
-      .update({ order_name: "Redacted order" })
-      .eq("shop_domain", shop)
-      .in("shopify_order_id", batch)
-      .select("id");
-
-    if (orderLinesError) throw orderLinesError;
-    orderLinesUpdated += orderLines?.length ?? 0;
+  for (const result of batchResults) {
+    ordersUpdated += result.ordersUpdated;
+    orderLinesUpdated += result.orderLinesUpdated;
   }
 
   return {

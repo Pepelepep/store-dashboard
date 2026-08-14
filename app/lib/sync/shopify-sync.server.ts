@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import { chunkArray, mapWithConcurrency } from "../db/batch-query.server";
 import { calculateRemainingLineCogs } from "../financial/cogs";
 import { calculateNetSalesAfterCashRefunds } from "../financial/net-sales";
 import { upsertPosStaffIdentityAliasesFromOrderLines } from "../staff-identity/staff-identity.server";
@@ -340,6 +341,8 @@ export type SyncSource =
 
 const INVENTORY_BATCH_SIZE = 25;
 const SUPABASE_LOOKUP_BATCH_SIZE = 250;
+const SUPABASE_LOOKUP_BATCH_CONCURRENCY = 4;
+const UNCHUNKED_IN_SAFETY_BATCH_SIZE = 200;
 const PRODUCT_SYNC_PAGE_SIZE = 20;
 const PRODUCT_VARIANT_SYNC_PAGE_SIZE = 50;
 const ORDERS_PAGE_SIZE = 50;
@@ -380,16 +383,6 @@ export type SyncBatchResult = {
   progress: Record<string, unknown>;
   counts: Record<string, number | boolean | string | null>;
 };
-
-function chunkArray<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-
-  return chunks;
-}
 
 function getNumericAmount(value?: string | null) {
   const amount = Number(value ?? 0);
@@ -1591,24 +1584,27 @@ async function selectRowsInBatches<Row>({
   column: string;
   values: string[];
 }) {
-  const rows: Row[] = [];
   const uniqueValues = Array.from(new Set(values)).filter(Boolean);
 
-  for (const batch of chunkArray(uniqueValues, SUPABASE_LOOKUP_BATCH_SIZE)) {
-    const { data, error } = await supabase
-      .from(table)
-      .select(select)
-      .eq("shop_domain", shop)
-      .in(column, batch);
+  const batchResults = await mapWithConcurrency(
+    chunkArray(uniqueValues, SUPABASE_LOOKUP_BATCH_SIZE),
+    SUPABASE_LOOKUP_BATCH_CONCURRENCY,
+    async (batch) => {
+      const { data, error } = await supabase
+        .from(table)
+        .select(select)
+        .eq("shop_domain", shop)
+        .in(column, batch);
 
-    if (error) {
-      throw new Error(error.message);
-    }
+      if (error) {
+        throw new Error(error.message);
+      }
 
-    rows.push(...((data ?? []) as Row[]));
-  }
+      return (data ?? []) as Row[];
+    },
+  );
 
-  return rows;
+  return batchResults.flat();
 }
 
 async function upsertInventoryItemSnapshots({
@@ -4347,25 +4343,42 @@ async function upsertOrderNodes({
     const incomingLineIds = new Set(
       orderLineRows.map((line) => line.shopify_line_item_id),
     );
-    const { data: existingLines, error: existingLinesError } = await supabase
-      .from("order_lines")
-      .select("shopify_line_item_id")
-      .eq("shop_domain", shop)
-      .in(
-        "shopify_order_id",
+    // Chunked defensively even though today's caller only ever passes one
+    // ORDERS_PAGE_SIZE page of orders (well under the safety batch size) —
+    // this keeps the .in() bounded if that page size is ever raised later.
+    const existingLinesBatches = await mapWithConcurrency(
+      chunkArray(
         orders.map((order) => order.id),
-      );
-    if (existingLinesError) throw new Error(existingLinesError.message);
-    const staleLineIds = (existingLines ?? [])
+        UNCHUNKED_IN_SAFETY_BATCH_SIZE,
+      ),
+      SUPABASE_LOOKUP_BATCH_CONCURRENCY,
+      async (orderIdBatch) => {
+        const { data, error } = await supabase
+          .from("order_lines")
+          .select("shopify_line_item_id")
+          .eq("shop_domain", shop)
+          .in("shopify_order_id", orderIdBatch);
+        if (error) throw new Error(error.message);
+        return data ?? [];
+      },
+    );
+    const staleLineIds = existingLinesBatches
+      .flat()
       .map((line) => line.shopify_line_item_id as string)
       .filter((lineId) => !incomingLineIds.has(lineId));
     if (staleLineIds.length > 0) {
-      const { error: deleteError } = await supabase
-        .from("order_lines")
-        .delete()
-        .eq("shop_domain", shop)
-        .in("shopify_line_item_id", staleLineIds);
-      if (deleteError) throw new Error(deleteError.message);
+      await mapWithConcurrency(
+        chunkArray(staleLineIds, UNCHUNKED_IN_SAFETY_BATCH_SIZE),
+        SUPABASE_LOOKUP_BATCH_CONCURRENCY,
+        async (lineIdBatch) => {
+          const { error: deleteError } = await supabase
+            .from("order_lines")
+            .delete()
+            .eq("shop_domain", shop)
+            .in("shopify_line_item_id", lineIdBatch);
+          if (deleteError) throw new Error(deleteError.message);
+        },
+      );
     }
   }
 

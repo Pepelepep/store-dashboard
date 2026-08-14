@@ -7,18 +7,10 @@ import {
   type StaffIdentityOrderLine,
 } from "./staff-identity";
 import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
+import { chunkArray, mapWithConcurrency } from "../db/batch-query.server";
 
 const STAFF_ALIAS_VALUE_BATCH_SIZE = 100;
-
-function chunkArray<T>(items: T[], size: number) {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-
-  return chunks;
-}
+const STAFF_ALIAS_BATCH_CONCURRENCY = 4;
 
 export async function fetchStaffIdentityAliasesForOrderLines({
   supabase,
@@ -39,7 +31,7 @@ export async function fetchStaffIdentityAliasesForOrderLines({
     }
   }
 
-  const aliasesByKey = new Map<string, StaffIdentityAliasRow>();
+  const batchTasks: Array<{ aliasType: StaffAliasType; aliasValueBatch: string[] }> = [];
 
   for (const [aliasType, values] of valuesByType) {
     const aliasValues = Array.from(values);
@@ -50,7 +42,20 @@ export async function fetchStaffIdentityAliasesForOrderLines({
       aliasValues,
       STAFF_ALIAS_VALUE_BATCH_SIZE,
     )) {
-      const aliases = await fetchAllSupabasePages<StaffIdentityAliasRow>({
+      batchTasks.push({ aliasType, aliasValueBatch });
+    }
+  }
+
+  // staff_identity_aliases has no shop-scoped date/range column, so unlike
+  // the refund-transactions query this .in() can't be dropped in favor of a
+  // plain range scan — it genuinely needs the alias-value list. Running the
+  // batches with bounded concurrency instead of one-at-a-time keeps a single
+  // slow/failed batch from blocking every other alias type/chunk.
+  const batchResults = await mapWithConcurrency(
+    batchTasks,
+    STAFF_ALIAS_BATCH_CONCURRENCY,
+    ({ aliasType, aliasValueBatch }) =>
+      fetchAllSupabasePages<StaffIdentityAliasRow>({
         label: "Staff identity aliases",
         getRowKey: (alias) => alias.id,
         fetchPage: (from, to) =>
@@ -67,14 +72,17 @@ export async function fetchStaffIdentityAliasesForOrderLines({
             data: StaffIdentityAliasRow[] | null;
             error: { message: string } | null;
           }>,
-      });
+      }),
+  );
 
-      for (const alias of aliases) {
-        aliasesByKey.set(
-          staffIdentityAliasKey(alias.alias_type, alias.alias_value),
-          alias,
-        );
-      }
+  const aliasesByKey = new Map<string, StaffIdentityAliasRow>();
+
+  for (const aliases of batchResults) {
+    for (const alias of aliases) {
+      aliasesByKey.set(
+        staffIdentityAliasKey(alias.alias_type, alias.alias_value),
+        alias,
+      );
     }
   }
 

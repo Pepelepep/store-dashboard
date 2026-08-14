@@ -317,16 +317,6 @@ async function fetchLocationOrderLines({
   return { data: rows, error: null };
 }
 
-function chunkArray<T>(items: T[], size: number) {
-  const chunks: T[][] = [];
-
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-
-  return chunks;
-}
-
 function isSuccessfulRefundTransaction(row: OrderTransactionDbRow) {
   const kind = row.kind?.toUpperCase();
   const status = row.status?.toUpperCase();
@@ -347,34 +337,36 @@ async function fetchRefundTransactionsForOrders({
   startDateUtc: string;
   endExclusiveUtc: string;
 }) {
-  const rows: OrderTransactionDbRow[] = [];
+  const orderIdSet = new Set(orderIds);
 
-  for (const batch of chunkArray(orderIds, 500)) {
-    const batchRows = await fetchAllSupabasePages<OrderTransactionDbRow>({
-      label: "Location refund transactions",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("order_transactions")
-          .select(
-            "id, shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
-          )
-          .eq("shop_domain", shop)
-          .gte("processed_at", startDateUtc)
-          .lt("processed_at", endExclusiveUtc)
-          .in("shopify_order_id", batch)
-          .order("processed_at", { ascending: false })
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: OrderTransactionDbRow[] | null;
-          error: { message: string } | null;
-        }>,
-    });
+  // Scoped by shop_domain + processed_at (order_transactions_shop_processed_idx)
+  // instead of chunking orderIds into .in() batches: order_transactions has no
+  // location column, so the .in() filter never bought index selectivity, only
+  // extra round trips. Filtering against orderIdSet in JS afterward reproduces
+  // the exact same result set.
+  const rows = await fetchAllSupabasePages<OrderTransactionDbRow>({
+    label: "Location refund transactions",
+    getRowKey: (row) => row.id,
+    fetchPage: (from, to) =>
+      supabase
+        .from("order_transactions")
+        .select(
+          "id, shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
+        )
+        .eq("shop_domain", shop)
+        .gte("processed_at", startDateUtc)
+        .lt("processed_at", endExclusiveUtc)
+        .order("processed_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: OrderTransactionDbRow[] | null;
+        error: { message: string } | null;
+      }>,
+  });
 
-    rows.push(...batchRows.filter(isSuccessfulRefundTransaction));
-  }
-
-  return rows;
+  return rows.filter(
+    (row) => orderIdSet.has(row.shopify_order_id) && isSuccessfulRefundTransaction(row),
+  );
 }
 
 function allocateRefundsByLocation({
