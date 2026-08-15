@@ -656,7 +656,6 @@ test("COGS estimates are disabled by default and missing cost stays missing", ()
     ),
     "utf8",
   );
-
   assert.match(
     migration,
     /cogs_estimate_enabled boolean NOT NULL DEFAULT false/,
@@ -1376,6 +1375,63 @@ test("COGS recompute functions and settings update are service-role-only", () =>
   assert.match(
     migration,
     /order_line\.cost_at_sale,[\s\S]*?variant\.unit_cost,[\s\S]*?order_line\.cost_source IS DISTINCT FROM[\s\S]*?'SHOP_PERCENT_ESTIMATE'[\s\S]*?order_line\.unit_cost/,
+  );
+});
+
+test("new order lines refresh Shopify costs and receive targeted COGS estimates", () => {
+  const syncSource = readFileSync(
+    new URL("../app/lib/sync/shopify-sync.server.ts", import.meta.url),
+    "utf8",
+  );
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260815162934_recompute_cogs_for_synced_order_lines.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const variantCostMapSource = syncSource.slice(
+    syncSource.indexOf("async function getVariantCostMaps"),
+    syncSource.indexOf("async function getExistingOrderLineCostAtSaleMap"),
+  );
+
+  assert.match(
+    syncSource,
+    /variant \{[\s\S]*?inventoryItem \{[\s\S]*?unitCost \{[\s\S]*?amount/,
+  );
+  assert.match(
+    variantCostMapSource,
+    /getVariantCostMaps\([\s\S]*?selectRowsInBatches<VariantCostRow>[\s\S]*?column: "shopify_variant_id"[\s\S]*?column: "sku"/,
+  );
+  assert.doesNotMatch(
+    variantCostMapSource,
+    /\.eq\("shop_domain", shop\)/,
+  );
+  assert.match(
+    syncSource,
+    /upsertInventoryItemSnapshots\([\s\S]*?ORDER_SYNC_UNIT_COST[\s\S]*?updateVariantCostsFromInventoryItemsSql/,
+  );
+  assert.match(
+    syncSource,
+    /recomputeOrderLineCogsForOrderLinesSql\([\s\S]*?p_shopify_line_item_ids/,
+  );
+
+  assert.match(
+    migration,
+    /CREATE OR REPLACE FUNCTION public\.recompute_order_line_cogs_for_order_lines/,
+  );
+  assert.match(
+    migration,
+    /order_line\.shopify_line_item_id = ANY\(p_shopify_line_item_ids\)/,
+  );
+  assert.match(migration, /THEN 'SHOP_PERCENT_ESTIMATE'/);
+  assert.match(
+    migration,
+    /REVOKE ALL ON FUNCTION public\.recompute_order_line_cogs_for_order_lines\([\s\S]*?FROM PUBLIC/,
+  );
+  assert.match(
+    migration,
+    /GRANT EXECUTE ON FUNCTION public\.recompute_order_line_cogs_for_order_lines\([\s\S]*?TO service_role/,
   );
 });
 

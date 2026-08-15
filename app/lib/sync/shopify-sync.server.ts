@@ -231,6 +231,13 @@ type OrderLineItemNode = {
     id: string;
     title?: string | null;
     sku?: string | null;
+    inventoryItem?: {
+      id: string;
+      unitCost?: {
+        amount: string;
+        currencyCode: string;
+      } | null;
+    } | null;
     product?: {
       id: string;
       title: string;
@@ -482,6 +489,13 @@ function getFinancialQueryLineItemFields() {
       id
       title
       sku
+      inventoryItem {
+        id
+        unitCost {
+          amount
+          currencyCode
+        }
+      }
       product {
         id
         title
@@ -1763,6 +1777,45 @@ async function recomputeOrderLineCogsForVariantsSql({
       {
         p_shop_domain: shop,
         p_variant_ids: batch,
+      },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    recomputedCount += typeof data === "number" ? data : Number(data ?? 0);
+  }
+
+  return recomputedCount;
+}
+
+async function recomputeOrderLineCogsForOrderLinesSql({
+  supabase,
+  shop,
+  lineItemIds,
+}: {
+  supabase: SupabaseAdminClient;
+  shop: string;
+  lineItemIds: string[];
+}) {
+  const uniqueLineItemIds = Array.from(new Set(lineItemIds)).filter(Boolean);
+
+  if (uniqueLineItemIds.length === 0) {
+    return 0;
+  }
+
+  let recomputedCount = 0;
+
+  for (const batch of chunkArray(
+    uniqueLineItemIds,
+    SUPABASE_LOOKUP_BATCH_SIZE,
+  )) {
+    const { data, error } = await supabase.rpc(
+      "recompute_order_line_cogs_for_order_lines",
+      {
+        p_shop_domain: shop,
+        p_shopify_line_item_ids: batch,
       },
     );
 
@@ -3834,20 +3887,40 @@ export async function syncStaffMembers({
 async function getVariantCostMaps({
   supabase,
   shop,
+  variantIds,
+  skus,
 }: {
   supabase: SupabaseAdminClient;
   shop: string;
+  variantIds: string[];
+  skus: string[];
 }) {
-  const { data: variantCostsData, error: variantCostsError } = await supabase
-    .from("variants")
-    .select("shopify_variant_id, inventory_item_id, sku, unit_cost")
-    .eq("shop_domain", shop);
-
-  if (variantCostsError) {
-    throw new Error(variantCostsError.message);
-  }
-
-  const variantCosts = (variantCostsData ?? []) as VariantCostRow[];
+  const [variantsById, variantsBySku] = await Promise.all([
+    selectRowsInBatches<VariantCostRow>({
+      supabase,
+      table: "variants",
+      select: "shopify_variant_id, inventory_item_id, sku, unit_cost",
+      shop,
+      column: "shopify_variant_id",
+      values: variantIds,
+    }),
+    selectRowsInBatches<VariantCostRow>({
+      supabase,
+      table: "variants",
+      select: "shopify_variant_id, inventory_item_id, sku, unit_cost",
+      shop,
+      column: "sku",
+      values: skus,
+    }),
+  ]);
+  const variantCosts = Array.from(
+    new Map(
+      [...variantsById, ...variantsBySku].map((row) => [
+        row.shopify_variant_id,
+        row,
+      ]),
+    ).values(),
+  );
   const costByVariantId = new Map<string, VariantCostRow>();
   const costBySku = new Map<string, VariantCostRow>();
 
@@ -4146,10 +4219,6 @@ async function upsertOrderNodes({
   orders: OrderNode[];
   replaceExistingLines?: boolean;
 }) {
-  const { costByVariantId, costBySku } = await getVariantCostMaps({
-    supabase,
-    shop,
-  });
   const orderLineItemsByOrderId = new Map<string, OrderLineItemNode[]>();
   const allLineItemIds: string[] = [];
 
@@ -4162,6 +4231,61 @@ async function upsertOrderNodes({
     orderLineItemsByOrderId.set(order.id, allLineItems);
     allLineItemIds.push(...allLineItems.map((lineItem) => lineItem.id));
   }
+
+  const orderInventorySnapshots = Array.from(
+    new Map(
+      Array.from(orderLineItemsByOrderId.values())
+        .flat()
+        .flatMap((lineItem) => {
+          const inventoryItem = lineItem.variant?.inventoryItem;
+
+          if (!inventoryItem?.id) return [];
+
+          const unitCost = parseNullableNumericAmount(
+            inventoryItem.unitCost?.amount,
+          );
+
+          return [
+            [
+              inventoryItem.id,
+              {
+                inventoryItemId: inventoryItem.id,
+                sku: lineItem.sku ?? lineItem.variant?.sku ?? null,
+                unitCost,
+                hasUnitCostValue: unitCost !== null,
+                costSource: "ORDER_SYNC_UNIT_COST",
+              } satisfies InventoryItemSnapshotInput,
+            ] as const,
+          ];
+        }),
+    ).values(),
+  );
+
+  if (orderInventorySnapshots.length > 0) {
+    await upsertInventoryItemSnapshots({
+      supabase,
+      shop,
+      snapshots: orderInventorySnapshots,
+    });
+    await updateVariantCostsFromInventoryItemsSql({
+      supabase,
+      shop,
+      inventoryItemIds: orderInventorySnapshots.map(
+        (snapshot) => snapshot.inventoryItemId,
+      ),
+    });
+  }
+
+  const { costByVariantId, costBySku } = await getVariantCostMaps({
+    supabase,
+    shop,
+    variantIds: Array.from(orderLineItemsByOrderId.values())
+      .flat()
+      .map((lineItem) => lineItem.variant?.id ?? ""),
+    skus: Array.from(orderLineItemsByOrderId.values())
+      .flat()
+      .map((lineItem) => lineItem.sku ?? lineItem.variant?.sku ?? ""),
+  });
 
   const existingCostAtSaleByLineItemId =
     await getExistingOrderLineCostAtSaleMap({
@@ -4246,7 +4370,17 @@ async function upsertOrderNodes({
       const revenue = unitPrice * lineItem.quantity;
       const variantCost = variantId
         ? (costByVariantId.get(variantId) ??
-          (sku ? costBySku.get(sku) : undefined))
+          (sku ? costBySku.get(sku) : undefined) ??
+          (lineItem.variant?.inventoryItem
+            ? {
+                shopify_variant_id: variantId,
+                inventory_item_id: lineItem.variant.inventoryItem.id,
+                sku,
+                unit_cost: parseNullableNumericAmount(
+                  lineItem.variant.inventoryItem.unitCost?.amount,
+                ),
+              }
+            : undefined))
         : undefined;
       const lineFinancials = lineFinancialsByLineItemId.get(lineItem.id);
       const costInfo = getCostInfo({
@@ -4382,6 +4516,15 @@ async function upsertOrderNodes({
     }
   }
 
+  const orderLinesCogsRecomputed =
+    await recomputeOrderLineCogsForOrderLinesSql({
+      supabase,
+      shop,
+      lineItemIds: orderLineRows.map(
+        (line) => line.shopify_line_item_id as string,
+      ),
+    });
+
   await upsertPosStaffIdentityAliasesFromOrderLines({
     supabase,
     shop,
@@ -4400,6 +4543,7 @@ async function upsertOrderNodes({
   return {
     ordersSynced: orderRows.length,
     orderLinesSynced: orderLineRows.length,
+    orderLinesCogsRecomputed,
     transactionsSynced: Array.from(transactionRowsByOrderId.values()).reduce(
       (sum, transactions) => sum + transactions.length,
       0,
@@ -4581,6 +4725,7 @@ async function syncOrdersPage({
     ordersSynced: counts.ordersSynced,
     orderLinesSynced: counts.orderLinesSynced,
     transactionsSynced: counts.transactionsSynced,
+    orderLinesCogsRecomputed: counts.orderLinesCogsRecomputed,
     hasNextPage: Boolean(ordersConnection?.pageInfo?.hasNextPage),
     cursor: ordersConnection?.pageInfo?.endCursor ?? null,
   };
@@ -4616,9 +4761,6 @@ export async function syncOrdersBatch({
   });
 
   const isDone = !pageResult.hasNextPage || pageResult.ordersSynced === 0;
-  const orderLinesCogsRecomputed = isDone
-    ? await recomputeOrderLineCogsForShop({ supabase, shop })
-    : 0;
 
   return {
     done: isDone,
@@ -4633,7 +4775,7 @@ export async function syncOrdersBatch({
       orderLinesSynced: pageResult.orderLinesSynced,
       transactionsSynced: pageResult.transactionsSynced,
       pagesProcessed: pageResult.ordersSynced > 0 ? 1 : 0,
-      orderLinesCogsRecomputed,
+      orderLinesCogsRecomputed: pageResult.orderLinesCogsRecomputed,
     },
   };
 }
