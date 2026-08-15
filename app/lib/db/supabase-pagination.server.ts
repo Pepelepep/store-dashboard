@@ -53,36 +53,26 @@ export async function fetchAllSupabasePages<T>({
   fetchPage,
   getRowKey,
   label,
+  pageConcurrency = 1,
   pageSize = DEFAULT_SUPABASE_PAGE_SIZE,
 }: {
   fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>;
   getRowKey: (row: T) => string;
   label: string;
+  pageConcurrency?: number;
   pageSize?: number;
 }) {
   if (!Number.isInteger(pageSize) || pageSize < 1) {
     throw new Error("Supabase page size must be a positive integer.");
   }
+  if (!Number.isInteger(pageConcurrency) || pageConcurrency < 1) {
+    throw new Error("Supabase page concurrency must be a positive integer.");
+  }
 
   const rows: T[] = [];
   const seenRowKeys = new Set<string>();
 
-  for (let from = 0; ; from += pageSize) {
-    const pageNumber = Math.floor(from / pageSize) + 1;
-    const { data, error } = await fetchPageWithRetry(
-      fetchPage,
-      from,
-      from + pageSize - 1,
-    );
-
-    if (error) {
-      throw new Error(
-        `${label} page ${pageNumber} could not be loaded: ${error.message}`,
-      );
-    }
-
-    const pageRows = data ?? [];
-
+  function appendPage(pageRows: T[]) {
     for (const row of pageRows) {
       const rowKey = getRowKey(row);
 
@@ -95,9 +85,55 @@ export async function fetchAllSupabasePages<T>({
       seenRowKeys.add(rowKey);
       rows.push(row);
     }
+  }
 
-    if (pageRows.length < pageSize) {
-      return rows;
+  async function loadPage(from: number) {
+    const result = await fetchPageWithRetry(
+      fetchPage,
+      from,
+      from + pageSize - 1,
+    );
+
+    return { from, ...result };
+  }
+
+  // Keep the first request singular so the common sub-1000-row case does not
+  // pay for speculative pages. Once a full page proves that more data exists,
+  // fetch later pages in small windows to remove cross-region round-trip
+  // latency from high-volume reporting reads.
+  const firstPage = await loadPage(0);
+  if (firstPage.error) {
+    throw new Error(
+      `${label} page 1 could not be loaded: ${firstPage.error.message}`,
+    );
+  }
+  const firstPageRows = firstPage.data ?? [];
+  appendPage(firstPageRows);
+  if (firstPageRows.length < pageSize) return rows;
+
+  for (
+    let windowStart = pageSize;
+    ;
+    windowStart += pageSize * pageConcurrency
+  ) {
+    const pages = await Promise.all(
+      Array.from({ length: pageConcurrency }, (_, index) =>
+        loadPage(windowStart + index * pageSize),
+      ),
+    );
+
+    for (const page of pages) {
+      const pageNumber = Math.floor(page.from / pageSize) + 1;
+      if (page.error) {
+        throw new Error(
+          `${label} page ${pageNumber} could not be loaded: ${page.error.message}`,
+        );
+      }
+
+      const pageRows = page.data ?? [];
+      appendPage(pageRows);
+
+      if (pageRows.length < pageSize) return rows;
     }
   }
 }

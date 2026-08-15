@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { chunkArray, mapWithConcurrency } from "../db/batch-query.server";
+import { chunkArray, mapWithConcurrency } from "../db/batch-query.server.ts";
 
 const REDACT_BATCH_CONCURRENCY = 4;
 

@@ -5,6 +5,10 @@ import { Link, useLoaderData, useLocation, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { fetchAllSupabasePages } from "../lib/db/supabase-pagination.server";
+import {
+  getCachedReportingQuery,
+  reportingCacheKey,
+} from "../lib/db/reporting-query-cache.server";
 import { assertReportingEntitlements } from "../lib/entitlements.server";
 import { resolveReportingScope } from "../lib/auth/location-performance-access";
 import {
@@ -178,6 +182,13 @@ type WebhookFailureRow = SyncFailureInputs["webhookEvents"][number] & {
   id: string;
 };
 
+function getCachedDashboardQuery<T>(
+  parts: Array<string | number | boolean | null | string[]>,
+  load: () => Promise<T>,
+) {
+  return getCachedReportingQuery(reportingCacheKey("dashboard", parts), load);
+}
+
 function isSuccessfulRefundTransaction(row: OrderTransactionDbRow) {
   const kind = row.kind?.toUpperCase();
   const status = row.status?.toUpperCase();
@@ -206,28 +217,39 @@ async function fetchRefundTransactionsForOrders({
   // extra round trips. Filtering against orderIdSet in JS afterward reproduces
   // the exact same result set, so callers below that sum/count this array
   // directly (no self-filter of their own) stay correct.
-  const rows = await fetchAllSupabasePages<OrderTransactionDbRow>({
-    label: "Refund transactions",
-    getRowKey: (row) => row.id,
-    fetchPage: (from, to) =>
-      supabase
-        .from("order_transactions")
-        .select(
-          "id, shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
-        )
-        .eq("shop_domain", shop)
-        .gte("processed_at", startDateUtc)
-        .lt("processed_at", endExclusiveUtc)
-        .order("processed_at", { ascending: false })
-        .order("id", { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{
-        data: OrderTransactionDbRow[] | null;
-        error: { message: string } | null;
-      }>,
-  });
+  const rows = await getCachedReportingQuery(
+    reportingCacheKey("dashboard-refund-transactions", [
+      shop,
+      startDateUtc,
+      endExclusiveUtc,
+    ]),
+    () =>
+      fetchAllSupabasePages<OrderTransactionDbRow>({
+        label: "Refund transactions",
+        pageConcurrency: 4,
+        getRowKey: (row) => row.id,
+        fetchPage: (from, to) =>
+          supabase
+            .from("order_transactions")
+            .select(
+              "id, shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
+            )
+            .eq("shop_domain", shop)
+            .gte("processed_at", startDateUtc)
+            .lt("processed_at", endExclusiveUtc)
+            .order("processed_at", { ascending: false })
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: OrderTransactionDbRow[] | null;
+            error: { message: string } | null;
+          }>,
+      }),
+  );
 
   return rows.filter(
-    (row) => orderIdSet.has(row.shopify_order_id) && isSuccessfulRefundTransaction(row),
+    (row) =>
+      orderIdSet.has(row.shopify_order_id) &&
+      isSuccessfulRefundTransaction(row),
   );
 }
 
@@ -364,6 +386,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     canManageSync
       ? fetchAllSupabasePages<SyncRunRow>({
           label: "Sync history",
+          pageConcurrency: 4,
           getRowKey: (row) => row.id,
           fetchPage: (from, to) =>
             supabase
@@ -382,6 +405,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     canManageSync
       ? fetchAllSupabasePages<SyncJobRow>({
           label: "Sync jobs",
+          pageConcurrency: 4,
           getRowKey: (row) => row.id,
           fetchPage: (from, to) =>
             supabase
@@ -402,6 +426,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     canManageSync
       ? fetchAllSupabasePages<WebhookFailureRow>({
           label: "Webhook failures",
+          pageConcurrency: 4,
           getRowKey: (row) => row.id,
           fetchPage: (from, to) =>
             supabase
@@ -420,111 +445,148 @@ export async function loader({ request }: LoaderFunctionArgs) {
         })
       : Promise.resolve([]),
     selectedLocationIds.length > 0
-      ? fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
-          label: "Dashboard order lines",
-          getRowKey: (row) => row.id,
-          fetchPage: (from, to) =>
-            supabase
-              .from("order_lines")
-              .select(orderLinesSelect)
-              .eq("shop_domain", session.shop)
-              .in("retail_location_id", selectedLocationIds)
-              .gte("created_at_shopify", startDateUtc)
-              .lt("created_at_shopify", endExclusiveUtc)
-              .order("created_at_shopify", { ascending: false })
-              .order("id", { ascending: true })
-              .range(from, to) as unknown as PromiseLike<{
-              data: Array<OrderLineDbRow & { id: string }> | null;
-              error: { message: string } | null;
-            }>,
-        })
+      ? getCachedDashboardQuery(
+          [
+            "order-lines",
+            session.shop,
+            [...selectedLocationIds].sort(),
+            startDateUtc,
+            endExclusiveUtc,
+            financialMetricsVersion,
+          ],
+          () =>
+            fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
+              label: "Dashboard order lines",
+              pageConcurrency: 4,
+              getRowKey: (row) => row.id,
+              fetchPage: (from, to) =>
+                supabase
+                  .from("order_lines")
+                  .select(orderLinesSelect)
+                  .eq("shop_domain", session.shop)
+                  .in("retail_location_id", selectedLocationIds)
+                  .gte("created_at_shopify", startDateUtc)
+                  .lt("created_at_shopify", endExclusiveUtc)
+                  .order("created_at_shopify", { ascending: false })
+                  .order("id", { ascending: true })
+                  .range(from, to) as unknown as PromiseLike<{
+                  data: Array<OrderLineDbRow & { id: string }> | null;
+                  error: { message: string } | null;
+                }>,
+            }),
+        )
       : Promise.resolve([]),
     selectedLocationIds.length > 0
-      ? fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
-          label: "Dashboard previous-period order lines",
-          getRowKey: (row) => row.id,
-          fetchPage: (from, to) =>
-            supabase
-              .from("order_lines")
-              .select(comparisonOrderLinesSelect)
-              .eq("shop_domain", session.shop)
-              .in("retail_location_id", selectedLocationIds)
-              .gte("created_at_shopify", previousPeriod.startDateUtc)
-              .lt("created_at_shopify", previousPeriod.endExclusiveUtc)
-              .order("created_at_shopify", { ascending: false })
-              .order("id", { ascending: true })
-              .range(from, to) as unknown as PromiseLike<{
-              data: Array<OrderLineDbRow & { id: string }> | null;
-              error: { message: string } | null;
-            }>,
-        })
+      ? getCachedDashboardQuery(
+          [
+            "previous-order-lines",
+            session.shop,
+            [...selectedLocationIds].sort(),
+            previousPeriod.startDateUtc,
+            previousPeriod.endExclusiveUtc,
+            financialMetricsVersion,
+          ],
+          () =>
+            fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
+              label: "Dashboard previous-period order lines",
+              pageConcurrency: 4,
+              getRowKey: (row) => row.id,
+              fetchPage: (from, to) =>
+                supabase
+                  .from("order_lines")
+                  .select(comparisonOrderLinesSelect)
+                  .eq("shop_domain", session.shop)
+                  .in("retail_location_id", selectedLocationIds)
+                  .gte("created_at_shopify", previousPeriod.startDateUtc)
+                  .lt("created_at_shopify", previousPeriod.endExclusiveUtc)
+                  .order("created_at_shopify", { ascending: false })
+                  .order("id", { ascending: true })
+                  .range(from, to) as unknown as PromiseLike<{
+                  data: Array<OrderLineDbRow & { id: string }> | null;
+                  error: { message: string } | null;
+                }>,
+            }),
+        )
       : Promise.resolve([]),
     selectedLocationIds.length > 0
-      ? fetchAllSupabasePages<InventoryLevelDbRow & { id: string }>({
-          label: "Inventory levels",
-          getRowKey: (row) => row.id,
-          fetchPage: (from, to) =>
-            supabase
-              .from("inventory_levels")
-              .select(
-                "id, shopify_location_id, shopify_variant_id, inventory_item_id, sku, available, tracked",
-              )
-              .eq("shop_domain", session.shop)
-              .in("shopify_location_id", selectedLocationIds)
-              .order("id", { ascending: true })
-              .range(from, to) as unknown as PromiseLike<{
-              data: Array<InventoryLevelDbRow & { id: string }> | null;
-              error: { message: string } | null;
-            }>,
-        })
+      ? getCachedDashboardQuery(
+          ["inventory", session.shop, [...selectedLocationIds].sort()],
+          () =>
+            fetchAllSupabasePages<InventoryLevelDbRow & { id: string }>({
+              label: "Inventory levels",
+              pageConcurrency: 4,
+              getRowKey: (row) => row.id,
+              fetchPage: (from, to) =>
+                supabase
+                  .from("inventory_levels")
+                  .select(
+                    "id, shopify_location_id, shopify_variant_id, inventory_item_id, sku, available, tracked",
+                  )
+                  .eq("shop_domain", session.shop)
+                  .in("shopify_location_id", selectedLocationIds)
+                  .order("id", { ascending: true })
+                  .range(from, to) as unknown as PromiseLike<{
+                  data: Array<InventoryLevelDbRow & { id: string }> | null;
+                  error: { message: string } | null;
+                }>,
+            }),
+        )
       : Promise.resolve([]),
-    fetchAllSupabasePages<VariantDbRow & { id: string }>({
-      label: "Product variants",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("variants")
-          .select(
-            "id, shopify_variant_id, shopify_product_id, inventory_item_id, title, sku, unit_cost",
-          )
-          .eq("shop_domain", session.shop)
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: Array<VariantDbRow & { id: string }> | null;
-          error: { message: string } | null;
-        }>,
-    }),
-    fetchAllSupabasePages<ProductDbRow & { id: string }>({
-      label: "Products",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("products")
-          .select("id, shopify_product_id, title, vendor, status")
-          .eq("shop_domain", session.shop)
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: Array<ProductDbRow & { id: string }> | null;
-          error: { message: string } | null;
-        }>,
-    }),
-    fetchAllSupabasePages<FixedExpenseDbRow & { id: string }>({
-      label: "Expenses",
-      getRowKey: (row) => row.id,
-      fetchPage: (from, to) =>
-        supabase
-          .from("fixed_expenses")
-          .select(
-            "id, expense_name, expense_category, monthly_amount, shopify_location_id, location_name, start_month, end_month, is_active",
-          )
-          .eq("shop_domain", session.shop)
-          .eq("is_active", true)
-          .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: Array<FixedExpenseDbRow & { id: string }> | null;
-          error: { message: string } | null;
-        }>,
-    }),
+    getCachedDashboardQuery(["variants", session.shop], () =>
+      fetchAllSupabasePages<VariantDbRow & { id: string }>({
+        label: "Product variants",
+        pageConcurrency: 4,
+        getRowKey: (row) => row.id,
+        fetchPage: (from, to) =>
+          supabase
+            .from("variants")
+            .select(
+              "id, shopify_variant_id, shopify_product_id, inventory_item_id, title, sku, unit_cost",
+            )
+            .eq("shop_domain", session.shop)
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: Array<VariantDbRow & { id: string }> | null;
+            error: { message: string } | null;
+          }>,
+      }),
+    ),
+    getCachedDashboardQuery(["products", session.shop], () =>
+      fetchAllSupabasePages<ProductDbRow & { id: string }>({
+        label: "Products",
+        pageConcurrency: 4,
+        getRowKey: (row) => row.id,
+        fetchPage: (from, to) =>
+          supabase
+            .from("products")
+            .select("id, shopify_product_id, title, vendor, status")
+            .eq("shop_domain", session.shop)
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: Array<ProductDbRow & { id: string }> | null;
+            error: { message: string } | null;
+          }>,
+      }),
+    ),
+    getCachedDashboardQuery(["active-expenses", session.shop], () =>
+      fetchAllSupabasePages<FixedExpenseDbRow & { id: string }>({
+        label: "Expenses",
+        getRowKey: (row) => row.id,
+        fetchPage: (from, to) =>
+          supabase
+            .from("fixed_expenses")
+            .select(
+              "id, expense_name, expense_category, monthly_amount, shopify_location_id, location_name, start_month, end_month, is_active",
+            )
+            .eq("shop_domain", session.shop)
+            .eq("is_active", true)
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: Array<FixedExpenseDbRow & { id: string }> | null;
+            error: { message: string } | null;
+          }>,
+      }),
+    ),
   ]);
 
   const syncFailureState = getUnresolvedSyncFailureState({

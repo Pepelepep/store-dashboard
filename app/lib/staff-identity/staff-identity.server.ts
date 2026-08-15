@@ -7,7 +7,7 @@ import {
   type StaffIdentityOrderLine,
 } from "./staff-identity";
 import { fetchAllSupabasePages } from "../db/supabase-pagination.server";
-import { chunkArray, mapWithConcurrency } from "../db/batch-query.server";
+import { chunkArray, mapWithConcurrency } from "../db/batch-query.server.ts";
 
 const STAFF_ALIAS_VALUE_BATCH_SIZE = 100;
 const STAFF_ALIAS_BATCH_CONCURRENCY = 4;

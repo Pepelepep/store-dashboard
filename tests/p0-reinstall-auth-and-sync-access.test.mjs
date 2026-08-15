@@ -26,6 +26,7 @@ import { formatRelativeUpdatedAt } from "../app/lib/financial/cogs-setup.ts";
 import { allocateExpensesByLocation } from "../app/lib/financial/expense-allocation.ts";
 import { calculateNetSalesAfterCashRefunds } from "../app/lib/financial/net-sales.ts";
 import { fetchAllSupabasePages } from "../app/lib/db/supabase-pagination.server.ts";
+import { ReportingQueryCache } from "../app/lib/db/reporting-query-cache.server.ts";
 import { respondToOperationalWebhook } from "../app/lib/webhooks/operational-webhook-response.server.ts";
 import {
   deleteShopScopedSupabaseData,
@@ -1816,6 +1817,69 @@ test("bounded dashboard pagination includes rows beyond the PostgREST page limit
     [1000, 1999],
     [2000, 2999],
   ]);
+});
+
+test("large reporting reads fetch later pages with bounded concurrency", async () => {
+  const sourceRows = Array.from({ length: 4_250 }, (_, index) => ({
+    id: String(index + 1).padStart(5, "0"),
+  }));
+  let inFlight = 0;
+  let maxInFlight = 0;
+
+  const rows = await fetchAllSupabasePages({
+    pageSize: 1000,
+    pageConcurrency: 3,
+    label: "Concurrent financial rows",
+    getRowKey: (row) => row.id,
+    async fetchPage(from, to) {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      inFlight -= 1;
+      return { data: sourceRows.slice(from, to + 1), error: null };
+    },
+  });
+
+  assert.equal(rows.length, 4_250);
+  assert.equal(maxInFlight, 3);
+});
+
+test("reporting query cache reuses compressed results and expires cleanly", async () => {
+  let now = 1_000;
+  let loads = 0;
+  const cache = new ReportingQueryCache({
+    ttlMs: 100,
+    maxBytes: 1024 * 1024,
+    now: () => now,
+  });
+  const load = async () => {
+    loads += 1;
+    return [{ id: "row-1", revenue: 42 }];
+  };
+
+  const [first, concurrent] = await Promise.all([
+    cache.getOrLoad("tenant-a:period", load),
+    cache.getOrLoad("tenant-a:period", load),
+  ]);
+  const cached = await cache.getOrLoad("tenant-a:period", load);
+
+  assert.equal(loads, 1);
+  assert.deepEqual(first, concurrent);
+  assert.deepEqual(cached, first);
+
+  now += 101;
+  await cache.getOrLoad("tenant-a:period", load);
+  assert.equal(loads, 2);
+});
+
+test("reporting cache serialization failure never fails a successful read", async () => {
+  const cache = new ReportingQueryCache({ ttlMs: 100, maxBytes: 1024 });
+  const value = { nonJsonValue: 1n };
+
+  assert.equal(
+    (await cache.getOrLoad("non-json", async () => value)).nonJsonValue,
+    1n,
+  );
 });
 
 test("pagination rejects duplicate stable keys instead of double-counting", async () => {

@@ -1,5 +1,5 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
-import { chunkArray, mapWithConcurrency } from "../db/batch-query.server";
+import { chunkArray, mapWithConcurrency } from "../db/batch-query.server.ts";
 import { calculateRemainingLineCogs } from "../financial/cogs";
 import { calculateNetSalesAfterCashRefunds } from "../financial/net-sales";
 import { upsertPosStaffIdentityAliasesFromOrderLines } from "../staff-identity/staff-identity.server";

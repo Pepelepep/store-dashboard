@@ -55,6 +55,10 @@ import { resolveReportingScope } from "../lib/auth/location-performance-access";
 import { getSupabaseAdminClient } from "../lib/db/supabase.server";
 import { fetchAllSupabasePages } from "../lib/db/supabase-pagination.server";
 import {
+  getCachedReportingQuery,
+  reportingCacheKey,
+} from "../lib/db/reporting-query-cache.server";
+import {
   ensureShopInitialized,
   logEmptyDataState,
 } from "../lib/shop/shop-initialization.server";
@@ -288,31 +292,43 @@ async function fetchLocationOrderLines({
   const selectColumns =
     financialMetricsVersion === "v2" ? "*" : LOCATION_ORDER_LINES_SELECT;
 
-  const rows = await fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
-    label: "Location order lines",
-    pageSize: ORDER_LINES_PAGE_SIZE,
-    getRowKey: (row) => row.id,
-    fetchPage: (from, to) => {
-      let query = supabase
-        .from("order_lines")
-        .select(selectColumns)
-        .eq("shop_domain", shop)
-        .gte("created_at_shopify", startDateUtc)
-        .lt("created_at_shopify", endExclusiveUtc);
+  const rows = await getCachedReportingQuery(
+    reportingCacheKey("locations-order-lines", [
+      shop,
+      startDateUtc,
+      endExclusiveUtc,
+      [...selectedLocationIds].sort(),
+      shouldFilterByLocation,
+      financialMetricsVersion,
+    ]),
+    () =>
+      fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
+        label: "Location order lines",
+        pageSize: ORDER_LINES_PAGE_SIZE,
+        pageConcurrency: 4,
+        getRowKey: (row) => row.id,
+        fetchPage: (from, to) => {
+          let query = supabase
+            .from("order_lines")
+            .select(selectColumns)
+            .eq("shop_domain", shop)
+            .gte("created_at_shopify", startDateUtc)
+            .lt("created_at_shopify", endExclusiveUtc);
 
-      if (shouldFilterByLocation) {
-        query = query.in("retail_location_id", selectedLocationIds);
-      }
+          if (shouldFilterByLocation) {
+            query = query.in("retail_location_id", selectedLocationIds);
+          }
 
-      return query
-        .order("created_at_shopify", { ascending: false })
-        .order("id", { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{
-        data: Array<OrderLineDbRow & { id: string }> | null;
-        error: { message: string } | null;
-      }>;
-    },
-  });
+          return query
+            .order("created_at_shopify", { ascending: false })
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: Array<OrderLineDbRow & { id: string }> | null;
+            error: { message: string } | null;
+          }>;
+        },
+      }),
+  );
 
   return { data: rows, error: null };
 }
@@ -344,28 +360,39 @@ async function fetchRefundTransactionsForOrders({
   // location column, so the .in() filter never bought index selectivity, only
   // extra round trips. Filtering against orderIdSet in JS afterward reproduces
   // the exact same result set.
-  const rows = await fetchAllSupabasePages<OrderTransactionDbRow>({
-    label: "Location refund transactions",
-    getRowKey: (row) => row.id,
-    fetchPage: (from, to) =>
-      supabase
-        .from("order_transactions")
-        .select(
-          "id, shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
-        )
-        .eq("shop_domain", shop)
-        .gte("processed_at", startDateUtc)
-        .lt("processed_at", endExclusiveUtc)
-        .order("processed_at", { ascending: false })
-        .order("id", { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{
-        data: OrderTransactionDbRow[] | null;
-        error: { message: string } | null;
-      }>,
-  });
+  const rows = await getCachedReportingQuery(
+    reportingCacheKey("locations-refund-transactions", [
+      shop,
+      startDateUtc,
+      endExclusiveUtc,
+    ]),
+    () =>
+      fetchAllSupabasePages<OrderTransactionDbRow>({
+        label: "Location refund transactions",
+        pageConcurrency: 4,
+        getRowKey: (row) => row.id,
+        fetchPage: (from, to) =>
+          supabase
+            .from("order_transactions")
+            .select(
+              "id, shopify_order_id, shopify_transaction_id, kind, status, amount, processed_at",
+            )
+            .eq("shop_domain", shop)
+            .gte("processed_at", startDateUtc)
+            .lt("processed_at", endExclusiveUtc)
+            .order("processed_at", { ascending: false })
+            .order("id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: OrderTransactionDbRow[] | null;
+            error: { message: string } | null;
+          }>,
+      }),
+  );
 
   return rows.filter(
-    (row) => orderIdSet.has(row.shopify_order_id) && isSuccessfulRefundTransaction(row),
+    (row) =>
+      orderIdSet.has(row.shopify_order_id) &&
+      isSuccessfulRefundTransaction(row),
   );
 }
 
@@ -1197,7 +1224,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const selectedStaff = url.searchParams.get("staff") || "";
   const selectedVendor = url.searchParams.get("vendor") || "";
   const requestedLocationIds = new Set(
-    [...url.searchParams.getAll("locations"), ...url.searchParams.getAll("locationId")]
+    [
+      ...url.searchParams.getAll("locations"),
+      ...url.searchParams.getAll("locationId"),
+    ]
       .flatMap((value) => value.split(","))
       .map((value) => value.trim())
       .filter(Boolean),
@@ -1283,23 +1313,27 @@ export async function loader({ request }: LoaderFunctionArgs) {
             financialMetricsVersion,
           })
         : Promise.resolve({ data: [], error: null }),
-      fetchAllSupabasePages<FixedExpenseDbRow & { id: string }>({
-        label: "Location performance expenses",
-        getRowKey: (row) => row.id,
-        fetchPage: (from, to) =>
-          supabase
-            .from("fixed_expenses")
-            .select(
-              "id, expense_name, expense_category, monthly_amount, shopify_location_id, location_name, start_month, end_month, is_active",
-            )
-            .eq("shop_domain", session.shop)
-            .eq("is_active", true)
-            .order("id", { ascending: true })
-            .range(from, to) as unknown as PromiseLike<{
-            data: Array<FixedExpenseDbRow & { id: string }> | null;
-            error: { message: string } | null;
-          }>,
-      }),
+      getCachedReportingQuery(
+        reportingCacheKey("locations-active-expenses", [session.shop]),
+        () =>
+          fetchAllSupabasePages<FixedExpenseDbRow & { id: string }>({
+            label: "Location performance expenses",
+            getRowKey: (row) => row.id,
+            fetchPage: (from, to) =>
+              supabase
+                .from("fixed_expenses")
+                .select(
+                  "id, expense_name, expense_category, monthly_amount, shopify_location_id, location_name, start_month, end_month, is_active",
+                )
+                .eq("shop_domain", session.shop)
+                .eq("is_active", true)
+                .order("id", { ascending: true })
+                .range(from, to) as unknown as PromiseLike<{
+                data: Array<FixedExpenseDbRow & { id: string }> | null;
+                error: { message: string } | null;
+              }>,
+          }),
+      ),
     ]);
 
   const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
