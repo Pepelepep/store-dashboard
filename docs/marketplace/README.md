@@ -6,7 +6,7 @@ These docs support ShopOps Studio marketplace readiness and reviewer preparation
 
 - [Marketplace checklist](MARKETPLACE_CHECKLIST.md)
 - [Marketplace environment setup](MARKETPLACE_ENVIRONMENT_SETUP.md)
-- [Custom to Marketplace promotion](BRANCH_PROMOTION.md)
+- [Branch workflow](BRANCH_WORKFLOW.md)
 - [Demo store setup](DEMO_STORE_SETUP.md)
 - [Reviewer test script](REVIEWER_TEST_SCRIPT.md)
 - [Screenshot plan](SCREENSHOT_PLAN.md)
@@ -31,6 +31,6 @@ These docs support ShopOps Studio marketplace readiness and reviewer preparation
 
 ## Safety Notes
 
-- Marketplace work should stay on `marketplace/stable-prep` and `marketplace/*` branches unless explicitly approved.
+- `marketplace/stable-prep` is the single active branch. `main` remains a legacy branch and must not receive Marketplace changes without explicit approval.
 - Do not change current client production Shopify config, Render production environment variables, or database schema as part of documentation cleanup.
 - Do not use client production data in screenshots, demo stores, reviewer flows, or listing assets.

@@ -29,8 +29,6 @@
     "cron:maintenance": "node ./scripts/run-maintenance-tick.mjs",
     "verify:supabase-schema": "node ./scripts/verify-supabase-schema.mjs",
     "release:verify": "npm run typecheck && npm run lint && npm run test:p0 && npm run test:staff-csv && npm run build && npm audit --omit=dev --audit-level=high",
-    "release:marketplace:check": "node ./scripts/promote-marketplace.mjs",
-    "release:marketplace": "npm run release:verify && node ./scripts/promote-marketplace.mjs --push",
     "shopops:access-audit": "node ./scripts/shopops-access-maintenance.mjs audit",
     "shopops:access-repair": "node ./scripts/shopops-access-maintenance.mjs repair",
     "typecheck": "react-router typegen && tsc --noEmit"

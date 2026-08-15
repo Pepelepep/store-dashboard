@@ -8,11 +8,15 @@ This repository also contains current client/internal implementation details fro
 
 ---
 
-## Marketplace development safety rules
+## Branch model
 
-Marketplace work must stay on `marketplace/stable-prep` and `marketplace/*` branches unless explicit approval is given.
+`marketplace/stable-prep` is the single active branch, the GitHub default, and
+the branch deployed by Render. `main` is retained only for the legacy app that
+still depends on it.
 
-Do not merge marketplace preparation work into client staging, main, or production branches without explicit approval.
+Start changes from `marketplace/stable-prep`. When a pull request is useful,
+use a short-lived branch and delete it immediately after merge. Do not merge
+Marketplace work into `main` without explicit approval.
 
 Do not change:
 
