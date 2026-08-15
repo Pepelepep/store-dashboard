@@ -692,7 +692,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   if (intent === "apply_csv_mappings") {
     type CsvMapping = {
-      aliasId: string;
+      sellerId: string;
       action: "create" | "link";
       displayName?: string;
       personId?: string;
@@ -705,64 +705,21 @@ export async function action({ request }: ActionFunctionArgs) {
     }
     if (!Array.isArray(mappings) || !mappings.length)
       return { ok: false, message: "Choose at least one mapping." };
-    let applied = 0;
-    for (const mapping of mappings) {
-      if (!mapping.aliasId || !["create", "link"].includes(mapping.action))
-        continue;
-      const aliasResult = await supabase
-        .from("staff_identity_aliases")
-        .select("id")
-        .eq("shop_domain", session.shop)
-        .eq("id", mapping.aliasId)
-        .eq("alias_type", STAFF_ALIAS_TYPES.posAttributedUserId)
-        .is("person_id", null)
-        .maybeSingle();
-      if (aliasResult.error || !aliasResult.data) continue;
-      let targetId = mapping.personId;
-      if (mapping.action === "create") {
-        const displayName = mapping.displayName?.trim();
-        if (!displayName) continue;
-        const created = await supabase
-          .from("staff_people")
-          .insert({
-            shop_domain: session.shop,
-            display_name: displayName,
-            email: null,
-          })
-          .select("id")
-          .single();
-        if (created.error)
-          return {
-            ok: false,
-            message: `Import stopped after ${applied} mappings: ${created.error.message}`,
-          };
-        targetId = created.data.id;
-      } else {
-        const person = await supabase
-          .from("staff_people")
-          .select("id")
-          .eq("shop_domain", session.shop)
-          .eq("id", targetId ?? "")
-          .maybeSingle();
-        if (!person.data) continue;
-      }
-      const linked = await supabase
-        .from("staff_identity_aliases")
-        .update({
-          person_id: targetId,
-          review_status: "mapped",
-          updated_at: now,
-        })
-        .eq("shop_domain", session.shop)
-        .eq("id", mapping.aliasId)
-        .is("person_id", null);
-      if (linked.error)
-        return {
-          ok: false,
-          message: `Import stopped after ${applied} mappings: ${linked.error.message}`,
-        };
-      applied += 1;
-    }
+    if (mappings.length > 1000)
+      return { ok: false, message: "Import at most 1,000 staff mappings." };
+    const importResult = await supabase.rpc(
+      "import_shopify_staff_csv_mappings",
+      {
+        p_shop_domain: session.shop,
+        p_mappings: mappings,
+      },
+    );
+    if (importResult.error)
+      return {
+        ok: false,
+        message: `The staff import could not be completed: ${importResult.error.message}`,
+      };
+    const applied = Number(importResult.data?.applied ?? 0);
     return {
       ok: true,
       message: `${applied} POS seller mapping${applied === 1 ? "" : "s"} applied. Dashboard access was not changed.`,
@@ -1686,12 +1643,30 @@ function CsvImport({
       (row) =>
         !exactAliases.has(row.sellerId) && !mappedAliases.has(row.sellerId),
     ) ?? [];
-  const selected = exactRows.filter(
+  const importableRows = [...exactRows, ...unmatchedRows];
+  const selected = importableRows.filter(
     (row) =>
       choices[row.sellerId]?.action === "create" ||
       (choices[row.sellerId]?.action === "link" &&
         choices[row.sellerId]?.personId),
   );
+  const sameNameProfile = (displayName: string) =>
+    profiles.find(
+      (profile) =>
+        profile.display_name.trim().toLocaleLowerCase() ===
+        displayName.trim().toLocaleLowerCase(),
+    );
+  const prepareAll = () =>
+    setChoices((current) => {
+      const next = { ...current };
+      for (const row of importableRows) {
+        const sameName = sameNameProfile(row.displayName);
+        next[row.sellerId] = sameName
+          ? { action: "link", personId: sameName.id }
+          : { action: "create" };
+      }
+      return next;
+    });
   return (
     <div className="import-flow">
       <p>
@@ -1750,18 +1725,31 @@ function CsvImport({
         <div className="preview">
           <div className="preview-counts">
             <span>
-              <b>{exactRows.length}</b> Exact matches
+              <b>{exactRows.length}</b> Detected in ShopOps
             </span>
             <span>
               <b>{preview.conflicts.length}</b> Conflicts
             </span>
             <span>
-              <b>{unmatchedRows.length}</b> No matching sales
+              <b>{unmatchedRows.length}</b> Ready before first tracked sale
             </span>
             <span>
               <b>{mappedRows.length}</b> Already mapped
             </span>
           </div>
+          {unmatchedRows.length ? (
+            <p className="hint">
+              These Shopify staff IDs have not appeared in a ShopOps-tracked
+              sale yet. You can still import their names now; future tracked
+              sales will match automatically. This aggregate export cannot
+              rewrite historical orders.
+            </p>
+          ) : null}
+          {importableRows.length ? (
+            <Button onClick={prepareAll}>
+              Prepare all {importableRows.length} staff
+            </Button>
+          ) : null}
           {exactRows.map((row) => {
             const alias = exactAliases.get(row.sellerId)!;
             const metric = metrics[metricKey(alias)] ?? blankMetric();
@@ -1853,11 +1841,53 @@ function CsvImport({
             </article>
           ))}
           {unmatchedRows.map((row) => (
-            <article className="preview-row muted" key={row.sellerId}>
+            <article className="preview-row" key={row.sellerId}>
               <div>
                 <b>{row.displayName}</b>
-                <span>No matching ShopOps sales found</span>
+                <span>
+                  Ready to import before first tracked sale
+                  {row.locations[0] ? ` · ${row.locations[0]}` : ""}
+                </span>
               </div>
+              <select
+                aria-label={`Action for ${row.displayName}`}
+                value={choices[row.sellerId]?.action ?? "skip"}
+                onChange={(event) =>
+                  setChoices((current) => ({
+                    ...current,
+                    [row.sellerId]: {
+                      action: event.target.value as "create" | "link" | "skip",
+                    },
+                  }))
+                }
+              >
+                <option value="skip">Skip</option>
+                <option value="create">Create staff</option>
+                <option value="link">Link to existing</option>
+              </select>
+              {choices[row.sellerId]?.action === "link" ? (
+                <select
+                  aria-label={`Staff member for ${row.displayName}`}
+                  value={choices[row.sellerId]?.personId ?? ""}
+                  onChange={(event) =>
+                    setChoices((current) => ({
+                      ...current,
+                      [row.sellerId]: {
+                        action: "link",
+                        personId: event.target.value,
+                      },
+                    }))
+                  }
+                >
+                  <option value="">Choose staff member</option>
+                  {profiles.map((profile) => (
+                    <option value={profile.id} key={profile.id}>
+                      {profile.display_name}
+                      {profile.email ? ` · ${profile.email}` : ""}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
             </article>
           ))}
           {preview.ignoredRows ? (
@@ -1889,7 +1919,7 @@ function CsvImport({
                     name="mappings"
                     value={JSON.stringify(
                       selected.map((row) => ({
-                        aliasId: exactAliases.get(row.sellerId)!.id,
+                        sellerId: row.sellerId,
                         action: choices[row.sellerId].action,
                         displayName: row.displayName,
                         personId: choices[row.sellerId].personId,
