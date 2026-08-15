@@ -3,7 +3,6 @@ name: quality-gate
 on:
   push:
     branches:
-      - custom/local-friend-deployment
       - marketplace/stable-prep
   pull_request:
     branches:
@@ -21,11 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.12.0
           cache: npm
       - run: npm ci
       - run: npm run release:verify
-
