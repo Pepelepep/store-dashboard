@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { chunkArray, mapWithConcurrency } from "../db/batch-query.server.ts";
 
 const REDACT_BATCH_CONCURRENCY = 4;
+const SHOP_REDACTION_TABLE_BATCH_SIZE = 2_000;
+const SHOP_REDACTION_BATCHES_PER_TICK = 5;
 
 export const SHOP_REDACTION_TABLES = [
   "webhook_events",
@@ -39,6 +41,16 @@ type SessionStore = {
 type ComplianceStatus = "received" | "completed" | "failed";
 
 type ComplianceEventDetails = Record<string, unknown>;
+
+type ShopRedactionJobRow = {
+  id: string;
+  shop_domain: string;
+  shopify_webhook_id: string | null;
+  status: "pending" | "processing" | "completed" | "error";
+  attempt_count: number;
+  current_table_index: number;
+  counts: Record<string, number>;
+};
 
 type CustomerCompliancePayload = {
   customer?: {
@@ -229,6 +241,184 @@ export async function deleteShopScopedSupabaseData({
   await sessionStore.session.deleteMany({ where: { shop } });
 
   return deletedCounts;
+}
+
+function isUniqueViolation(error: { code?: string } | null) {
+  return error?.code === "23505";
+}
+
+export async function enqueueShopRedactionJob({
+  supabase,
+  shop,
+  webhookId,
+}: {
+  supabase: SupabaseClient;
+  shop: string;
+  webhookId: string | null;
+}) {
+  const { data, error } = await supabase
+    .from("shop_redaction_jobs")
+    .insert({
+      shop_domain: shop,
+      shopify_webhook_id: webhookId,
+      status: "pending",
+      available_at: new Date().toISOString(),
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error && !isUniqueViolation(error)) throw error;
+
+  return {
+    enqueued: Boolean(data?.id),
+    duplicate: isUniqueViolation(error),
+  };
+}
+
+function getShopRedactionRetryAt(attemptCount: number) {
+  const minutes = Math.min(360, Math.max(1, attemptCount) * 10);
+  return new Date(Date.now() + minutes * 60 * 1000).toISOString();
+}
+
+async function processShopRedactionJob({
+  supabase,
+  sessionStore,
+  job,
+  tableBatchSize,
+  maxTableBatches,
+}: {
+  supabase: SupabaseClient;
+  sessionStore: SessionStore;
+  job: ShopRedactionJobRow;
+  tableBatchSize: number;
+  maxTableBatches: number;
+}) {
+  let currentTableIndex = Math.max(0, job.current_table_index);
+  const counts = { ...(job.counts ?? {}) };
+  let batchesProcessed = 0;
+
+  try {
+    // Session deletion is idempotent and happens before each continuation so a
+    // redacted shop cannot regain application access while its larger tables
+    // are being drained over multiple maintenance ticks.
+    await sessionStore.session.deleteMany({
+      where: { shop: job.shop_domain },
+    });
+
+    while (
+      currentTableIndex < SHOP_REDACTION_TABLES.length &&
+      batchesProcessed < maxTableBatches
+    ) {
+      const table = SHOP_REDACTION_TABLES[currentTableIndex];
+      const { data, error } = await supabase.rpc("purge_shop_table_batch", {
+        p_shop_domain: job.shop_domain,
+        p_table_name: table,
+        p_batch_size: tableBatchSize,
+      });
+      if (error) throw error;
+
+      const deleted = Number(data ?? 0);
+      counts[table] = Number(counts[table] ?? 0) + deleted;
+      batchesProcessed += 1;
+
+      if (deleted < tableBatchSize) currentTableIndex += 1;
+    }
+
+    const completed = currentTableIndex >= SHOP_REDACTION_TABLES.length;
+    const now = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from("shop_redaction_jobs")
+      .update({
+        status: completed ? "completed" : "pending",
+        current_table_index: currentTableIndex,
+        counts,
+        last_error: null,
+        available_at: now,
+        processing_started_at: null,
+        completed_at: completed ? now : null,
+        updated_at: now,
+      })
+      .eq("id", job.id)
+      .eq("status", "processing");
+    if (updateError) throw updateError;
+
+    if (completed) {
+      await recordComplianceWebhookEvent({
+        supabase,
+        shop: job.shop_domain,
+        topic: "SHOP_REDACT",
+        status: "completed",
+        details: {
+          deletedCounts: counts,
+          sessionsDeleted: true,
+          retainedData: "Minimal compliance audit and redaction job only.",
+        },
+      });
+    }
+
+    return { completed, failed: false, batchesProcessed };
+  } catch (error) {
+    const now = new Date().toISOString();
+    await supabase
+      .from("shop_redaction_jobs")
+      .update({
+        status: "error",
+        current_table_index: currentTableIndex,
+        counts,
+        last_error: toErrorMessage(error).slice(0, 1000),
+        available_at: getShopRedactionRetryAt(job.attempt_count),
+        processing_started_at: null,
+        updated_at: now,
+      })
+      .eq("id", job.id)
+      .eq("status", "processing");
+
+    return { completed: false, failed: true, batchesProcessed };
+  }
+}
+
+export async function processShopRedactionJobsBatch({
+  supabase,
+  sessionStore,
+  batchSize = 2,
+  tableBatchSize = SHOP_REDACTION_TABLE_BATCH_SIZE,
+  maxTableBatches = SHOP_REDACTION_BATCHES_PER_TICK,
+}: {
+  supabase: SupabaseClient;
+  sessionStore: SessionStore;
+  batchSize?: number;
+  tableBatchSize?: number;
+  maxTableBatches?: number;
+}) {
+  const { data, error } = await supabase.rpc("claim_shop_redaction_jobs", {
+    p_batch_size: Math.min(Math.max(Math.floor(batchSize), 1), 10),
+    p_max_attempts: 10,
+  });
+  if (error) throw error;
+
+  const jobs = (data ?? []) as ShopRedactionJobRow[];
+  const results = await mapWithConcurrency(jobs, 2, (job) =>
+    processShopRedactionJob({
+      supabase,
+      sessionStore,
+      job,
+      tableBatchSize,
+      maxTableBatches,
+    }),
+  );
+
+  return {
+    claimed: jobs.length,
+    completed: results.filter((result) => result.completed).length,
+    continued: results.filter(
+      (result) => !result.completed && !result.failed,
+    ).length,
+    failed: results.filter((result) => result.failed).length,
+    batchesProcessed: results.reduce(
+      (total, result) => total + result.batchesProcessed,
+      0,
+    ),
+  };
 }
 
 export function getComplianceErrorDetails(error: unknown) {

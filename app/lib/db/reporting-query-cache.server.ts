@@ -4,7 +4,7 @@ import { gzip, gunzip, constants as zlibConstants } from "node:zlib";
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
-const DEFAULT_TTL_MS = 20_000;
+const DEFAULT_TTL_MS = 60_000;
 const DEFAULT_MAX_BYTES = 48 * 1024 * 1024;
 
 type CacheEntry = {

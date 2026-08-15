@@ -1,8 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 
-import db from "../db.server";
 import {
-  deleteShopScopedSupabaseData,
+  enqueueShopRedactionJob,
   getComplianceErrorDetails,
   recordComplianceWebhookEvent,
 } from "../lib/compliance/compliance-webhooks.server";
@@ -16,21 +15,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   console.log(`Received ${topic} compliance webhook for ${shop}.`);
 
   try {
-    const deletedCounts = await deleteShopScopedSupabaseData({
+    const webhookId = request.headers.get("x-shopify-webhook-id");
+    const enqueueResult = await enqueueShopRedactionJob({
       supabase,
       shop,
-      sessionStore: db,
+      webhookId,
     });
 
     await recordComplianceWebhookEvent({
       supabase,
       shop,
       topic,
-      status: "completed",
+      status: "received",
       details: {
-        deletedCounts,
-        sessionsDeleted: true,
-        retainedData: "Minimal compliance audit event only.",
+        queued: enqueueResult.enqueued,
+        duplicate: enqueueResult.duplicate,
+        webhookIdPresent: Boolean(webhookId),
       },
     });
   } catch (error) {

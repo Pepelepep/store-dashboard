@@ -75,7 +75,6 @@ import {
   getLineReturnedQuantity,
   getLineReturns,
   getPreviousPeriodDateRange,
-  getStaffDisplayLabel,
   getStaffFilterValue,
   getTodayStoreDate,
   getVendorFilterValue,
@@ -99,6 +98,14 @@ import { calculateReportedProfit, summarizeCogs } from "../lib/financial/cogs";
 import { allocateExpensesByLocation } from "../lib/financial/expense-allocation";
 import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
 import { buildDrilldownResetKey } from "../lib/dashboard/drilldown-reset-key";
+import {
+  assertInteractiveReportDateRange,
+  MAX_INTERACTIVE_ORDER_LINES,
+} from "../lib/dashboard/report-date-range";
+import {
+  fetchReportingFilterOptions,
+  fetchReportingOrderLines,
+} from "../lib/reporting/reporting-order-lines.server";
 import { reconcileTrendRowsWithCashRefunds } from "../lib/dashboard/location-trend-reconciliation";
 import { limitRankedBreakdownRows } from "../lib/dashboard/ranked-breakdown";
 import { formatTrendPeriodLabel } from "../lib/dashboard/chart-formatters";
@@ -258,9 +265,10 @@ type ReportingActionData = {
   message: string;
 };
 
-const ORDER_LINES_PAGE_SIZE = 1000;
 const LOCATION_ORDER_LINES_SELECT =
-  "id, order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, returned_quantity, cost_at_sale, staff_member_id, staff_member_name, staff_member_email, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source";
+  "id, order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, returned_quantity, cost_at_sale, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source";
+const LOCATION_ORDER_LINES_V2_SELECT =
+  `${LOCATION_ORDER_LINES_SELECT}, gross_sales, discounts, returns, net_sales, refunded_amount, taxes`;
 
 type OrderTransactionDbRow = {
   id: string;
@@ -278,6 +286,8 @@ async function fetchLocationOrderLines({
   startDateUtc,
   endExclusiveUtc,
   selectedLocationIds,
+  selectedStaff,
+  selectedVendor,
   shouldFilterByLocation,
   financialMetricsVersion,
 }: {
@@ -286,49 +296,28 @@ async function fetchLocationOrderLines({
   startDateUtc: string;
   endExclusiveUtc: string;
   selectedLocationIds: string[];
+  selectedStaff: string;
+  selectedVendor: string;
   shouldFilterByLocation: boolean;
   financialMetricsVersion: FinancialMetricsVersion;
 }) {
   const selectColumns =
-    financialMetricsVersion === "v2" ? "*" : LOCATION_ORDER_LINES_SELECT;
+    financialMetricsVersion === "v2"
+      ? LOCATION_ORDER_LINES_V2_SELECT
+      : LOCATION_ORDER_LINES_SELECT;
 
-  const rows = await getCachedReportingQuery(
-    reportingCacheKey("locations-order-lines", [
-      shop,
-      startDateUtc,
-      endExclusiveUtc,
-      [...selectedLocationIds].sort(),
-      shouldFilterByLocation,
-      financialMetricsVersion,
-    ]),
-    () =>
-      fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
-        label: "Location order lines",
-        pageSize: ORDER_LINES_PAGE_SIZE,
-        pageConcurrency: 4,
-        getRowKey: (row) => row.id,
-        fetchPage: (from, to) => {
-          let query = supabase
-            .from("order_lines")
-            .select(selectColumns)
-            .eq("shop_domain", shop)
-            .gte("created_at_shopify", startDateUtc)
-            .lt("created_at_shopify", endExclusiveUtc);
-
-          if (shouldFilterByLocation) {
-            query = query.in("retail_location_id", selectedLocationIds);
-          }
-
-          return query
-            .order("created_at_shopify", { ascending: false })
-            .order("id", { ascending: true })
-            .range(from, to) as unknown as PromiseLike<{
-            data: Array<OrderLineDbRow & { id: string }> | null;
-            error: { message: string } | null;
-          }>;
-        },
-      }),
-  );
+  const rows = await fetchReportingOrderLines({
+    supabase,
+    shop,
+    locationIds: shouldFilterByLocation ? selectedLocationIds : [],
+    startAt: startDateUtc,
+    endAt: endExclusiveUtc,
+    selectedStaff,
+    selectedVendor,
+    selectColumns,
+    cacheNamespace: "locations-order-lines",
+    maxRows: MAX_INTERACTIVE_ORDER_LINES,
+  });
 
   return { data: rows, error: null };
 }
@@ -501,50 +490,6 @@ function getMonthKey(date: Date) {
 
 function getYearKey(date: Date) {
   return String(date.getUTCFullYear());
-}
-
-function buildStaffOptions(orderLines: OrderLineDbRow[]) {
-  const options = new Map<string, string>();
-  let hasUnknownStaff = false;
-
-  for (const row of orderLines) {
-    const value = getStaffFilterValue(row);
-
-    if (!value) {
-      hasUnknownStaff = true;
-      continue;
-    }
-
-    if (!options.has(value)) {
-      options.set(value, getStaffDisplayLabel(row));
-    }
-  }
-
-  const sortedOptions = Array.from(options.entries())
-    .map(([value, label]) => ({ value, label }))
-    .sort((a, b) => a.label.localeCompare(b.label));
-
-  if (hasUnknownStaff) {
-    sortedOptions.push({
-      value: UNKNOWN_STAFF_FILTER_VALUE,
-      label: "Unassigned",
-    });
-  }
-
-  return sortedOptions;
-}
-
-function buildVendorOptions(orderLines: OrderLineDbRow[]) {
-  const vendors = new Set<string>();
-
-  for (const row of orderLines) {
-    const vendor = row.vendor?.trim();
-    if (vendor) vendors.add(vendor);
-  }
-
-  return Array.from(vendors)
-    .sort((a, b) => a.localeCompare(b))
-    .map((vendor) => ({ value: vendor, label: vendor }));
 }
 
 function filterOrderLines({
@@ -1221,6 +1166,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     preset === "today" ? today : url.searchParams.get("startDate") || today;
   const endDate =
     preset === "today" ? today : url.searchParams.get("endDate") || today;
+  assertInteractiveReportDateRange({ startDate, endDate });
   const selectedStaff = url.searchParams.get("staff") || "";
   const selectedVendor = url.searchParams.get("vendor") || "";
   const requestedLocationIds = new Set(
@@ -1289,7 +1235,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const shouldFilterOrderLinesByLocation = true;
   const canManageSync = permissions.capabilities.manage_sync;
 
-  const [orderLinesResult, previousOrderLinesResult, expenses] =
+  const [orderLinesResult, previousOrderLinesResult, expenses, filterOptions] =
     await Promise.all([
       selectedLocationIds.length > 0
         ? fetchLocationOrderLines({
@@ -1298,6 +1244,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
             startDateUtc,
             endExclusiveUtc,
             selectedLocationIds,
+            selectedStaff,
+            selectedVendor,
             shouldFilterByLocation: shouldFilterOrderLinesByLocation,
             financialMetricsVersion,
           })
@@ -1309,6 +1257,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
             startDateUtc: previousStartDateUtc,
             endExclusiveUtc: previousEndExclusiveUtc,
             selectedLocationIds,
+            selectedStaff,
+            selectedVendor,
             shouldFilterByLocation: shouldFilterOrderLinesByLocation,
             financialMetricsVersion,
           })
@@ -1334,6 +1284,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
               }>,
           }),
       ),
+      fetchReportingFilterOptions({
+        supabase,
+        shop: session.shop,
+        locationIds: selectedLocationIds,
+        startAt: startDateUtc,
+        endAt: endExclusiveUtc,
+      }),
     ]);
 
   const { data: lastSuccessfulSyncRun, error: lastSuccessfulSyncError } =
@@ -1389,8 +1346,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       },
     });
   }
-  const staffOptions = buildStaffOptions(orderLines);
-  const vendorOptions = buildVendorOptions(orderLines);
+  const staffOptions = filterOptions.staff;
+  const vendorOptions = filterOptions.vendors;
   const filteredOrderLines = filterOrderLines({
     orderLines,
     selectedStaff,

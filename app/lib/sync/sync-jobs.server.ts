@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import { mapWithConcurrency } from "../db/batch-query.server";
 import {
   isShopifyAuthenticationRequiredError,
   SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
@@ -1381,69 +1382,104 @@ export async function processSyncJobsBatch({
     jobs: [],
   };
 
+  const jobsByShop = new Map<string, SyncJobRow[]>();
   for (const job of jobs) {
-    const previousStatus = job.status;
-    try {
-      const admin = await getAdminClient(job.shop_domain);
-      const result = await processManualSyncJobBatch({
-        admin,
-        supabase,
-        shop: job.shop_domain,
-        jobId: job.id,
-      });
+    const lane = jobsByShop.get(job.shop_domain) ?? [];
+    lane.push(job);
+    jobsByShop.set(job.shop_domain, lane);
+  }
 
-      if (result.processed) {
-        summary.processed += 1;
-      } else {
-        summary.skipped += 1;
+  const laneResults = await mapWithConcurrency(
+    Array.from(jobsByShop.values()),
+    3,
+    async (shopJobs) => {
+      const results: Array<{
+        processed: number;
+        completed: number;
+        failed: number;
+        skipped: number;
+        job: ProcessSyncJobsSummary["jobs"][number];
+      }> = [];
+
+      // A shop's jobs stay ordered to avoid competing Shopify pagination and
+      // write streams, while different shops can progress in parallel.
+      for (const job of shopJobs) {
+        const previousStatus = job.status;
+        try {
+          const admin = await getAdminClient(job.shop_domain);
+          const result = await processManualSyncJobBatch({
+            admin,
+            supabase,
+            shop: job.shop_domain,
+            jobId: job.id,
+          });
+          results.push({
+            processed: result.processed ? 1 : 0,
+            completed: result.job.status === "success" ? 1 : 0,
+            failed: result.job.status === "error" ? 1 : 0,
+            skipped: result.processed ? 0 : 1,
+            job: {
+              id: result.job.id,
+              type: result.job.job_type,
+              previousStatus,
+              finalStatus: result.job.status,
+              processed: result.processed,
+              skippedReason: result.skippedReason ?? null,
+              errorMessage: result.job.error_message,
+            },
+          });
+        } catch (error) {
+          const errorMessage = getSafeErrorMessage(error);
+          if (isShopifyAuthenticationRequiredError(error)) {
+            const failedJob = await markSyncJobAuthenticationRequired({
+              supabase,
+              job,
+            });
+            results.push({
+              processed: 1,
+              completed: 0,
+              failed: 1,
+              skipped: 0,
+              job: {
+                id: failedJob.id,
+                type: failedJob.job_type,
+                previousStatus,
+                finalStatus: "error",
+                processed: true,
+                skippedReason: null,
+                errorMessage: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+              },
+            });
+          } else {
+            results.push({
+              processed: 0,
+              completed: 0,
+              failed: 1,
+              skipped: 0,
+              job: {
+                id: job.id,
+                type: job.job_type,
+                previousStatus,
+                finalStatus: "error",
+                processed: false,
+                skippedReason: null,
+                errorMessage,
+              },
+            });
+          }
+        }
       }
 
-      if (result.job.status === "success") {
-        summary.completed += 1;
-      } else if (result.job.status === "error") {
-        summary.failed += 1;
-      }
+      return results;
+    },
+  );
 
-      summary.jobs.push({
-        id: result.job.id,
-        type: result.job.job_type,
-        previousStatus,
-        finalStatus: result.job.status,
-        processed: result.processed,
-        skippedReason: result.skippedReason ?? null,
-        errorMessage: result.job.error_message,
-      });
-    } catch (error) {
-      const errorMessage = getSafeErrorMessage(error);
-      if (isShopifyAuthenticationRequiredError(error)) {
-        const failedJob = await markSyncJobAuthenticationRequired({
-          supabase,
-          job,
-        });
-        summary.failed += 1;
-        summary.processed += 1;
-        summary.jobs.push({
-          id: failedJob.id,
-          type: failedJob.job_type,
-          previousStatus,
-          finalStatus: "error",
-          processed: true,
-          skippedReason: null,
-          errorMessage: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
-        });
-        continue;
-      }
-      summary.failed += 1;
-      summary.jobs.push({
-        id: job.id,
-        type: job.job_type,
-        previousStatus,
-        finalStatus: "error",
-        processed: false,
-        skippedReason: null,
-        errorMessage,
-      });
-    }
+  for (const result of laneResults.flat()) {
+    summary.processed += result.processed;
+    summary.completed += result.completed;
+    summary.failed += result.failed;
+    summary.skipped += result.skipped;
+    summary.jobs.push(result.job);
   }
 
   return summary;

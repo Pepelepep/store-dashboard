@@ -53,12 +53,14 @@ export async function fetchAllSupabasePages<T>({
   fetchPage,
   getRowKey,
   label,
+  maxRows,
   pageConcurrency = 1,
   pageSize = DEFAULT_SUPABASE_PAGE_SIZE,
 }: {
   fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>;
   getRowKey: (row: T) => string;
   label: string;
+  maxRows?: number;
   pageConcurrency?: number;
   pageSize?: number;
 }) {
@@ -67,6 +69,12 @@ export async function fetchAllSupabasePages<T>({
   }
   if (!Number.isInteger(pageConcurrency) || pageConcurrency < 1) {
     throw new Error("Supabase page concurrency must be a positive integer.");
+  }
+  if (
+    maxRows !== undefined &&
+    (!Number.isInteger(maxRows) || maxRows < 1)
+  ) {
+    throw new Error("Supabase max rows must be a positive integer.");
   }
 
   const rows: T[] = [];
@@ -84,6 +92,11 @@ export async function fetchAllSupabasePages<T>({
 
       seenRowKeys.add(rowKey);
       rows.push(row);
+      if (maxRows !== undefined && rows.length > maxRows) {
+        throw new Error(
+          `${label} exceeds the interactive reporting limit of ${maxRows.toLocaleString("en-US")} rows. Narrow the date range or use an export.`,
+        );
+      }
     }
   }
 

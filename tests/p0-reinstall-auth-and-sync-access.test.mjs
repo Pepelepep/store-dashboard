@@ -57,6 +57,10 @@ import {
 } from "../app/lib/dashboard/chart-formatters.ts";
 import { computeHourlySalesRows } from "../app/lib/dashboard/hourly-sales.ts";
 import {
+  assertInteractiveReportDateRange,
+  MAX_INTERACTIVE_ORDER_LINES,
+} from "../app/lib/dashboard/report-date-range.ts";
+import {
   EXPECTED_SHOPIFY_APP_HANDLE,
   PLAN_DEFINITIONS,
   PRIVATE_PLAN_HANDLES,
@@ -1282,6 +1286,9 @@ test("direct route guards and reporting queries derive from canonical capabiliti
 
   const dashboard = source("app/routes/app.db-dashboard.tsx");
   const locationsRoute = source("app/routes/app.locations.tsx");
+  const reportingOrderLines = source(
+    "app/lib/reporting/reporting-order-lines.server.ts",
+  );
   const permissions = source("app/lib/auth/permissions.server.ts");
   const scope = source("app/lib/auth/location-performance-access.ts");
   const billingComplete = source("app/routes/app.billing.complete.tsx");
@@ -1289,7 +1296,10 @@ test("direct route guards and reporting queries derive from canonical capabiliti
   assert.match(dashboard, /deniedRedirectTo: "\/app\/locations"/);
   assert.match(dashboard, /resolveReportingScope\(/);
   assert.match(locationsRoute, /resolveReportingScope\(/);
-  assert.match(dashboard, /\.in\("retail_location_id", selectedLocationIds\)/);
+  assert.match(
+    reportingOrderLines,
+    /\.rpc\("get_reporting_order_lines"[\s\S]*?p_location_ids: locationIds/,
+  );
   assert.match(dashboard, /\.in\("shopify_location_id", selectedLocationIds\)/);
   assert.match(
     dashboard,
@@ -1978,6 +1988,51 @@ test("a failed later page never returns partial dashboard totals", async () => {
   assert.equal(completed, false);
 });
 
+test("interactive reporting rejects unsafe dates, oversized ranges, and row floods", async () => {
+  assert.equal(
+    assertInteractiveReportDateRange({
+      startDate: "2026-01-01",
+      endDate: "2026-12-31",
+    }),
+    365,
+  );
+  assert.throws(
+    () =>
+      assertInteractiveReportDateRange({
+        startDate: "2026-01-01",
+        endDate: "2027-01-02",
+      }),
+    /limited to 366 days/,
+  );
+  assert.throws(
+    () =>
+      assertInteractiveReportDateRange({
+        startDate: "2026-02-30",
+        endDate: "2026-03-01",
+      }),
+    /valid reporting date range/,
+  );
+
+  await assert.rejects(
+    fetchAllSupabasePages({
+      pageSize: 2,
+      maxRows: 3,
+      label: "Bounded report",
+      getRowKey: (row) => row.id,
+      async fetchPage(from, to) {
+        return {
+          data: Array.from({ length: to - from + 1 }, (_, index) => ({
+            id: String(from + index),
+          })),
+          error: null,
+        };
+      },
+    }),
+    /exceeds the interactive reporting limit of 3 rows/,
+  );
+  assert.equal(MAX_INTERACTIVE_ORDER_LINES, 100_000);
+});
+
 test("Dashboard financial and Staff inputs use paged stable reads", () => {
   const dashboard = readFileSync(
     new URL("../app/routes/app.db-dashboard.tsx", import.meta.url),
@@ -1990,14 +2045,20 @@ test("Dashboard financial and Staff inputs use paged stable reads", () => {
     ),
     "utf8",
   );
+  const reportingOrderLines = readFileSync(
+    new URL(
+      "../app/lib/reporting/reporting-order-lines.server.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
 
   assert.match(dashboard, /fetchAllSupabasePages/);
   assert.match(
-    dashboard,
+    reportingOrderLines,
     /order\("created_at_shopify",[\s\S]*?order\("id",[\s\S]*?range\(from, to\)/,
   );
   for (const table of [
-    "order_lines",
     "order_transactions",
     "inventory_levels",
     "variants",
@@ -2006,6 +2067,8 @@ test("Dashboard financial and Staff inputs use paged stable reads", () => {
   ]) {
     assert.match(dashboard, new RegExp(`from\\("${table}"\\)`));
   }
+  assert.match(reportingOrderLines, /rpc\("get_reporting_order_lines"/);
+  assert.match(reportingOrderLines, /maxRows/);
   assert.match(staffResolution, /fetchAllSupabasePages/);
   assert.match(staffResolution, /order\("id"[\s\S]*?range\(from, to\)/);
 });
@@ -2129,6 +2192,81 @@ test("shop redaction inventory covers every current merchant-scoped table", () =
     SHOP_REDACTION_TABLES.includes("compliance_webhook_events"),
     false,
   );
+});
+
+test("shop redaction acknowledges after durable enqueue and is drained by maintenance", () => {
+  const route = readFileSync(
+    new URL("../app/routes/webhooks.shop.redact.tsx", import.meta.url),
+    "utf8",
+  );
+  const maintenance = readFileSync(
+    new URL("../app/lib/sync/maintenance.server.ts", import.meta.url),
+    "utf8",
+  );
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260815173141_scale_foundation_queues_and_indexes.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(route, /enqueueShopRedactionJob/);
+  assert.doesNotMatch(route, /deleteShopScopedSupabaseData/);
+  assert.match(route, /status: "received"/);
+  assert.match(maintenance, /processShopRedactionJobsBatch/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.shop_redaction_jobs/);
+  assert.match(migration, /FOR UPDATE SKIP LOCKED/);
+  assert.match(migration, /FUNCTION public\.purge_shop_table_batch/);
+  assert.match(
+    migration,
+    /REVOKE ALL ON FUNCTION public\.claim_shop_redaction_jobs[\s\S]*?FROM PUBLIC, anon, authenticated/,
+  );
+});
+
+test("maintenance is leased, fair across due shops, and bounded across workers", () => {
+  const maintenance = readFileSync(
+    new URL("../app/lib/sync/maintenance.server.ts", import.meta.url),
+    "utf8",
+  );
+  const webhookProcessor = readFileSync(
+    new URL(
+      "../app/lib/sync/webhook-events-processor.server.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const syncJobs = readFileSync(
+    new URL("../app/lib/sync/sync-jobs.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(maintenance, /rpc\([\s\S]*?"claim_maintenance_tick"/);
+  assert.match(maintenance, /lte\("next_reconciliation_due_at"/);
+  assert.match(maintenance, /RECONCILIATION_SHOPS_PER_TICK = 100/);
+  assert.doesNotMatch(maintenance, /getInstalledShops\(25\)/);
+  assert.match(maintenance, /batchSize: 100/);
+  assert.match(webhookProcessor, /WEBHOOK_LANE_CONCURRENCY = 8/);
+  assert.match(webhookProcessor, /eventLanes/);
+  assert.match(syncJobs, /jobsByShop/);
+  assert.match(syncJobs, /mapWithConcurrency[\s\S]*?3/);
+});
+
+test("production startup enforces Node 22 and the Supabase schema contract", () => {
+  const dockerfile = readFileSync(new URL("../Dockerfile", import.meta.url), "utf8");
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  const verifier = readFileSync(
+    new URL("../scripts/verify-supabase-schema.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(dockerfile, /^FROM node:22-alpine/m);
+  assert.match(packageJson.engines.node, />=22\.12/);
+  assert.match(packageJson.scripts.setup, /verify:supabase-schema/);
+  assert.match(verifier, /20260815173141_scale_foundation_queues_and_indexes/);
+  assert.match(verifier, /shopops_schema_versions/);
 });
 
 test("shop redaction deletes all table rows and Prisma sessions idempotently", async () => {
@@ -4609,7 +4747,7 @@ test("KPI comparisons use the exact preceding period and metric-aware tones", ()
   );
   assert.match(
     dashboard,
-    /label: "Dashboard previous-period order lines"[\s\S]*?previousPeriod\.startDateUtc[\s\S]*?previousPeriod\.endExclusiveUtc/,
+    /fetchReportingOrderLines\(\{[\s\S]*?startAt: previousPeriod\.startDateUtc[\s\S]*?endAt: previousPeriod\.endExclusiveUtc[\s\S]*?cacheNamespace: "dashboard-previous-order-lines"/,
   );
   assert.match(
     dashboard,

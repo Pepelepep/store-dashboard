@@ -63,7 +63,6 @@ import {
   getLineReturnedQuantity,
   getLineReturns,
   getPreviousPeriodDateRange,
-  getStaffDisplayLabel,
   getStaffFilterValue,
   getTodayStoreDate,
   getVendorFilterValue,
@@ -77,6 +76,15 @@ import {
 import { buildShopifyOrderUrl } from "../lib/shopify/order-url";
 import { getRecentOrderChips } from "../lib/dashboard/recent-order-flags";
 import { buildDrilldownResetKey } from "../lib/dashboard/drilldown-reset-key";
+import {
+  assertInteractiveReportDateRange,
+  MAX_INTERACTIVE_INVENTORY_ROWS,
+  MAX_INTERACTIVE_ORDER_LINES,
+} from "../lib/dashboard/report-date-range";
+import {
+  fetchReportingFilterOptions,
+  fetchReportingOrderLines,
+} from "../lib/reporting/reporting-order-lines.server";
 import { calculateReportedProfit, summarizeCogs } from "../lib/financial/cogs";
 import { calculateNetSalesAfterCashRefunds } from "../lib/financial/net-sales";
 import { computeHourlySalesRows } from "../lib/dashboard/hourly-sales";
@@ -92,56 +100,6 @@ import type {
   RecentOrderRow,
   VariantDbRow,
 } from "../lib/dashboard/dashboard-types";
-
-function buildStaffOptions(orderLines: OrderLineDbRow[]) {
-  const options = new Map<string, string>();
-  let hasUnknownStaff = false;
-
-  for (const row of orderLines) {
-    const value = getStaffFilterValue(row);
-
-    if (!value) {
-      hasUnknownStaff = true;
-      continue;
-    }
-
-    if (!options.has(value)) {
-      options.set(value, getStaffDisplayLabel(row));
-    }
-  }
-
-  const sortedOptions = Array.from(options.entries())
-    .map(([value, label]) => ({ value, label }))
-    .sort((a, b) => a.label.localeCompare(b.label));
-
-  if (hasUnknownStaff) {
-    sortedOptions.push({
-      value: UNKNOWN_STAFF_FILTER_VALUE,
-      label: "Unassigned / unavailable",
-    });
-  }
-
-  return sortedOptions;
-}
-
-function buildVendorOptions(orderLines: OrderLineDbRow[]) {
-  const vendors = new Set<string>();
-
-  for (const row of orderLines) {
-    const vendor = row.vendor?.trim();
-
-    if (vendor) {
-      vendors.add(vendor);
-    }
-  }
-
-  return Array.from(vendors)
-    .sort((a, b) => a.localeCompare(b))
-    .map((vendor) => ({
-      value: vendor,
-      label: vendor,
-    }));
-}
 
 function filterOrderLines({
   orderLines,
@@ -290,6 +248,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     preset === "today" ? today : url.searchParams.get("startDate") || today;
   const endDate =
     preset === "today" ? today : url.searchParams.get("endDate") || today;
+  assertInteractiveReportDateRange({ startDate, endDate });
   const selectedStaff = url.searchParams.get("staff") || "";
   const selectedVendor = url.searchParams.get("vendor") || "";
   const endExclusive = nextDate(endDate);
@@ -302,7 +261,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   );
   const isFinancialMetricsV2 = financialMetricsVersion === "v2";
   const orderLinesSelect = isFinancialMetricsV2
-    ? "*"
+    ? "id, order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, gross_sales, discounts, returns, net_sales, refunded_amount, taxes, returned_quantity, cost_at_sale, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name"
     : "id, order_name, shopify_order_id, created_at_shopify, retail_location_id, retail_location_name, product_title, variant_title, sku, vendor, quantity, unit_price, revenue, unit_cost, cogs, gross_profit, cost_source, returned_quantity, cost_at_sale, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name";
   const comparisonOrderLinesSelect = isFinancialMetricsV2
     ? "id, shopify_order_id, created_at_shopify, retail_location_id, vendor, quantity, revenue, gross_sales, discounts, returns, net_sales, staff_member_id, staff_member_name, staff_member_email, staff_source, shopops_staff_member_id, shopops_user_id, shopops_attributed_user_id, shopops_effective_staff_id, shopops_attribution_source, shopops_pos_location_id, shopops_pos_device_id, shopops_pos_device_name"
@@ -382,138 +341,85 @@ export async function loader({ request }: LoaderFunctionArgs) {
     variants,
     products,
     expenses,
+    filterOptions,
   ] = await Promise.all([
     canManageSync
-      ? fetchAllSupabasePages<SyncRunRow>({
-          label: "Sync history",
-          pageConcurrency: 4,
-          getRowKey: (row) => row.id,
-          fetchPage: (from, to) =>
-            supabase
-              .from("sync_runs")
-              .select("id, sync_type, status, started_at, finished_at, details")
-              .eq("shop_domain", session.shop)
-              .in("status", ["success", "error"])
-              .order("finished_at", { ascending: false, nullsFirst: false })
-              .order("id", { ascending: true })
-              .range(from, to) as unknown as PromiseLike<{
-              data: SyncRunRow[] | null;
-              error: { message: string } | null;
-            }>,
-        })
+      ? (async () => {
+          const { data, error } = await supabase
+            .from("sync_runs")
+            .select("id, sync_type, status, started_at, finished_at, details")
+            .eq("shop_domain", session.shop)
+            .in("status", ["success", "error"])
+            .order("finished_at", { ascending: false, nullsFirst: false })
+            .order("id", { ascending: true })
+            .limit(200);
+          if (error) throw new Error(`Sync history: ${error.message}`);
+          return (data ?? []) as SyncRunRow[];
+        })()
       : Promise.resolve([]),
     canManageSync
-      ? fetchAllSupabasePages<SyncJobRow>({
-          label: "Sync jobs",
-          pageConcurrency: 4,
-          getRowKey: (row) => row.id,
-          fetchPage: (from, to) =>
-            supabase
-              .from("sync_jobs")
-              .select(
-                "id, job_type, status, current_step, created_at, started_at, updated_at, finished_at, details",
-              )
-              .eq("shop_domain", session.shop)
-              .in("status", ["success", "error"])
-              .order("updated_at", { ascending: false })
-              .order("id", { ascending: true })
-              .range(from, to) as unknown as PromiseLike<{
-              data: SyncJobRow[] | null;
-              error: { message: string } | null;
-            }>,
-        })
+      ? (async () => {
+          const { data, error } = await supabase
+            .from("sync_jobs")
+            .select(
+              "id, job_type, status, current_step, created_at, started_at, updated_at, finished_at, details",
+            )
+            .eq("shop_domain", session.shop)
+            .in("status", ["success", "error"])
+            .order("updated_at", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(200);
+          if (error) throw new Error(`Sync jobs: ${error.message}`);
+          return (data ?? []) as SyncJobRow[];
+        })()
       : Promise.resolve([]),
     canManageSync
-      ? fetchAllSupabasePages<WebhookFailureRow>({
-          label: "Webhook failures",
-          pageConcurrency: 4,
-          getRowKey: (row) => row.id,
-          fetchPage: (from, to) =>
-            supabase
-              .from("webhook_events")
-              .select(
-                "id, topic, status, attempt_count, received_at, processed_at",
-              )
-              .eq("shop_domain", session.shop)
-              .eq("status", "error")
-              .order("processed_at", { ascending: false, nullsFirst: false })
-              .order("id", { ascending: true })
-              .range(from, to) as unknown as PromiseLike<{
-              data: WebhookFailureRow[] | null;
-              error: { message: string } | null;
-            }>,
-        })
+      ? (async () => {
+          const { data, error } = await supabase
+            .from("webhook_events")
+            .select(
+              "id, topic, status, attempt_count, received_at, processed_at",
+            )
+            .eq("shop_domain", session.shop)
+            .eq("status", "error")
+            .order("processed_at", { ascending: false, nullsFirst: false })
+            .order("id", { ascending: true })
+            .limit(200);
+          if (error) throw new Error(`Webhook failures: ${error.message}`);
+          return (data ?? []) as WebhookFailureRow[];
+        })()
       : Promise.resolve([]),
-    selectedLocationIds.length > 0
-      ? getCachedDashboardQuery(
-          [
-            "order-lines",
-            session.shop,
-            [...selectedLocationIds].sort(),
-            startDateUtc,
-            endExclusiveUtc,
-            financialMetricsVersion,
-          ],
-          () =>
-            fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
-              label: "Dashboard order lines",
-              pageConcurrency: 4,
-              getRowKey: (row) => row.id,
-              fetchPage: (from, to) =>
-                supabase
-                  .from("order_lines")
-                  .select(orderLinesSelect)
-                  .eq("shop_domain", session.shop)
-                  .in("retail_location_id", selectedLocationIds)
-                  .gte("created_at_shopify", startDateUtc)
-                  .lt("created_at_shopify", endExclusiveUtc)
-                  .order("created_at_shopify", { ascending: false })
-                  .order("id", { ascending: true })
-                  .range(from, to) as unknown as PromiseLike<{
-                  data: Array<OrderLineDbRow & { id: string }> | null;
-                  error: { message: string } | null;
-                }>,
-            }),
-        )
-      : Promise.resolve([]),
-    selectedLocationIds.length > 0
-      ? getCachedDashboardQuery(
-          [
-            "previous-order-lines",
-            session.shop,
-            [...selectedLocationIds].sort(),
-            previousPeriod.startDateUtc,
-            previousPeriod.endExclusiveUtc,
-            financialMetricsVersion,
-          ],
-          () =>
-            fetchAllSupabasePages<OrderLineDbRow & { id: string }>({
-              label: "Dashboard previous-period order lines",
-              pageConcurrency: 4,
-              getRowKey: (row) => row.id,
-              fetchPage: (from, to) =>
-                supabase
-                  .from("order_lines")
-                  .select(comparisonOrderLinesSelect)
-                  .eq("shop_domain", session.shop)
-                  .in("retail_location_id", selectedLocationIds)
-                  .gte("created_at_shopify", previousPeriod.startDateUtc)
-                  .lt("created_at_shopify", previousPeriod.endExclusiveUtc)
-                  .order("created_at_shopify", { ascending: false })
-                  .order("id", { ascending: true })
-                  .range(from, to) as unknown as PromiseLike<{
-                  data: Array<OrderLineDbRow & { id: string }> | null;
-                  error: { message: string } | null;
-                }>,
-            }),
-        )
-      : Promise.resolve([]),
+    fetchReportingOrderLines({
+      supabase,
+      shop: session.shop,
+      locationIds: selectedLocationIds,
+      startAt: startDateUtc,
+      endAt: endExclusiveUtc,
+      selectedStaff,
+      selectedVendor,
+      selectColumns: orderLinesSelect,
+      cacheNamespace: "dashboard-order-lines",
+      maxRows: MAX_INTERACTIVE_ORDER_LINES,
+    }),
+    fetchReportingOrderLines({
+      supabase,
+      shop: session.shop,
+      locationIds: selectedLocationIds,
+      startAt: previousPeriod.startDateUtc,
+      endAt: previousPeriod.endExclusiveUtc,
+      selectedStaff,
+      selectedVendor,
+      selectColumns: comparisonOrderLinesSelect,
+      cacheNamespace: "dashboard-previous-order-lines",
+      maxRows: MAX_INTERACTIVE_ORDER_LINES,
+    }),
     selectedLocationIds.length > 0
       ? getCachedDashboardQuery(
           ["inventory", session.shop, [...selectedLocationIds].sort()],
           () =>
             fetchAllSupabasePages<InventoryLevelDbRow & { id: string }>({
               label: "Inventory levels",
+              maxRows: MAX_INTERACTIVE_INVENTORY_ROWS,
               pageConcurrency: 4,
               getRowKey: (row) => row.id,
               fetchPage: (from, to) =>
@@ -587,6 +493,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
           }>,
       }),
     ),
+    fetchReportingFilterOptions({
+      supabase,
+      shop: session.shop,
+      locationIds: selectedLocationIds,
+      startAt: startDateUtc,
+      endAt: endExclusiveUtc,
+    }),
   ]);
 
   const syncFailureState = getUnresolvedSyncFailureState({
@@ -646,8 +559,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const activeInventoryRows = inventoryRows.filter((inventory) =>
     isActiveInventoryProduct({ inventory, variantsById, productsById }),
   );
-  const staffOptions = buildStaffOptions(orderLines);
-  const vendorOptions = buildVendorOptions(orderLines);
+  const staffOptions = filterOptions.staff;
+  const vendorOptions = filterOptions.vendors;
   const filteredOrderLines = filterOrderLines({
     orderLines,
     selectedStaff,

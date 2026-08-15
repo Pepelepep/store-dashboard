@@ -1,4 +1,5 @@
 import { getSupabaseAdminClient } from "../db/supabase.server";
+import { mapWithConcurrency } from "../db/batch-query.server";
 import prisma from "../../db.server";
 import {
   getOfflineAdminClient,
@@ -45,6 +46,7 @@ const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_MAX_RECONCILIATION_JOBS = 2;
 const DEFAULT_MAX_RECONCILIATION_SHOPS = 25;
+const WEBHOOK_LANE_CONCURRENCY = 8;
 const MISSING_INVENTORY_LEVEL_PAYLOAD_ERROR =
   "Missing inventory_item_id/location_id/available in inventory level webhook payload";
 
@@ -502,16 +504,35 @@ export async function processWebhookEventsBatch({
     skipped: 0,
   };
 
+  const eventLanes = new Map<string, WebhookEventRow[]>();
   for (const event of claimedEvents) {
-    try {
-      await processWebhookEvent({ event, supabase });
-      await markEventDone({ supabase, event });
-      summary.succeeded += 1;
-    } catch (error) {
-      await markEventError({ supabase, event, error, maxAttempts });
-      summary.failed += 1;
-    }
+    // Events for the same Shopify resource stay ordered while unrelated
+    // resources and shops are processed concurrently.
+    const laneKey = [
+      event.shop_domain,
+      event.resource_gid ?? event.parent_resource_gid ?? event.topic,
+    ].join(":");
+    const lane = eventLanes.get(laneKey) ?? [];
+    lane.push(event);
+    eventLanes.set(laneKey, lane);
   }
+
+  await mapWithConcurrency(
+    Array.from(eventLanes.values()),
+    WEBHOOK_LANE_CONCURRENCY,
+    async (lane) => {
+      for (const event of lane) {
+        try {
+          await processWebhookEvent({ event, supabase });
+          await markEventDone({ supabase, event });
+          summary.succeeded += 1;
+        } catch (error) {
+          await markEventError({ supabase, event, error, maxAttempts });
+          summary.failed += 1;
+        }
+      }
+    },
+  );
 
   const reconciliationEnqueue = includeReconciliation
     ? await enqueueDueOrdersReconciliationJobs({
