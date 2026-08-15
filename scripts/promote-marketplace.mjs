@@ -11,10 +11,12 @@ if (unsupportedArgs.length > 0) {
 }
 
 function git(args, { inherit = false } = {}) {
-  return execFileSync("git", args, {
+  const output = execFileSync("git", args, {
     encoding: "utf8",
     stdio: inherit ? "inherit" : ["ignore", "pipe", "pipe"],
-  }).trim();
+  });
+
+  return typeof output === "string" ? output.trim() : "";
 }
 
 function assertAncestor(ancestor, descendant) {
@@ -106,4 +108,3 @@ if (promotedRelease !== developmentRemote) {
 console.log(
   `Marketplace promoted successfully: both branches are ${developmentRemote}.`,
 );
-
