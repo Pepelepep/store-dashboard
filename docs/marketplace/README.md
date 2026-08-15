@@ -6,6 +6,7 @@ These docs support ShopOps Studio marketplace readiness and reviewer preparation
 
 - [Marketplace checklist](MARKETPLACE_CHECKLIST.md)
 - [Marketplace environment setup](MARKETPLACE_ENVIRONMENT_SETUP.md)
+- [Custom to Marketplace promotion](BRANCH_PROMOTION.md)
 - [Demo store setup](DEMO_STORE_SETUP.md)
 - [Reviewer test script](REVIEWER_TEST_SCRIPT.md)
 - [Screenshot plan](SCREENSHOT_PLAN.md)

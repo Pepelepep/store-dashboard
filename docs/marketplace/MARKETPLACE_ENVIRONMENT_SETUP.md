@@ -157,7 +157,7 @@ Cron/review note:
 ## Render Cron Requirements
 
 Superseded: see `RENDER_CRON_SETUP.md` for the current single-job setup
-(`shopops-maintenance-tick`, every 5 minutes, `POST /internal/cron/maintenance-tick`).
+(`shopops-maintenance-tick`, every minute, `POST /internal/cron/maintenance-tick`).
 
 The two-endpoint scheme below (`process-sync-jobs` + `process-webhook-events`)
 is kept only for historical reference. Do not schedule it alongside
