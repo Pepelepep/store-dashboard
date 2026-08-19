@@ -1,0 +1,38 @@
+name: shopify-release-readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Release candidate or App Store submission being verified
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  code-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - run: npm ci
+      - run: npm run release:verify
+      - name: Validate Shopify extension build
+        run: npx shopify app build --config shopify.app.shopops-marketplace.toml
+
+  manual-proof-required:
+    needs: code-gates
+    runs-on: ubuntu-latest
+    environment: shopify-release
+    steps:
+      - name: Record manual release boundary
+        run: |
+          echo "Automated gates passed for: ${{ inputs.reason }}"
+          echo "The protected shopify-release environment confirms human approval."
+          echo "It does not deploy or publish a Shopify app version."

@@ -1,0 +1,44 @@
+name: Product change
+description: Deliver one scoped merchant-facing capability or improvement
+title: "[Feature] "
+labels: ["type:feature", "status:ready"]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Merchant outcome
+      description: What should become easier or possible for the merchant?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Use observable Given/When/Then statements where possible.
+      placeholder: |
+        - Given ..., when ..., then ...
+        - Given ..., when ..., then ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: risk
+    attributes:
+      label: Potentially affected surfaces
+      options:
+        - label: Shopify authentication, scopes, sessions, or app configuration
+        - label: Billing, plans, or entitlements
+        - label: Webhooks, uninstall, redaction, sync, cron, or queues
+        - label: Supabase schema, RLS, privileged functions, or tenant isolation
+        - label: UI, responsive behavior, or accessibility
+        - label: Protected customer or merchant data
+  - type: textarea
+    id: excluded
+    attributes:
+      label: Out of scope
+      description: What must the implementation not change?
