@@ -3,6 +3,24 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 
 const base = process.env.CHANGE_BASE ?? "origin/marketplace/stable-prep";
+
+// CI checkouts (actions/checkout) only fetch the ref being built, so a remote-tracking
+// branch like origin/marketplace/stable-prep may not exist locally yet even with
+// fetch-depth: 0. Make sure it's resolvable before diffing against it.
+try {
+  execFileSync("git", ["rev-parse", "--verify", "--quiet", base], { stdio: "ignore" });
+} catch {
+  const [remote, ...branchParts] = base.split("/");
+  const branch = branchParts.join("/");
+  if (branch) {
+    execFileSync(
+      "git",
+      ["fetch", remote, `${branch}:refs/remotes/${remote}/${branch}`],
+      { stdio: "ignore" },
+    );
+  }
+}
+
 const output = execFileSync("git", ["diff", "--name-only", `${base}...HEAD`], {
   encoding: "utf8",
 });
