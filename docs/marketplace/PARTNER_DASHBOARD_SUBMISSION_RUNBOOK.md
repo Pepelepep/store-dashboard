@@ -42,8 +42,8 @@ Public URLs:
 Required manual contacts:
 
 - **Manual proof required:** confirm the submission email is monitored and allow-list `noreply@shopify.com`.
-- **Manual input required:** emergency developer email.
-- **Manual input required:** emergency developer phone number.
+- Emergency developer email: `support@shopopsstudio.com` (confirmed 2026-08-19; matches `SUPPORT_AND_CONTACTS.md`).
+- **Manual input required:** emergency developer phone number — not provided yet.
 - **Manual proof required:** verify the support mailbox can send and receive messages from outside the organization.
 
 App icon:
@@ -167,7 +167,7 @@ Never provide real merchant/customer data or production client credentials.
 - [ ] Homepage, privacy, terms and support return HTTP 200 over valid TLS. **Partially verified 2026-08-19**: `/`, `/privacy`, `/terms`, `/support` all returned HTTP 200 from a locally built production server (no Shopify/DB dependency — none of these routes has a loader). `app/routes/privacy.tsx`, `terms.tsx`, `support.tsx`, and `app/root.tsx` are byte-identical between `marketplace/stable-prep` and the local checkout, so this result applies to the submission branch too. TLS and the real production hostname still need a live check after deployment.
 - [ ] Compliance webhooks are registered and staging drills pass.
 - [ ] Protected Customer Data and `read_all_orders` are approved. **Not verifiable from repo — manual confirmation required.**
-- [x] Typecheck, lint, P0 tests and production build pass from a clean checkout. **Verified 2026-08-19 directly on `marketplace/stable-prep` (the actual submission branch)**, via a disposable `git worktree` + `npm ci`: typecheck clean, lint clean, 129/129 P0 tests passed, production build passed, and `shopify app build` (incl. POS extension) passed.
+- [x] Typecheck, lint, unit tests, dependency audit, and production build pass from a clean checkout. **Verified 2026-08-19 directly on `origin/marketplace/stable-prep` (the single active branch — see `BRANCH_WORKFLOW.md`)**, via clean `npm ci`: typecheck clean, lint clean, 137 P0 tests + 2 staff-CSV tests passed, production build passed, `shopify app build` (incl. POS extension) passed, and `npm audit --omit=dev --audit-level=high` clean after fixing a `deepmerge-ts` advisory that was otherwise failing this exact gate.
 - [ ] Fresh install, OAuth, owner bootstrap, first sync and embedded navigation pass.
 - [ ] ShopOps POS tile is present in the Smart Grid template assigned to the
   reviewer location, and a new signed-in POS staff sale is attributed after

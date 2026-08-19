@@ -61,7 +61,7 @@ ShopOps Studio may add, remove, or modify features over time. Marketplace-facing
 
 Merchants may uninstall the app through Shopify. Uninstall and deletion behavior is described in `DATA_RETENTION_POLICY.md`.
 
-ShopOps Studio may suspend or terminate access for abuse, security risk, non-payment after billing is enabled, platform policy violations, or unlawful use.
+ShopOps Studio may suspend or terminate access for abuse, security risk, non-payment on an active subscription, platform policy violations, or unlawful use.
 
 ## Limitation of Liability
 

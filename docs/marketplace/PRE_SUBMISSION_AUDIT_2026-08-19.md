@@ -1,5 +1,13 @@
 # ShopOps Studio — Audit pré-soumission Shopify App Store
 
+> **Mise à jour post-audit (2026-08-19, même jour) :** le point bloquant 1 et le point élevé 8
+> ci-dessous supposaient encore que `marketplace/stable-prep` pouvait être gelée à `v0.1.0-rc.5`.
+> Un `git fetch --prune` a révélé que ce n'était plus le cas : `origin/marketplace/stable-prep`
+> avait déjà avancé de 8 commits depuis le 15 août (branche unique active désormais, voir
+> `docs/marketplace/BRANCH_WORKFLOW.md` et la section « Superseded » de `V0_FREEZE_2026-08-09.md`).
+> Traiter ces deux points comme obsolètes ; voir `V0_FREEZE_2026-08-09.md` et
+> `FINAL_REVIEW_EXECUTION_STATUS.md` pour l'état réel vérifié.
+
 Date de l'audit : 2026-08-19. Périmètre : configuration Shopify (tomls, webhooks, scopes), sécurité et
 secrets, billing/entitlements, conformité (webhooks GDPR, politique de rétention), extension POS,
 build/typecheck/lint, et recoupement de tous les documents internes de préparation marketplace déjà
