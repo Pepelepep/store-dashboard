@@ -255,14 +255,18 @@ Use demo/fake data only.
 
 ## Pre-Review Environment Checklist
 
-- [ ] Dedicated Shopify marketplace app created.
-- [ ] Dedicated Render marketplace service created.
-- [ ] Dedicated Supabase/database environment created or tenant safeguards approved.
-- [ ] Marketplace env vars configured.
-- [ ] `shopify.app.shopops-marketplace.toml` placeholders replaced.
-- [ ] Compliance webhooks registered.
-- [ ] Operational webhooks registered.
-- [ ] Reviewer/admin bootstrap access configured.
-- [ ] Demo data loaded or synced.
-- [ ] Sync Center shows successful sync state or expected first-run state.
-- [ ] Screenshots captured from demo data only.
+Status verified 2026-08-19 from the repo only (no Partner Dashboard/Render/Supabase access) — see
+`PRE_SUBMISSION_AUDIT_2026-08-19.md`. Items below are checked only where the repo itself provides
+verifiable evidence; everything else needs manual confirmation from the owner.
+
+- [ ] Dedicated Shopify marketplace app created. **Not verifiable from repo — manual confirmation required.**
+- [ ] Dedicated Render marketplace service created. **Not verifiable from repo — manual confirmation required.**
+- [ ] Dedicated Supabase/database environment created or tenant safeguards approved. **Not verifiable from repo — manual confirmation required.**
+- [ ] Marketplace env vars configured. **Not verifiable from repo (secrets correctly excluded) — manual confirmation required.**
+- [ ] `shopify.app.shopops-marketplace.toml` placeholders replaced. **Verified NOT done**: `application_url` and all 3 redirect URLs still point at `https://shopops-marketplace-preview.onrender.com` as of 2026-08-19. Waiting on the final production hostname from the owner before changing it.
+- [ ] Compliance webhooks registered. Toml declares all 3 compliance topics (`customers/data_request`, `customers/redact`, `shop/redact`) under `api_version = "2026-07"` — config-level presence confirmed, but live Partner Dashboard registration is not verifiable from the repo.
+- [ ] Operational webhooks registered. Toml declares all 6 operational topics — same caveat as above.
+- [ ] Reviewer/admin bootstrap access configured. **Not verifiable from repo — manual confirmation required.**
+- [ ] Demo data loaded or synced. A seed script exists (`supabase/seeds/001_staging_demo_data.sql`), but whether it has actually been loaded into any live environment is not verifiable from the repo.
+- [ ] Sync Center shows successful sync state or expected first-run state. **Not verifiable from repo — manual confirmation required.**
+- [x] Screenshots captured from demo data only. Verified 2026-08-19: `public/marketplace/screenshots/2026-08-final/` contains exactly 11 PNG files, each confirmed exactly 1600×900 pixels via `file`.
