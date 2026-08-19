@@ -5,7 +5,6 @@
     "strict": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "allowImportingTsExtensions": true,
     "allowSyntheticDefaultImports": true,
     "removeComments": false,
     "forceConsistentCasingInFileNames": true,

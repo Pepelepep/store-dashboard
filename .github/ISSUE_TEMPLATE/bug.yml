@@ -1,0 +1,42 @@
+name: Bug report
+description: Fix one reproducible defect with a regression test
+title: "[Bug] "
+labels: ["type:bug", "status:ready"]
+body:
+  - type: textarea
+    id: impact
+    attributes:
+      label: Merchant impact
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. As role ...
+        2. Open ...
+        3. Perform ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Sanitized screenshot, log, error, store type, browser, and time.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety flags
+      options:
+        - label: Affects more than one shop or tenant isolation
+        - label: Affects Shopify installation, billing, webhooks, or compliance
+        - label: Affects permissions or plan enforcement
+        - label: Affects deletion, redaction, migrations, sync, or financial data

@@ -18,6 +18,10 @@
     "start": "react-router-serve ./build/server/index.js",
     "test:p0": "node --experimental-strip-types --test tests/p0-reinstall-auth-and-sync-access.test.mjs",
     "test:staff-csv": "node --experimental-strip-types --test tests/staff-csv-import.test.mjs",
+    "test:unit": "npm run test:p0 && npm run test:staff-csv",
+    "test:e2e": "playwright test",
+    "test:e2e:public": "playwright test tests/e2e/public-surfaces.spec.ts",
+    "test:e2e:ui": "playwright test tests/e2e/public-surfaces.spec.ts --project=chromium-desktop --update-snapshots",
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy && npm run verify:supabase-schema",
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
@@ -28,7 +32,8 @@
     "sync:local": "vite-node ./scripts/local-refresh.ts",
     "cron:maintenance": "node ./scripts/run-maintenance-tick.mjs",
     "verify:supabase-schema": "node ./scripts/verify-supabase-schema.mjs",
-    "release:verify": "npm run typecheck && npm run lint && npm run test:p0 && npm run test:staff-csv && npm run build && npm audit --omit=dev --audit-level=high",
+    "release:verify": "npm run typecheck && npm run lint && npm run test:unit && npm run build && npm audit --omit=dev --audit-level=high",
+    "delivery:classify": "node scripts/delivery/classify-change.mjs",
     "shopops:access-audit": "node ./scripts/shopops-access-maintenance.mjs audit",
     "shopops:access-repair": "node ./scripts/shopops-access-maintenance.mjs repair",
     "typecheck": "react-router typegen && tsc --noEmit"
@@ -69,7 +74,10 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
     "@shopify/api-codegen-preset": "^1.2.0",
+    "@shopify/cli": "^4.6.1",
     "@shopify/polaris-types": "^1.0.1",
     "@types/eslint": "^9.6.1",
     "@types/node": "^22.18.8",

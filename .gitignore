@@ -41,6 +41,8 @@ prisma/dev.sqlite
 # Build/cache
 build/
 .react-router/
+playwright-report/
+test-results/
 
 # Shopify local deploy bundle
 .shopify/deploy-bundle/

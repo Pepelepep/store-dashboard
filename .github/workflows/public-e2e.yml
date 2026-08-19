@@ -1,0 +1,45 @@
+name: public-e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Public staging or production URL to test
+        required: true
+        type: string
+  schedule:
+    - cron: "17 12 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-surfaces:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.E2E_BASE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      E2E_BASE_URL: ${{ inputs.base_url || vars.E2E_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e:public
+      - name: Upload Playwright evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-public-evidence
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
