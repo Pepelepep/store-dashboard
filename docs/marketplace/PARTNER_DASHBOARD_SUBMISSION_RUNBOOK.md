@@ -72,6 +72,7 @@ Protected Customer Data declaration:
 - Do not claim that order history is non-personal merely because customer contact columns are not stored.
 - State that customer name, address, phone and email are not intentionally persisted in reporting tables.
 - **Manual proof required:** obtain approval before submission if the dashboard requires a separate protected-data review.
+- **Not verifiable from the repo (checked 2026-08-19):** whether Shopify's Protected Customer Data / `read_all_orders` approval has actually been obtained. This is a Partner Dashboard state, not something the codebase can confirm — do not treat this as done until the owner confirms it directly.
 
 Webhooks, API version `2026-07`:
 
@@ -163,10 +164,10 @@ Never provide real merchant/customer data or production client credentials.
 
 - [ ] Released app version uses the canonical Marketplace client ID and URLs.
 - [ ] Render production variables match Marketplace scopes and billing identity.
-- [ ] Homepage, privacy, terms and support return HTTP 200 over valid TLS.
+- [ ] Homepage, privacy, terms and support return HTTP 200 over valid TLS. **Partially verified 2026-08-19**: `/`, `/privacy`, `/terms`, `/support` all returned HTTP 200 from a locally built production server (no Shopify/DB dependency — none of these routes has a loader). `app/routes/privacy.tsx`, `terms.tsx`, `support.tsx`, and `app/root.tsx` are byte-identical between `marketplace/stable-prep` and the local checkout, so this result applies to the submission branch too. TLS and the real production hostname still need a live check after deployment.
 - [ ] Compliance webhooks are registered and staging drills pass.
-- [ ] Protected Customer Data and `read_all_orders` are approved.
-- [ ] Typecheck, lint, P0 tests and production build pass from a clean checkout.
+- [ ] Protected Customer Data and `read_all_orders` are approved. **Not verifiable from repo — manual confirmation required.**
+- [x] Typecheck, lint, P0 tests and production build pass from a clean checkout. **Verified 2026-08-19 directly on `marketplace/stable-prep` (the actual submission branch)**, via a disposable `git worktree` + `npm ci`: typecheck clean, lint clean, 129/129 P0 tests passed, production build passed, and `shopify app build` (incl. POS extension) passed.
 - [ ] Fresh install, OAuth, owner bootstrap, first sync and embedded navigation pass.
 - [ ] ShopOps POS tile is present in the Smart Grid template assigned to the
   reviewer location, and a new signed-in POS staff sale is attributed after

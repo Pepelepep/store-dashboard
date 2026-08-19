@@ -2,6 +2,16 @@
 
 Last verified: 2026-08-09
 
+## 2026-08-19 status check
+
+- **Lifecycle B (real uninstall + `shop/redact` delivery)**: the 2026-08-11 verification deadline
+  noted below has passed. Owner confirmed (2026-08-19) this has **not** been tested/confirmed
+  since. The "Live compliance webhooks" row below stays "IN PROGRESS" — do not treat it as done.
+- **Typecheck / lint / P0 tests / production build / `shopify app build`**: re-verified 2026-08-19
+  directly on `marketplace/stable-prep` (the actual submission branch, via a disposable
+  `git worktree` + clean `npm ci`) — all passed, 129/129 P0 tests, reproducing this document's
+  original 2026-08-09 evidence exactly.
+
 ## Product promise to demonstrate
 
 ShopOps lets a merchant configure staff access and analyze staff performance by

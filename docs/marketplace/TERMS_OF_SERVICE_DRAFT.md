@@ -44,7 +44,14 @@ Data handling is described in the draft privacy policy and data retention policy
 
 ## Billing
 
-Billing is not enabled in the current marketplace readiness phase. Pricing, subscription terms, trials, refunds, and cancellation terms must be finalized before a paid marketplace launch.
+Billing is active through Shopify App Pricing. ShopOps Studio offers Solo, Growth, and
+Multi-location paid plans, each with a 14-day free trial, priced and billed entirely through
+Shopify App Pricing rather than a payment method collected directly by ShopOps Studio.
+Subscription status is verified against Shopify's Partner API on each protected request.
+Merchants may upgrade, downgrade, or cancel their plan; cancellation remains accessible through
+the end of the current billing cycle. Final pricing, trial, refund, and cancellation terms are
+governed by Shopify's App Pricing terms and the plan details shown in the Shopify Admin at the
+time of subscription.
 
 ## Changes to the Service
 

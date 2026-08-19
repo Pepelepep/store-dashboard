@@ -1,5 +1,10 @@
 # Marketplace Readiness Audit
 
+> **Superseded.** This is the oldest marketplace-readiness document (2026-06-24) and no longer
+> reflects current status — billing, legal pages, and support/privacy URLs described as missing
+> below have since been implemented. See `docs/marketplace/MARKETPLACE_CHECKLIST.md` and
+> `docs/marketplace/V0_FREEZE_2026-08-09.md` for current status.
+
 Audit branch: `audit/marketplace-readiness`  
 Base branch target: `marketplace/stable-prep`  
 Audit date: 2026-06-24  

@@ -11,8 +11,8 @@ Draft status: marketplace preparation checklist.
 - [x] Added reviewer note for `read_orders`, `read_all_orders`, public-app removal of `read_users`, protected customer/order data processing, shop isolation, and no data sale/third-party marketing sharing.
 - [x] Finalized first-submission screenshot sequence.
 - [x] Aligned reviewer flow with finalized listing package.
-- [ ] Confirm Shopify approval for Protected Customer Data and `read_all_orders`.
-- [ ] Capture final screenshots with demo data only.
+- [ ] Confirm Shopify approval for Protected Customer Data and `read_all_orders`. **Not verifiable from the repo — this is a Partner Dashboard approval; requires manual confirmation from the owner (see `PRE_SUBMISSION_AUDIT_2026-08-19.md`).**
+- [x] Capture final screenshots with demo data only. Verified 2026-08-19: 11 files in `public/marketplace/screenshots/2026-08-final/`, each exactly 1600×900.
 - [ ] Confirm final Shopify App Store screenshot dimensions.
 
 ## Phase 7B Status
@@ -112,13 +112,13 @@ Draft status: marketplace preparation checklist.
 ## Listing Assets
 
 - [x] Create a compliant 1200 × 1200 app-icon candidate (`public/marketplace/shopops-studio-app-icon-1200.png`). Final visual approval/upload remains manual.
-- [ ] Dashboard screenshot.
-- [ ] Locations screenshot.
-- [ ] Data Health screenshot.
-- [ ] Expenses / COGS screenshot.
-- [ ] Permissions screenshot.
-- [ ] Billing or first-run onboarding screenshot if needed.
-- [ ] Optional Sync Center screenshot only if needed for admin/support diagnostics.
+- [x] Dashboard screenshot. Verified 2026-08-19: `01-overview-kpis`, `02-overview-hourly-sales`, `03-overview-staff-vendor` (1600×900) in `public/marketplace/screenshots/2026-08-final/`.
+- [x] Locations screenshot. Verified: `04-location-kpis-trend`, `05-location-comparison` (1600×900).
+- [x] Data Health screenshot. Verified: `11-data-sync` (1600×900) — filename says "data-sync" rather than "data-health"; double-check this is the intended Data Health page capture before final upload.
+- [x] Expenses / COGS screenshot. Verified: `06-product-costs`, `07-operating-expenses` (1600×900).
+- [x] Permissions screenshot. Verified: `09-location-access` (1600×900).
+- [x] Billing or first-run onboarding screenshot if needed. Verified: `10-plan-billing` (1600×900).
+- [ ] Optional Sync Center screenshot only if needed for admin/support diagnostics. Optional; not captured separately from Data Health.
 - [x] Final tagline.
 - [x] Final short description.
 - [x] Final long description.
