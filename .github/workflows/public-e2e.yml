@@ -44,7 +44,7 @@ jobs:
       - run: npm run test:e2e:public
       - name: Upload Playwright evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-public-evidence
           path: |
