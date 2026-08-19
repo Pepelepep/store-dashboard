@@ -18,7 +18,7 @@ Use the dedicated Marketplace registration only:
 | Distribution | Public / Shopify App Store |
 | Primary language | English |
 
-Before launch, replace the temporary Render preview hostname with the final production hostname everywhere if a permanent domain is adopted. Do not mix this registration with the existing client production or staging registrations.
+Confirmed 2026-08-19: `shopops-marketplace-preview.onrender.com` is the permanent production hostname — no swap is required before launch. A custom domain remains optional later (Render includes custom domains on paid plans at no extra platform cost; only domain registration itself costs money) but is not needed for submission. Do not mix this registration with the existing client production or staging registrations.
 
 ## 2. Configuration
 
@@ -43,7 +43,7 @@ Required manual contacts:
 
 - **Manual proof required:** confirm the submission email is monitored and allow-list `noreply@shopify.com`.
 - Emergency developer email: `support@shopopsstudio.com` (confirmed 2026-08-19; matches `SUPPORT_AND_CONTACTS.md`).
-- **Manual input required:** emergency developer phone number — not provided yet.
+- No emergency developer phone number, by design (confirmed 2026-08-19) — email is the sole emergency channel. If Shopify's submission form requires a phone value, resolve that at submission time; it is not a documentation gap.
 - **Manual proof required:** verify the support mailbox can send and receive messages from outside the organization.
 
 App icon:
