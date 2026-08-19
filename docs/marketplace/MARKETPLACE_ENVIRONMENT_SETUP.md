@@ -10,10 +10,11 @@ Prepare a dedicated marketplace environment for ShopOps Studio that is separate 
 
 Render service:
 
-- Use the existing dedicated Render preview service for marketplace review and pre-launch QA.
+- Use the existing dedicated Render service for marketplace review and production.
 - Do not reuse the current client production Render service.
-- Current temporary URL: `https://shopops-marketplace-preview.onrender.com`.
-- Configure deploys from the marketplace branch or a controlled marketplace release branch.
+- Production URL, confirmed final 2026-08-19 (no custom domain planned for now):
+  `https://shopops-marketplace-preview.onrender.com`.
+- Deploys from `marketplace/stable-prep` with auto-deploy on every commit (verified live).
 - Confirm Node version matches `package.json` engine constraints.
 
 Shopify app:
@@ -85,8 +86,7 @@ Environment matrix:
 | Environment               | `NODE_ENV`     | `BILLING_ENABLED` | App identity and offer expectations                                                                                                                                                                                     |
 | ------------------------- | -------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Local development         | Non-production | `false` allowed   | No Partner credentials required. Use only for local work; access is intentionally ungated.                                                                                                                              |
-| Pre-launch Render preview | `production`   | `true` required   | Uses the canonical `shopops-studio` Marketplace client ID, app GID, and handle. The Render preview URL is temporary hosting for that same future production app. MyShop may use the private, store-restricted QA Pilot. |
-| Final public production   | `production`   | `true` required   | Uses the same canonical `shopops-studio` Marketplace registration and matching app GID/client ID. Replace temporary hosting URLs with final production URLs; only Solo, Growth, and Multi-location are public offers.   |
+| Render (pre-launch QA and production) | `production`   | `true` required   | Uses the canonical `shopops-studio` Marketplace client ID, app GID, and handle. Confirmed 2026-08-19: this is the same Render service and hostname for both pre-launch QA and public production — there is no separate "final" hosting URL to switch to. MyShop may use the private, store-restricted QA Pilot; only Solo, Growth, and Multi-location are public offers. |
 
 Source of truth and lifecycle:
 
@@ -105,7 +105,7 @@ Partner Dashboard checks requiring human verification:
 - Confirm QA Pilot is a $0 private plan on the current Marketplace registration, is absent from every public listing, and contains only intended preview/review shop domains.
 - Confirm the Partner API client has Manage apps access and API version `2026-07` is available for `activeSubscription`.
 - Confirm the configured Partner app GID belongs to the same `shopops-studio` registration as client ID `751df93cb283cb05edc5b46b35de06be`, and that Shopify's hosted pricing URL uses the `shopops-studio` handle.
-- During pre-launch QA, confirm the current application and auth URLs point to the temporary Render preview deployment. Before public launch, replace those URLs with the final production hosting values without changing the Shopify app identity.
+- Confirm the application and auth URLs point to the `shopops-marketplace-preview` Render deployment — confirmed 2026-08-19 as the permanent production hosting, not a placeholder to be swapped later.
 - Exercise initial selection, all three paid plans, private QA activation, trial display, upgrade, downgrade, cancellation, callback retry, uninstall/reinstall, and a temporary Partner API failure in test stores without using live service calls in automated tests.
 
 ## Future Post-Launch Topology (Not Implemented)
@@ -196,7 +196,7 @@ Current pre-launch values in `shopify.app.shopops-marketplace.toml`:
 - App name: `ShopOps Studio`
 - Canonical handle: `shopops-studio`
 - Temporary application URL: `https://shopops-marketplace-preview.onrender.com`
-- OAuth redirect URLs use that same temporary Render host.
+- OAuth redirect URLs use that same Render host, confirmed permanent.
 
 Before public launch, verify the application URL, OAuth redirect URLs, operational webhook URLs, and compliance webhook URLs use the approved production host. Do not change the canonical handle or substitute an unrelated client ID or Partner app GID.
 
@@ -264,16 +264,16 @@ everything else needs manual confirmation from the owner.
 - [x] Dedicated Render marketplace service created. **Verified live 2026-08-19**: `shopops-marketplace-preview` (Node, Oregon, Starter plan) exists as its own service, separate from the client-production service, auto-deploys on every commit, and its deploy history matches `origin/marketplace/stable-prep` commit-for-commit (currently live at `037ae6c`). No second service is needed.
 - [ ] Dedicated Supabase/database environment created or tenant safeguards approved. **Not verifiable from repo/Render dashboard (would require the Supabase project directly) — manual confirmation required.**
 - [ ] Marketplace env vars configured. Confirmed the Render service has an environment variables section populated (names not inspected — secrets), but which exact vars/values are set is **not verifiable this way — manual confirmation required.**
-- [ ] `shopify.app.shopops-marketplace.toml` placeholders replaced. **Still on `shopops-marketplace-preview.onrender.com`** (application_url + all 3 redirect URLs) as of 2026-08-19. This is a real, live, dedicated Render service (see above) — **open decision for the owner**: keep this exact `.onrender.com` hostname as the permanent production URL for submission (in which case drop the "temporary" wording in this doc, the toml comment, and the runbook), or add a custom domain to this same service first. Not changed here pending that decision.
+- [x] `shopify.app.shopops-marketplace.toml` hostname confirmed acceptable as final. Still on `shopops-marketplace-preview.onrender.com` (application_url + all 3 redirect URLs) as of 2026-08-19 — this is a real, live, dedicated Render service (see above), and Shopify App Store submission does not require a custom domain. Owner confirmed (2026-08-19) no hostname change is needed; a custom domain is optional/cheap later (Render includes custom domains on paid plans at no extra platform cost — only domain registration itself costs money) but not required now.
 - [ ] Compliance webhooks registered. Toml declares all 3 compliance topics (`customers/data_request`, `customers/redact`, `shop/redact`) under `api_version = "2026-07"` — config-level presence confirmed, but live Partner Dashboard registration is not verifiable from the repo or Render.
 - [ ] Operational webhooks registered. Toml declares all 6 operational topics — same caveat as above.
 - [ ] Reviewer/admin bootstrap access configured. **Not verifiable from repo/Render — manual confirmation required.**
 - [ ] Demo data loaded or synced. A seed script exists (`supabase/seeds/001_staging_demo_data.sql`), but whether it has actually been loaded into any live environment is not verifiable from here.
 - [ ] Sync Center shows successful sync state or expected first-run state. **Not verifiable without signing into the running app — manual confirmation required.**
 
-**New finding, unrelated to this checklist's original items**: the `shopops-maintenance-tick`
-Render cron job — described below as running every minute — has been **suspended since
-2026-08-08 23:21 EDT** (the owner suspended it directly; confirmed via Render's own event log).
-It has not run at all in the 11 days since. Confirm whether this is intentional before submission;
-if not, it needs to be resumed from the Render dashboard.
+**Note, unrelated to this checklist's original items**: the `shopops-maintenance-tick` Render cron
+job — described below as running every minute — has been suspended since 2026-08-08 23:21 EDT
+(the owner suspended it directly; confirmed via Render's own event log). Owner confirmed 2026-08-19
+this is intentional: it will be resumed once the preview is validated and the app actually goes to
+production, not before.
 - [x] Screenshots captured from demo data only. Verified 2026-08-19: `public/marketplace/screenshots/2026-08-final/` contains exactly 11 PNG files, each confirmed exactly 1600×900 pixels via `file`.

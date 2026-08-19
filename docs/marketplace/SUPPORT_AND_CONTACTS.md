@@ -16,9 +16,11 @@ Emergency technical contact: `Pierre-Paul Quilichini, founder/developer`
 
 Emergency email: `support@shopopsstudio.com`
 
-Emergency phone or paging channel: not yet defined — email is the sole emergency channel for now.
-Confirmed 2026-08-19: emergency email is `support@shopopsstudio.com` (same as public support);
-a phone/paging channel is still not provided.
+Emergency phone or paging channel: none, by design. Owner confirmed 2026-08-19: email
+(`support@shopopsstudio.com`, same as public support) is the sole emergency channel — this is a
+final decision, not a placeholder. If the Shopify Partner Dashboard submission form requires a
+phone value to be entered, that is a Shopify form constraint to solve at submission time
+(e.g. entering the same number used for the Partner account), not a gap in this document.
 
 Use the emergency contact for security incidents, widespread production outages, data deletion failures, compliance webhook failures, or Shopify review escalation.
 

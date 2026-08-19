@@ -15,10 +15,10 @@ Last verified: 2026-08-09
   staff-CSV tests, build clean. `npm audit --omit=dev --audit-level=high` initially found 4 high
   vulnerabilities (transitive Prisma tooling dependency) that would have failed the `quality-gate`
   CI check — fixed via a `deepmerge-ts` override; audit now clean.
-- **`shopops-maintenance-tick` Render cron job is suspended** (since 2026-08-08 23:21 EDT, 11
-  days as of this check) — confirmed live on the Render dashboard, not a code-level finding.
-  Contradicts the "Automatic maintenance scheduler" row below, which is stale. Confirm whether
-  this is intentional; resume it from the Render dashboard if not.
+- **`shopops-maintenance-tick` Render cron job is suspended** (since 2026-08-08 23:21 EDT) —
+  confirmed live on the Render dashboard, not a code-level finding. Owner confirmed 2026-08-19
+  this is intentional: it will be resumed once the preview is validated and the app actually goes
+  to production. The "Automatic maintenance scheduler" row below is stale until then.
 
 ## Product promise to demonstrate
 
