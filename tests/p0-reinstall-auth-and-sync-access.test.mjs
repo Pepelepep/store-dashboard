@@ -4071,6 +4071,85 @@ test("revoked hidden identity consolidates one explicit waiting approval without
   assert.match(migration, /pg_advisory_xact_lock/);
 });
 
+test("the sole owner can self-reclaim a stale identity without a second approver", () => {
+  const permissions = readFileSync(
+    new URL("../app/lib/auth/permissions.server.ts", import.meta.url),
+    "utf8",
+  );
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260819120000_owner_identity_self_reclaim.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  const bindFn = permissions.slice(
+    permissions.indexOf("async function bindVerifiedMembership"),
+  );
+  assert.match(bindFn, /if \(userIdConflict\) \{/);
+  assert.match(bindFn, /if \(membership\.shopifyUserId\) \{/);
+  assert.match(bindFn, /if \(!membership\.isOwner\) \{/);
+  assert.match(bindFn, /return reclaimOwnerIdentity\(/);
+  assert.ok(
+    bindFn.indexOf("if (userIdConflict) {") <
+      bindFn.indexOf("if (membership.shopifyUserId) {"),
+    "another membership's hidden-identity collision must still fail closed before any owner reclaim is attempted",
+  );
+
+  const reclaimFn = permissions.slice(
+    permissions.indexOf("async function reclaimOwnerIdentity"),
+    permissions.indexOf("async function bindVerifiedMembership"),
+  );
+  assert.match(reclaimFn, /rpc\("reclaim_owner_shopops_identity"/);
+  assert.match(reclaimFn, /p_new_shopify_user_id: identity\.shopifyUserId/);
+  assert.match(reclaimFn, /result: "owner_identity_reclaimed" as const/);
+  assert.match(
+    reclaimFn,
+    /bound\.data\.shopify_user_id !== identity\.shopifyUserId/,
+  );
+
+  assert.match(permissions, /"owner_identity_reclaimed"/);
+  assert.match(
+    permissions,
+    /linked\.result === "owner_identity_reclaimed"/,
+  );
+
+  assert.match(
+    migration,
+    /CREATE OR REPLACE FUNCTION public\.reclaim_owner_shopops_identity/,
+  );
+  assert.match(migration, /membership\.is_owner = true/);
+  assert.match(migration, /membership\.status = 'active'/);
+  assert.match(
+    migration,
+    /lower\(btrim\(membership\.normalized_email\)\) = v_email/,
+  );
+  assert.match(migration, /v_old_user_id = v_new_user_id/);
+  assert.match(migration, /RAISE EXCEPTION 'owner_reclaim_not_needed'/);
+  assert.match(migration, /RAISE EXCEPTION 'owner_identity_in_use'/);
+  assert.ok(
+    migration.indexOf(
+      "SELECT 1 FROM public.dashboard_memberships membership\n    WHERE membership.shop_domain = v_shop\n      AND membership.id <> p_membership_id",
+    ) < migration.indexOf("RAISE EXCEPTION 'owner_identity_in_use'"),
+    "another membership already holding the new id must block the reclaim",
+  );
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /'owner_self_reclaim_superseded', 'pending'/);
+  assert.match(
+    migration,
+    /REVOKE ALL ON FUNCTION public\.reclaim_owner_shopops_identity\(\s*\n\s*text, uuid, uuid, text, text\s*\n\)\s*FROM PUBLIC, anon, authenticated;/,
+  );
+  assert.match(
+    migration,
+    /GRANT EXECUTE ON FUNCTION public\.reclaim_owner_shopops_identity\(\s*\n\s*text, uuid, uuid, text, text\s*\n\)\s*TO service_role;/,
+  );
+
+  // Non-owner duplicate-access consolidation is untouched by this change.
+  assert.match(permissions, /resolveApprovedDuplicateAccess/);
+  assert.match(permissions, /userIdMembership\?\.status === "disabled"/);
+});
+
 test("canonical ShopOps access hardening rejects partial, orphan, duplicate, and cross-shop graphs", () => {
   const baseMigration = readFileSync(
     new URL(
