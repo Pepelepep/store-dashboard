@@ -17,6 +17,8 @@ Emergency technical contact: `Pierre-Paul Quilichini, founder/developer`
 Emergency email: `support@shopopsstudio.com`
 
 Emergency phone or paging channel: not yet defined — email is the sole emergency channel for now.
+Confirmed 2026-08-19: emergency email is `support@shopopsstudio.com` (same as public support);
+a phone/paging channel is still not provided.
 
 Use the emergency contact for security incidents, widespread production outages, data deletion failures, compliance webhook failures, or Shopify review escalation.
 

@@ -4,13 +4,21 @@ Last verified: 2026-08-09
 
 ## 2026-08-19 status check
 
+- **`marketplace/stable-prep` is no longer frozen** — see `V0_FREEZE_2026-08-09.md`'s superseded
+  note. It moved 8 commits past the 2026-08-09 freeze point on 2026-08-15 and is now the single
+  active branch (`docs/marketplace/BRANCH_WORKFLOW.md`), gated by a `quality-gate` CI check.
 - **Lifecycle B (real uninstall + `shop/redact` delivery)**: the 2026-08-11 verification deadline
   noted below has passed. Owner confirmed (2026-08-19) this has **not** been tested/confirmed
   since. The "Live compliance webhooks" row below stays "IN PROGRESS" — do not treat it as done.
-- **Typecheck / lint / P0 tests / production build / `shopify app build`**: re-verified 2026-08-19
-  directly on `marketplace/stable-prep` (the actual submission branch, via a disposable
-  `git worktree` + clean `npm ci`) — all passed, 129/129 P0 tests, reproducing this document's
-  original 2026-08-09 evidence exactly.
+- **Typecheck / lint / unit tests / production build / `shopify app build`**: verified 2026-08-19
+  directly on `origin/marketplace/stable-prep` (clean `npm ci`) — all passed: 137 P0 tests + 2
+  staff-CSV tests, build clean. `npm audit --omit=dev --audit-level=high` initially found 4 high
+  vulnerabilities (transitive Prisma tooling dependency) that would have failed the `quality-gate`
+  CI check — fixed via a `deepmerge-ts` override; audit now clean.
+- **`shopops-maintenance-tick` Render cron job is suspended** (since 2026-08-08 23:21 EDT, 11
+  days as of this check) — confirmed live on the Render dashboard, not a code-level finding.
+  Contradicts the "Automatic maintenance scheduler" row below, which is stale. Confirm whether
+  this is intentional; resume it from the Render dashboard if not.
 
 ## Product promise to demonstrate
 

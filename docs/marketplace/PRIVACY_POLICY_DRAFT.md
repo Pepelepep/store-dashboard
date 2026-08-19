@@ -43,9 +43,16 @@ We use merchant shop data to:
 
 ## Data Sharing
 
-Draft policy decision: ShopOps Studio should not sell merchant or customer data. Data should be shared only with infrastructure providers required to operate the app, such as hosting, database, logging, and Shopify platform services.
+ShopOps Studio does not sell merchant or customer data. Data is shared only with the infrastructure
+providers required to operate the app:
 
-Specific subprocessors and infrastructure providers must be listed before publication.
+- Shopify (platform, Admin API, and App Pricing billing).
+- Render (application hosting).
+- Supabase/PostgreSQL (database storage).
+
+This list should be reconfirmed against the actual production/marketplace infrastructure before
+publication, and any additional subprocessor (e.g. logging or error-monitoring tooling) added if
+one is introduced.
 
 ## Deletion and Redaction
 

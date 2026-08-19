@@ -255,18 +255,25 @@ Use demo/fake data only.
 
 ## Pre-Review Environment Checklist
 
-Status verified 2026-08-19 from the repo only (no Partner Dashboard/Render/Supabase access) — see
-`PRE_SUBMISSION_AUDIT_2026-08-19.md`. Items below are checked only where the repo itself provides
-verifiable evidence; everything else needs manual confirmation from the owner.
+Status verified 2026-08-19, first from the repo alone, then cross-checked live against the Render
+dashboard (`shopops-marketplace-preview` service and `shopops-maintenance-tick` cron job) — see
+`PRE_SUBMISSION_AUDIT_2026-08-19.md`. Items below are checked only where actually verified;
+everything else needs manual confirmation from the owner.
 
-- [ ] Dedicated Shopify marketplace app created. **Not verifiable from repo — manual confirmation required.**
-- [ ] Dedicated Render marketplace service created. **Not verifiable from repo — manual confirmation required.**
-- [ ] Dedicated Supabase/database environment created or tenant safeguards approved. **Not verifiable from repo — manual confirmation required.**
-- [ ] Marketplace env vars configured. **Not verifiable from repo (secrets correctly excluded) — manual confirmation required.**
-- [ ] `shopify.app.shopops-marketplace.toml` placeholders replaced. **Verified NOT done**: `application_url` and all 3 redirect URLs still point at `https://shopops-marketplace-preview.onrender.com` as of 2026-08-19. Waiting on the final production hostname from the owner before changing it.
-- [ ] Compliance webhooks registered. Toml declares all 3 compliance topics (`customers/data_request`, `customers/redact`, `shop/redact`) under `api_version = "2026-07"` — config-level presence confirmed, but live Partner Dashboard registration is not verifiable from the repo.
+- [ ] Dedicated Shopify marketplace app created. **Not verifiable from repo/Render — Partner Dashboard state, manual confirmation required.**
+- [x] Dedicated Render marketplace service created. **Verified live 2026-08-19**: `shopops-marketplace-preview` (Node, Oregon, Starter plan) exists as its own service, separate from the client-production service, auto-deploys on every commit, and its deploy history matches `origin/marketplace/stable-prep` commit-for-commit (currently live at `037ae6c`). No second service is needed.
+- [ ] Dedicated Supabase/database environment created or tenant safeguards approved. **Not verifiable from repo/Render dashboard (would require the Supabase project directly) — manual confirmation required.**
+- [ ] Marketplace env vars configured. Confirmed the Render service has an environment variables section populated (names not inspected — secrets), but which exact vars/values are set is **not verifiable this way — manual confirmation required.**
+- [ ] `shopify.app.shopops-marketplace.toml` placeholders replaced. **Still on `shopops-marketplace-preview.onrender.com`** (application_url + all 3 redirect URLs) as of 2026-08-19. This is a real, live, dedicated Render service (see above) — **open decision for the owner**: keep this exact `.onrender.com` hostname as the permanent production URL for submission (in which case drop the "temporary" wording in this doc, the toml comment, and the runbook), or add a custom domain to this same service first. Not changed here pending that decision.
+- [ ] Compliance webhooks registered. Toml declares all 3 compliance topics (`customers/data_request`, `customers/redact`, `shop/redact`) under `api_version = "2026-07"` — config-level presence confirmed, but live Partner Dashboard registration is not verifiable from the repo or Render.
 - [ ] Operational webhooks registered. Toml declares all 6 operational topics — same caveat as above.
-- [ ] Reviewer/admin bootstrap access configured. **Not verifiable from repo — manual confirmation required.**
-- [ ] Demo data loaded or synced. A seed script exists (`supabase/seeds/001_staging_demo_data.sql`), but whether it has actually been loaded into any live environment is not verifiable from the repo.
-- [ ] Sync Center shows successful sync state or expected first-run state. **Not verifiable from repo — manual confirmation required.**
+- [ ] Reviewer/admin bootstrap access configured. **Not verifiable from repo/Render — manual confirmation required.**
+- [ ] Demo data loaded or synced. A seed script exists (`supabase/seeds/001_staging_demo_data.sql`), but whether it has actually been loaded into any live environment is not verifiable from here.
+- [ ] Sync Center shows successful sync state or expected first-run state. **Not verifiable without signing into the running app — manual confirmation required.**
+
+**New finding, unrelated to this checklist's original items**: the `shopops-maintenance-tick`
+Render cron job — described below as running every minute — has been **suspended since
+2026-08-08 23:21 EDT** (the owner suspended it directly; confirmed via Render's own event log).
+It has not run at all in the 11 days since. Confirm whether this is intentional before submission;
+if not, it needs to be resumed from the Render dashboard.
 - [x] Screenshots captured from demo data only. Verified 2026-08-19: `public/marketplace/screenshots/2026-08-final/` contains exactly 11 PNG files, each confirmed exactly 1600×900 pixels via `file`.
