@@ -58,6 +58,7 @@ export type PermissionContext = {
     | "linked_shopify_user_id"
     | "verified_email_linked"
     | "verified_email_reactivated"
+    | "owner_identity_reclaimed"
     | "membership_revoked"
     | "membership_missing"
     | "email_unverified"
@@ -180,6 +181,7 @@ type IdentityBindingResult =
   | "not_attempted"
   | "bound"
   | "consolidated_reactivation"
+  | "owner_identity_reclaimed"
   | "duplicate_access_needs_attention"
   | "identity_conflict"
   | "membership_not_bindable"
@@ -345,6 +347,61 @@ async function markIdentityNeedsAttention({
   }
 }
 
+async function reclaimOwnerIdentity({
+  identity,
+  membership,
+  supabase,
+}: {
+  identity: CurrentUserIdentity;
+  membership: DashboardMembership;
+  supabase: SupabaseClient;
+}) {
+  const reclaimed = await supabase.rpc("reclaim_owner_shopops_identity", {
+    p_shop_domain: identity.shop,
+    p_membership_id: membership.id,
+    p_person_id: membership.personId,
+    p_verified_email: identity.email,
+    p_new_shopify_user_id: identity.shopifyUserId,
+  });
+  if (reclaimed.error) {
+    return {
+      membership: null,
+      bindingAttempted: true,
+      activationAttempted: true,
+      result: "identity_conflict" as const,
+    };
+  }
+
+  const bound = await supabase
+    .from("dashboard_memberships")
+    .select(
+      "id, person_id, shopify_user_id, normalized_email, display_name, role, status, is_owner",
+    )
+    .eq("shop_domain", identity.shop)
+    .eq("id", membership.id)
+    .maybeSingle();
+  if (
+    bound.error ||
+    !bound.data ||
+    bound.data.status !== "active" ||
+    bound.data.shopify_user_id !== identity.shopifyUserId
+  ) {
+    return {
+      membership: null,
+      bindingAttempted: true,
+      activationAttempted: true,
+      result: "identity_conflict" as const,
+    };
+  }
+
+  return {
+    membership: toMembership(bound.data as MembershipRow),
+    bindingAttempted: true,
+    activationAttempted: true,
+    result: "owner_identity_reclaimed" as const,
+  };
+}
+
 async function bindVerifiedMembership({
   identity,
   membership,
@@ -375,13 +432,24 @@ async function bindVerifiedMembership({
       candidate.id !== membership.id &&
       candidate.shopifyUserId === identity.shopifyUserId,
   );
-  if (userIdConflict || membership.shopifyUserId) {
+  if (userIdConflict) {
     return {
       membership: null,
       bindingAttempted: true,
       activationAttempted: false,
       result: "identity_conflict" as const,
     };
+  }
+  if (membership.shopifyUserId) {
+    if (!membership.isOwner) {
+      return {
+        membership: null,
+        bindingAttempted: true,
+        activationAttempted: false,
+        result: "identity_conflict" as const,
+      };
+    }
+    return reclaimOwnerIdentity({ identity, membership, supabase });
   }
 
   const activated = await supabase.rpc("bind_verified_shopops_identity", {
@@ -699,7 +767,9 @@ export async function getPermissionContext({
     bindingResult = linked.result;
     needsAttention = !linked.membership;
     accessReason = linked.membership
-      ? "verified_email_linked"
+      ? linked.result === "owner_identity_reclaimed"
+        ? "owner_identity_reclaimed"
+        : "verified_email_linked"
       : "identity_conflict";
     if (!linked.membership) {
       await markIdentityNeedsAttention({ identity, supabase });
