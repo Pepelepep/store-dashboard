@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import process from "node:process";
 
@@ -23,3 +24,20 @@ const matched = Object.fromEntries(
 );
 
 console.log(JSON.stringify({ base, fileCount: files.length, files, matched }, null, 2));
+
+if (process.env.GITHUB_STEP_SUMMARY) {
+  const lines = [
+    "## Delivery risk classification",
+    "",
+    `Diff base: \`${base}\` (${files.length} file(s) changed)`,
+    "",
+    "| Surface | Files |",
+    "| --- | --- |",
+    ...Object.entries(matched).map(
+      ([name, matchedFiles]) =>
+        `| ${name} | ${matchedFiles.length ? matchedFiles.map((f) => `\`${f}\``).join("<br>") : "—"} |`,
+    ),
+    "",
+  ];
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n"));
+}
