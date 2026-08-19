@@ -11,10 +11,10 @@ These docs support ShopOps Studio marketplace readiness and reviewer preparation
 - [Reviewer test script](REVIEWER_TEST_SCRIPT.md)
 - [Screenshot plan](SCREENSHOT_PLAN.md)
 
-## Legal And Policy Drafts
+## Legal And Policy
 
-- [Privacy policy draft](PRIVACY_POLICY_DRAFT.md)
-- [Terms of service draft](TERMS_OF_SERVICE_DRAFT.md)
+- [Privacy policy](PRIVACY_POLICY.md) — mirrors the live `/privacy` page content
+- [Terms of service](TERMS_OF_SERVICE.md) — mirrors the live `/terms` page content
 - [Data retention policy](DATA_RETENTION_POLICY.md)
 - [Partner Dashboard submission runbook](PARTNER_DASHBOARD_SUBMISSION_RUNBOOK.md)
 - [Support and contacts](SUPPORT_AND_CONTACTS.md)
