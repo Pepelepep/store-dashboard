@@ -83,18 +83,20 @@ export function getStaffIdentityAliasCandidates(line: StaffIdentityOrderLine) {
         },
       ];
     case "attributed_staff_member_id":
-    case "pos_session_staff_member":
       return [
         {
           aliasType: STAFF_ALIAS_TYPES.posStaffMemberId,
           aliasValue: effectiveId,
         },
       ];
+    // A session id (whoever is logged into the POS register) is not a
+    // stable per-person identity — the same register can ring up sales for
+    // different real staff. It must never be resolvable through the same
+    // alias types as a genuine explicit attribution, so it falls through to
+    // the catch-all below instead of pos_staff_member_id/pos_user_id.
+    case "pos_session_staff_member":
     case "pos_session_user":
     case "pos_session":
-      return [
-        { aliasType: STAFF_ALIAS_TYPES.posUserId, aliasValue: effectiveId },
-      ];
     default:
       return [
         {
@@ -103,28 +105,6 @@ export function getStaffIdentityAliasCandidates(line: StaffIdentityOrderLine) {
         },
       ];
   }
-}
-
-export function getDiagnosticStaffIdentityAliasCandidates(
-  line: StaffIdentityOrderLine,
-) {
-  const candidates: Array<{ aliasType: StaffAliasType; aliasValue: string }> =
-    [];
-  const staffMemberId = normalizeAliasValue(line.shopops_staff_member_id);
-  const userId = normalizeAliasValue(line.shopops_user_id);
-  if (staffMemberId) {
-    candidates.push({
-      aliasType: STAFF_ALIAS_TYPES.posStaffMemberId,
-      aliasValue: staffMemberId,
-    });
-  }
-  if (userId) {
-    candidates.push({
-      aliasType: STAFF_ALIAS_TYPES.posUserId,
-      aliasValue: userId,
-    });
-  }
-  return candidates;
 }
 
 export function resolveStaffDisplayNameForOrderLine(
