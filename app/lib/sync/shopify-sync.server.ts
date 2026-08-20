@@ -817,15 +817,26 @@ function getPosLineItemAttribution(lineItem: OrderLineItemNode) {
     POS_ATTRIBUTION_PROPERTY_KEYS.effectiveStaffId,
   );
   const staffMemberId = compactSessionStaffId ?? legacyStaffMemberId;
+  // A session id (whoever is logged into the POS register) is not who made
+  // the sale. It must never resolve to a person the way an explicit "Sold
+  // by" attribution does — the same register can ring up sales made by
+  // different real staff. The pre-rewrite extension had the same bug under
+  // the single `_shopops_effective_staff_id` key, so a legacy row is only
+  // trusted when its own recorded source was genuinely explicit.
+  const legacyEffectiveIsTrustworthy =
+    source === "attributed_user_id" || source === "attributed_staff_member_id";
   const effectiveStaffId =
-    compactAttributedStaffId ?? compactSessionStaffId ?? legacyEffectiveStaffId;
+    compactAttributedStaffId ??
+    (legacyEffectiveIsTrustworthy ? legacyEffectiveStaffId : null);
   const attributionSource = compactAttributedStaffId
     ? "attributed_user_id"
-    : compactSessionStaffId
-      ? "pos_session_staff_member"
-      : source && POS_ATTRIBUTION_SOURCES.has(source)
-        ? source
-        : null;
+    : legacyEffectiveIsTrustworthy
+      ? source
+      : compactSessionStaffId
+        ? "pos_session_staff_member"
+        : source && POS_ATTRIBUTION_SOURCES.has(source)
+          ? source
+          : null;
 
   return {
     shopops_staff_member_id: staffMemberId,
