@@ -29,8 +29,8 @@ Recommended next branch: `marketplace/readiness-phase-1-docs-legal-onboarding`.
 
 Marketplace readiness Phase 1 drafts:
 
-- [Privacy Policy Draft](docs/marketplace/PRIVACY_POLICY_DRAFT.md)
-- [Terms of Service Draft](docs/marketplace/TERMS_OF_SERVICE_DRAFT.md)
+- [Privacy Policy](docs/marketplace/PRIVACY_POLICY.md) (finalized 2026-08-19, no longer a draft)
+- [Terms of Service](docs/marketplace/TERMS_OF_SERVICE.md) (finalized 2026-08-19, no longer a draft)
 - [Support and Contacts](docs/marketplace/SUPPORT_AND_CONTACTS.md)
 - [Data Retention Policy](docs/marketplace/DATA_RETENTION_POLICY.md)
 - [Shopify Scopes Justification](docs/marketplace/SHOPIFY_SCOPES_JUSTIFICATION.md)

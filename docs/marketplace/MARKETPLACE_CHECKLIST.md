@@ -71,8 +71,8 @@ Draft status: marketplace preparation checklist.
 - [x] Support URL implemented in marketplace preview: `https://shopops-marketplace-preview.onrender.com/support`.
 - [x] Public support and privacy/security contact set to `support@shopopsstudio.com`.
 - [x] Public expected response time set to within 2 business days; security or privacy requests are prioritized.
-- [ ] Legal review privacy policy.
-- [ ] Legal review terms of service.
+- [ ] Legal review privacy policy. Content finalized 2026-08-19 (`docs/marketplace/PRIVACY_POLICY.md`, live at `/privacy`) — comprehensive, standard structure with Law 25/PIPEDA/GDPR/CCPA references, but drafted without outside counsel; a lawyer's review is still recommended, especially once a formal business entity is chosen.
+- [ ] Legal review terms of service. Content finalized 2026-08-19 (`docs/marketplace/TERMS_OF_SERVICE.md`, live at `/terms`) — same caveat as above.
 - [x] Approve first-submission data retention policy.
 - [x] Set a maximum 30-day accidental-reinstall window, with `shop/redact` deletion taking precedence.
 - [x] Preserve permissions only during the recovery window; delete them on `shop/redact`.
