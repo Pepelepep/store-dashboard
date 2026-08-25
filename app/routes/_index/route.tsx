@@ -212,6 +212,7 @@ export default function MarketingHome() {
                 alt="ShopOps Studio profitability overview"
                 width="1600"
                 height="900"
+                fetchPriority="high"
               />
             </div>
             <div className="hero-float hero-float-profit">
