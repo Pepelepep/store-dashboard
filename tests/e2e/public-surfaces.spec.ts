@@ -17,9 +17,7 @@ for (const route of publicRoutes) {
     expect(response?.status(), `${route.path} should return HTTP 200`).toBe(200);
     await expect(page.locator("body")).toBeVisible();
 
-    const results = await new AxeBuilder({ page })
-      .disableRules(["color-contrast"])
-      .analyze();
+    const results = await new AxeBuilder({ page }).analyze();
 
     expect(results.violations).toEqual([]);
 

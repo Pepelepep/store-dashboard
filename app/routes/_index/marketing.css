@@ -287,7 +287,7 @@
 }
 
 .frame-toolbar div {
-  color: #778298;
+  color: #5e6a7f;
   font-size: 9px;
   font-weight: 700;
   left: 50%;
@@ -793,7 +793,7 @@
 
 .footer-disclaimer {
   border-top: 1px solid #e0e6ef;
-  color: #7b8698;
+  color: #626e82;
   display: flex;
   font-size: 11px;
   gap: 20px;
