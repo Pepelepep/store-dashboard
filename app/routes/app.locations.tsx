@@ -1117,7 +1117,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       admin: billingAdmin,
       shop: session.shop,
     });
-    if (!isAccessibleBillingState(billing)) {
+    if (billing.state !== "disabled" && !isAccessibleBillingState(billing)) {
       throw new Response("An active ShopOps Studio plan is required.", {
         status: 402,
       });
