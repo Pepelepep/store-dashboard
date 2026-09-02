@@ -3626,6 +3626,24 @@ test("shop initialization queues the historical rebuild for a reinstalled shop w
   );
 });
 
+test("locations reporting tab does not 402 a deployment with billing disabled", () => {
+  const locations = readFileSync(
+    new URL("../app/routes/app.locations.tsx", import.meta.url),
+    "utf8",
+  );
+
+  // A custom-distribution deployment with no Partner-managed plan
+  // legitimately reports billing.state === "disabled" (not an entitlement
+  // failure). Every other billing gate in the codebase already bypasses
+  // "disabled" (app.settings.tsx, entitlements.server.ts's
+  // getFreshPlanLimits, requireBillingAccess) — the reporting tab must too,
+  // or it 402s a shop that was never supposed to be billing-gated at all.
+  assert.match(
+    locations,
+    /if \(billing\.state !== "disabled" && !isAccessibleBillingState\(billing\)\) \{/,
+  );
+});
+
 test("membership RPCs lock each shop and enforce owner, last-admin, archived-staff, and concurrent capacity rules", () => {
   const migration = readFileSync(
     new URL(
