@@ -3575,8 +3575,9 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
       billingRequired.indexOf("const billing ="),
   );
   assert.ok(
-    billingRequired.indexOf("await getPermissionContext") <
-      billingRequired.indexOf("await ensureShopInitialized"),
+    billingRequired.indexOf("await ensureShopInitialized") <
+      billingRequired.indexOf("await getPermissionContext"),
+    "Shop bootstrap must not be skippable by an owner/permission failure",
   );
   assert.match(billingRequired, /view: "owner_setup"/);
   assert.match(
@@ -3590,8 +3591,9 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
       billingComplete.indexOf("const billing = await refreshBillingState"),
   );
   assert.ok(
-    billingComplete.indexOf("await assertOwnerAccess") <
-      billingComplete.indexOf("await ensureShopInitialized"),
+    billingComplete.indexOf("await ensureShopInitialized") <
+      billingComplete.indexOf("await assertOwnerAccess"),
+    "Shop bootstrap must not be skippable by an owner/permission failure",
   );
   assert.match(billingComplete, /Owner setup is temporarily unavailable\./);
 });
@@ -4899,6 +4901,49 @@ test("Settings separates data freshness from scheduler state at the shared width
   assert.match(
     sync,
     /<ContentCard className="resource-card" title="Data freshness">/,
+  );
+});
+
+test("Manual sync/rebuild drains a stuck job across ticks instead of relying on a single batch, and full_refresh order history stays unbounded", () => {
+  const sync = readFileSync(
+    new URL("../app/routes/app.admin.sync.tsx", import.meta.url),
+    "utf8",
+  );
+  const syncJobs = readFileSync(
+    new URL("../app/lib/sync/sync-jobs.server.ts", import.meta.url),
+    "utf8",
+  );
+  const shopifySync = readFileSync(
+    new URL("../app/lib/sync/shopify-sync.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  // A single processManualSyncJobBatch() tick only advances a large job by
+  // MAX_STEP_BATCHES_PER_TICK batches before yielding back to "pending"; the
+  // admin action must keep ticking the same job (bounded) instead of
+  // depending entirely on Render Cron to ever finish it.
+  assert.match(sync, /const MANUAL_SYNC_MAX_TICKS = \d+/);
+  assert.match(sync, /const MANUAL_SYNC_TIME_BUDGET_MS = \d[\d_]*/);
+  assert.match(
+    sync,
+    /do \{[\s\S]*?immediate = await processManualSyncJobBatch\(\{[\s\S]*?\} while \(\s*immediate\.processed\s*&&\s*updatedJob\.status === "pending"\s*&&\s*ticks < MANUAL_SYNC_MAX_TICKS\s*&&\s*Date\.now\(\) < deadline\s*\)/,
+  );
+  // The authentication-required short-circuit must still be checked on every
+  // tick, not just the first one.
+  assert.match(
+    sync,
+    /do \{[\s\S]*?authenticationRequired === true[\s\S]*?\} while \(/,
+  );
+
+  // full_refresh is the only path that imports full order history; lock that
+  // in so a future "optimization" can't silently reintroduce a lookback cap.
+  assert.match(
+    syncJobs,
+    /jobType === "full_refresh"\s*\?\s*\{\s*orders:\s*\{\s*fullHistory:\s*true\s*\}\s*\}\s*:\s*\{\}/,
+  );
+  assert.match(
+    shopifySync,
+    /progress\?\.fullHistory\s*\?\s*\{\s*startDate:\s*null,\s*endDate:\s*null\s*\}/,
   );
 });
 

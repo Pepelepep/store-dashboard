@@ -49,6 +49,11 @@ function buildBillingRecoveryPath(search: string) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
+  await ensureShopInitialized({
+    route: "billing-complete",
+    shop: session.shop,
+    supabase,
+  });
   try {
     await assertOwnerAccess({
       request,
@@ -62,11 +67,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       status: 503,
     });
   }
-  await ensureShopInitialized({
-    route: "billing-complete",
-    shop: session.shop,
-    supabase,
-  });
   const url = new URL(request.url);
   const returnedPlanHandle = url.searchParams.get("plan_handle");
 

@@ -65,6 +65,14 @@ type LoaderData = {
 };
 type ActionData = { ok: boolean; message: string; operationStatus?: string };
 
+// A single processManualSyncJobBatch() tick only advances a large full/full_refresh
+// job by MAX_STEP_BATCHES_PER_TICK batches (5 pages, ~250 orders) before yielding
+// back to "pending". Without this, a merchant-triggered historical rebuild depends
+// entirely on Render Cron ticking process-sync-jobs/maintenance-tick to ever finish;
+// looping here lets one manual click drain much more of the job on its own.
+const MANUAL_SYNC_MAX_TICKS = 20;
+const MANUAL_SYNC_TIME_BUDGET_MS = 20_000;
+
 const RESOURCES = [
   { type: "orders", label: "Orders" },
   { type: "products", label: "Products" },
@@ -339,24 +347,33 @@ export async function action({ request }: ActionFunctionArgs) {
   let immediatePassDeferred = false;
   try {
     const admin = await getOfflineAdminClient(session.shop);
-    const immediate = await processManualSyncJobBatch({
-      admin,
-      supabase,
-      shop: session.shop,
-      jobId: result.job.id,
-      preserveQueuedOnFailure: true,
-    });
-    updatedJob = immediate.job;
-    immediatePassDeferred = Boolean(
-      immediate.job.details?.immediatePassFailedAt,
+    const deadline = Date.now() + MANUAL_SYNC_TIME_BUDGET_MS;
+    let ticks = 0;
+    let immediate: Awaited<ReturnType<typeof processManualSyncJobBatch>>;
+    do {
+      immediate = await processManualSyncJobBatch({
+        admin,
+        supabase,
+        shop: session.shop,
+        jobId: result.job.id,
+        preserveQueuedOnFailure: true,
+      });
+      ticks += 1;
+      updatedJob = immediate.job;
+      if (immediate.job.details?.authenticationRequired === true) {
+        return {
+          ok: false,
+          message: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
+          operationStatus: "authentication_required",
+        };
+      }
+    } while (
+      immediate.processed &&
+      updatedJob.status === "pending" &&
+      ticks < MANUAL_SYNC_MAX_TICKS &&
+      Date.now() < deadline
     );
-    if (immediate.job.details?.authenticationRequired === true) {
-      return {
-        ok: false,
-        message: SHOPIFY_AUTHENTICATION_REQUIRED_MESSAGE,
-        operationStatus: "authentication_required",
-      };
-    }
+    immediatePassDeferred = Boolean(updatedJob.details?.immediatePassFailedAt);
   } catch (error) {
     if (isShopifyAuthenticationRequiredError(error)) {
       await markSyncJobAuthenticationRequired({

@@ -34,6 +34,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const supabase = getSupabaseAdminClient();
   const url = new URL(request.url);
+
+  await ensureShopInitialized({
+    route: "billing-required",
+    shop: session.shop,
+    supabase,
+  });
+
   const identity = getCurrentUserIdentity({ session });
   if (!identity.isShopifyAccountOwner) {
     return {
@@ -77,12 +84,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       supportUrl: "/support",
     };
   }
-
-  await ensureShopInitialized({
-    route: "billing-required",
-    shop: session.shop,
-    supabase,
-  });
 
   const billingAdmin = await getShopLevelAdminClient({
     shop: session.shop,
