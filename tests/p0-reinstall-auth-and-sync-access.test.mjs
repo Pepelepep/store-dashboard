@@ -3598,6 +3598,34 @@ test("verified Shopify owner bootstrap has no implicit Shopify-admin or token-de
   assert.match(billingComplete, /Owner setup is temporarily unavailable\./);
 });
 
+test("shop initialization queues the historical rebuild for a reinstalled shop with only a partial footprint", () => {
+  const shopInit = readFileSync(
+    new URL("../app/lib/shop/shop-initialization.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  // A footprint of leftover rows must not be treated as proof that full order
+  // history was ever imported; only a full_refresh reaching "success" proves
+  // that. Otherwise a reinstalled shop with a partial/stale footprint never
+  // gets its historical rebuild queued.
+  assert.match(
+    shopInit,
+    /async function hasCompletedFullHistorySync\(/,
+  );
+  assert.match(
+    shopInit,
+    /\.eq\("job_type", "full_refresh"\)[\s\S]*?\.eq\("status", "success"\)/,
+  );
+  assert.match(
+    shopInit,
+    /const hasCompletedFullHistory = hasExistingFootprint\s*\n\s*\? await hasCompletedFullHistorySync\(\{ shop, supabase \}\)\s*\n\s*: false;/,
+  );
+  assert.match(
+    shopInit,
+    /if \(!hasExistingFootprint \|\| !hasCompletedFullHistory\) \{/,
+  );
+});
+
 test("membership RPCs lock each shop and enforce owner, last-admin, archived-staff, and concurrent capacity rules", () => {
   const migration = readFileSync(
     new URL(

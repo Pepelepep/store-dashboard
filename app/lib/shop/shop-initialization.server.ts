@@ -45,6 +45,30 @@ async function hasExistingShopFootprint({
   return results.some(Boolean);
 }
 
+// A footprint of leftover rows (e.g. from webhooks trickling in, or a prior
+// partial sync) does not prove full order history was ever imported — only a
+// full_refresh reaching "success" does, since that is the only job type that
+// pulls unbounded (not just a 7-day) order history. Without this check, a
+// reinstalled shop with a partial footprint would never get its historical
+// rebuild queued.
+async function hasCompletedFullHistorySync({
+  shop,
+  supabase,
+}: {
+  shop: string;
+  supabase: SupabaseClient;
+}) {
+  const { count, error } = await supabase
+    .from("sync_jobs")
+    .select("*", { count: "exact", head: true })
+    .eq("shop_domain", shop)
+    .eq("job_type", "full_refresh")
+    .eq("status", "success");
+
+  if (error) throw new Error(`sync_jobs: ${error.message}`);
+  return (count ?? 0) > 0;
+}
+
 async function ensureOptionalShopState({
   shop,
   supabase,
@@ -140,10 +164,13 @@ export async function ensureShopInitialized({
       shop,
       supabase,
     });
+    const hasCompletedFullHistory = hasExistingFootprint
+      ? await hasCompletedFullHistorySync({ shop, supabase })
+      : false;
 
     await ensureOptionalShopState({ shop, supabase });
 
-    if (!hasExistingFootprint) {
+    if (!hasExistingFootprint || !hasCompletedFullHistory) {
       const initialSync = await createManualSyncJob({
         supabase,
         shop,
@@ -154,6 +181,7 @@ export async function ensureShopInitialized({
         route,
         shop,
         reused: initialSync.reused,
+        hadPartialFootprint: hasExistingFootprint,
       });
     } else if (inserted) {
       console.info("[shop:init] legacy shop footprint preserved", {
