@@ -9,16 +9,17 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider  = "postgresql"
-  // Runtime app traffic: Supabase pooler in transaction mode (port 6543),
-  // built for many concurrent short-lived connections.
-  url       = env("DATABASE_URL")
-  // `prisma migrate deploy` needs session-level features (advisory locks)
-  // that transaction-mode pooling does not support reliably. Point this at
-  // the session-mode pooler (port 5432) instead, kept free for migrations
-  // only so it never competes with runtime traffic for its small
-  // max-clients pool.
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  // Supabase pooler in transaction mode (port 6543, ?pgbouncer=true), built
+  // for many concurrent short-lived connections — what this app's Session
+  // queries need. `prisma migrate deploy` is intentionally NOT run at boot
+  // (see package.json `setup`/`migrate:deploy`): it needs session-level
+  // locking that neither this pooler nor Supabase's session-mode pooler
+  // (capped, often externally saturated) can reliably provide, and the only
+  // migration in this repo has been applied for months. Run
+  // `npm run migrate:deploy` manually against a working direct connection
+  // if a new migration is ever added.
+  url      = env("DATABASE_URL")
 }
 
 model Session {
