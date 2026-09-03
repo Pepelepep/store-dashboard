@@ -13,9 +13,16 @@ type ShopifyAdminClient = {
     query: string,
     options?: {
       variables?: Record<string, unknown>;
+      tries?: number;
     },
   ) => Promise<Response>;
 };
+
+// Retries a transient THROTTLED/500/503 response instead of failing an
+// entire batch (up to hundreds of items) for one bad request. No retry/
+// backoff existed anywhere in this file before — Shopify's own admin client
+// supports this via `tries`, it just was never passed.
+const SHOPIFY_GRAPHQL_TRIES = 3;
 
 type SyncLogger = (message: string) => void;
 
@@ -754,7 +761,10 @@ async function executeShopifyGraphql({
   variables?: Record<string, unknown>;
 }) {
   try {
-    const response = await admin.graphql(query, { variables });
+    const response = await admin.graphql(query, {
+      variables,
+      tries: SHOPIFY_GRAPHQL_TRIES,
+    });
 
     return await readJsonResponse({
       response,
@@ -1475,7 +1485,8 @@ async function startBulkOperation({
 }
 
 async function getCurrentBulkOperation(admin: ShopifyAdminClient) {
-  const response = await admin.graphql(`#graphql
+  const response = await admin.graphql(
+    `#graphql
     query currentBulkOperation {
       currentBulkOperation {
         id
@@ -1487,7 +1498,9 @@ async function getCurrentBulkOperation(admin: ShopifyAdminClient) {
         fileSize
       }
     }
-  `);
+  `,
+    { tries: SHOPIFY_GRAPHQL_TRIES },
+  );
   const data = await parseJsonResponse(response);
 
   return data.data?.currentBulkOperation as ShopifyBulkOperation | null;
@@ -1548,6 +1561,72 @@ async function runBulkOperation({
       );
     }
   }
+}
+
+type BulkOperationTick =
+  | { done: false; bulkOperationId: string }
+  | {
+      done: true;
+      bulkOperationId: string;
+      url: string;
+      objectCount: number;
+      fileSize: number | null;
+    };
+
+// Tick-friendly variant of runBulkOperation: never blocks on Shopify's own
+// completion time (which can be minutes for a large catalog). Each call
+// either starts a bulk operation, or checks its status once and returns
+// immediately — done:false is expected to be retried on a later tick with
+// the same bulkOperationId, so a slow bulk export never risks tripping an
+// HTTP/cron request timeout the way an in-process poll loop would.
+async function startOrCheckBulkOperation({
+  admin,
+  query,
+  bulkOperationId,
+}: {
+  admin: ShopifyAdminClient;
+  query: string;
+  bulkOperationId?: string | null;
+}): Promise<BulkOperationTick> {
+  if (!bulkOperationId) {
+    const newId = await startBulkOperation({ admin, query });
+    return { done: false, bulkOperationId: newId };
+  }
+
+  const operation = await getCurrentBulkOperation(admin);
+
+  if (!operation || operation.id !== bulkOperationId) {
+    const newId = await startBulkOperation({ admin, query });
+    return { done: false, bulkOperationId: newId };
+  }
+
+  const status = operation.status.toUpperCase();
+
+  if (status === "COMPLETED") {
+    if (!operation.url) {
+      throw new Error(
+        `Bulk operation ${bulkOperationId} completed without a URL.`,
+      );
+    }
+
+    return {
+      done: true,
+      bulkOperationId,
+      url: operation.url,
+      objectCount: Number(operation.objectCount ?? 0),
+      fileSize: operation.fileSize ? Number(operation.fileSize) : null,
+    };
+  }
+
+  if (["FAILED", "CANCELED", "EXPIRED"].includes(status)) {
+    throw new Error(
+      `Bulk operation ${bulkOperationId} ended with ${operation.status}: ${
+        operation.errorCode ?? "unknown_error"
+      }`,
+    );
+  }
+
+  return { done: false, bulkOperationId };
 }
 
 async function streamJsonlFromUrl({
@@ -2651,6 +2730,169 @@ export async function syncProducts({
   }
 }
 
+const PRODUCTS_BULK_QUERY = `{
+  products {
+    edges {
+      node {
+        id
+        title
+        vendor
+        productType
+        status
+        variants {
+          edges {
+            node {
+              id
+              title
+              sku
+              price
+              inventoryItem {
+                id
+                unitCost {
+                  amount
+                  currencyCode
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+// Tick-friendly counterpart to syncProductsBulk, used by the full/full_refresh
+// job pipeline (sync-jobs.server.ts). Unlike syncProductsBulk (which blocks
+// until Shopify's export finishes and records its own sync_runs row, for the
+// standalone `scripts/local-refresh.ts` CLI), this yields done:false while a
+// bulk operation is still running so a tick never blocks past a single
+// status check, and it does not record sync_runs itself — the caller
+// (markStepCompleted) already does that once per step, matching
+// syncProductsBatch's contract.
+export async function syncProductsBulkStep({
+  admin,
+  shop,
+  supabase,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  progress?: { bulkOperationId?: string | null } | null;
+}): Promise<SyncBatchResult> {
+  const tick = await startOrCheckBulkOperation({
+    admin,
+    query: PRODUCTS_BULK_QUERY,
+    bulkOperationId: progress?.bulkOperationId ?? null,
+  });
+
+  if (!tick.done) {
+    return {
+      done: false,
+      progress: { bulkOperationId: tick.bulkOperationId },
+      counts: {},
+    };
+  }
+
+  const productsById = new Map<string, ProductNode>();
+  const variantEdgesByProductId = new Map<
+    string,
+    ProductNode["variants"]["edges"]
+  >();
+
+  await streamJsonlFromUrl({
+    url: tick.url,
+    onRow: (row) => {
+      const id = typeof row.id === "string" ? row.id : null;
+      const parentId =
+        typeof row.__parentId === "string" ? row.__parentId : null;
+
+      if (!id) {
+        return;
+      }
+
+      if (!parentId) {
+        productsById.set(id, {
+          id,
+          title: typeof row.title === "string" ? row.title : "",
+          vendor: typeof row.vendor === "string" ? row.vendor : null,
+          productType:
+            typeof row.productType === "string" ? row.productType : null,
+          status: typeof row.status === "string" ? row.status : null,
+          variants: {
+            edges: [],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        });
+        return;
+      }
+
+      const inventoryItem = row.inventoryItem as
+        | {
+            id?: string;
+            unitCost?: { amount?: string; currencyCode?: string } | null;
+          }
+        | null
+        | undefined;
+      const edges = variantEdgesByProductId.get(parentId) ?? [];
+
+      edges.push({
+        node: {
+          id,
+          title: typeof row.title === "string" ? row.title : "",
+          sku: typeof row.sku === "string" ? row.sku : null,
+          price:
+            typeof row.price === "string" || typeof row.price === "number"
+              ? String(row.price)
+              : null,
+          inventoryItem: inventoryItem?.id
+            ? {
+                id: inventoryItem.id,
+                unitCost: inventoryItem.unitCost?.amount
+                  ? {
+                      amount: inventoryItem.unitCost.amount,
+                      currencyCode: inventoryItem.unitCost.currencyCode ?? "CAD",
+                    }
+                  : null,
+              }
+            : null,
+        },
+      });
+      variantEdgesByProductId.set(parentId, edges);
+    },
+  });
+
+  for (const [productId, edges] of variantEdgesByProductId.entries()) {
+    const product = productsById.get(productId);
+
+    if (product) {
+      product.variants.edges = edges;
+    }
+  }
+
+  const counts = await syncProductNodes({
+    supabase,
+    shop,
+    products: Array.from(productsById.values()),
+  });
+  const orderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
+    supabase,
+    shop,
+  });
+
+  return {
+    done: true,
+    progress: {},
+    counts: {
+      ...counts,
+      orderLinesCogsRecomputed,
+      bulkOperationId: tick.bulkOperationId,
+      bulkObjectCount: tick.objectCount,
+      bulkFileSize: tick.fileSize,
+    },
+  };
+}
+
 export async function syncProductsBulk({
   admin,
   shop,
@@ -3459,6 +3701,206 @@ export async function syncInventoryBatch({
       inventoryLevelsSynced: rows.length,
       variantsUnitCostUpdated,
       orderLinesCogsRecomputed,
+    },
+  };
+}
+
+const INVENTORY_BULK_QUERY = `{
+  inventoryItems {
+    edges {
+      node {
+        id
+        sku
+        tracked
+        unitCost {
+          amount
+          currencyCode
+        }
+        variant {
+          id
+        }
+        inventoryLevels {
+          edges {
+            node {
+              location {
+                id
+                name
+              }
+              quantities(names: ["available"]) {
+                name
+                quantity
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+type BulkInventoryItem = {
+  id: string;
+  sku: string | null;
+  tracked: boolean;
+  unitCost: { amount: string; currencyCode: string } | null;
+  variantId: string | null;
+  levels: InventoryItemNode["inventoryLevels"]["edges"][number]["node"][];
+};
+
+// Tick-friendly bulk counterpart to syncInventoryBatch, used by the
+// full/full_refresh job pipeline. Queries from `inventoryItems` (rather than
+// products -> variants -> inventoryItem -> inventoryLevels) to stay within
+// Shopify's bulk-operation limit of two nesting levels per connection
+// (inventoryItems -> inventoryLevels is one level of nesting; `variant` is a
+// singular field, not a connection, so it doesn't count). See
+// syncProductsBulkStep for the resumable-tick contract this follows.
+export async function syncInventoryBulkStep({
+  admin,
+  shop,
+  supabase,
+  progress,
+}: {
+  admin: ShopifyAdminClient;
+  shop: string;
+  supabase: SupabaseAdminClient;
+  progress?: { bulkOperationId?: string | null } | null;
+}): Promise<SyncBatchResult> {
+  const tick = await startOrCheckBulkOperation({
+    admin,
+    query: INVENTORY_BULK_QUERY,
+    bulkOperationId: progress?.bulkOperationId ?? null,
+  });
+
+  if (!tick.done) {
+    return {
+      done: false,
+      progress: { bulkOperationId: tick.bulkOperationId },
+      counts: {},
+    };
+  }
+
+  const inventoryItems = new Map<string, BulkInventoryItem>();
+
+  await streamJsonlFromUrl({
+    url: tick.url,
+    onRow: (row) => {
+      const parentId =
+        typeof row.__parentId === "string" ? row.__parentId : null;
+
+      if (!parentId) {
+        const id = typeof row.id === "string" ? row.id : null;
+
+        if (!id) {
+          return;
+        }
+
+        const variant = row.variant as { id?: string } | null | undefined;
+        const unitCost = row.unitCost as
+          | { amount?: string; currencyCode?: string }
+          | null
+          | undefined;
+
+        inventoryItems.set(id, {
+          id,
+          sku: typeof row.sku === "string" ? row.sku : null,
+          tracked: Boolean(row.tracked),
+          unitCost: unitCost?.amount
+            ? {
+                amount: unitCost.amount,
+                currencyCode: unitCost.currencyCode ?? "CAD",
+              }
+            : null,
+          variantId: variant?.id ?? null,
+          levels: [],
+        });
+        return;
+      }
+
+      const item = inventoryItems.get(parentId);
+
+      if (!item) {
+        return;
+      }
+
+      const location = row.location as
+        | { id?: string; name?: string }
+        | null
+        | undefined;
+
+      if (!location?.id) {
+        return;
+      }
+
+      item.levels.push({
+        location: { id: location.id, name: location.name ?? "" },
+        quantities: Array.isArray(row.quantities)
+          ? (row.quantities as { name: string; quantity: number }[])
+          : [],
+      });
+    },
+  });
+
+  const items = Array.from(inventoryItems.values());
+
+  await upsertInventoryItemSnapshots({
+    supabase,
+    shop,
+    snapshots: items.map((item) => ({
+      inventoryItemId: item.id,
+      sku: item.sku,
+      tracked: item.tracked,
+      unitCost: parseNullableNumericAmount(item.unitCost?.amount),
+      hasUnitCostValue: parseNullableNumericAmount(item.unitCost?.amount) !== null,
+      costSource: "INVENTORY_SYNC_UNIT_COST",
+    })),
+  });
+
+  const variantsUnitCostUpdated = await updateVariantCostsFromInventoryItemsSql({
+    supabase,
+    shop,
+    inventoryItemIds: items.map((item) => item.id),
+  });
+
+  const rows = items.flatMap((item) => {
+    if (!item.variantId) {
+      return [];
+    }
+
+    return item.levels.map((level) => ({
+      shop_domain: shop,
+      shopify_location_id: level.location.id,
+      shopify_variant_id: item.variantId as string,
+      inventory_item_id: item.id,
+      sku: item.sku,
+      available: getAvailableQuantity(level),
+      tracked: item.tracked,
+      synced_at: new Date().toISOString(),
+    }));
+  });
+
+  await upsertInBatches({
+    supabase,
+    table: "inventory_levels",
+    rows,
+    onConflict: "shop_domain,shopify_location_id,inventory_item_id",
+  });
+
+  const orderLinesCogsRecomputed = await recomputeOrderLineCogsForShop({
+    supabase,
+    shop,
+  });
+
+  return {
+    done: true,
+    progress: {},
+    counts: {
+      inventoryItemsProcessed: items.length,
+      inventoryLevelsSynced: rows.length,
+      variantsUnitCostUpdated,
+      orderLinesCogsRecomputed,
+      bulkOperationId: tick.bulkOperationId,
+      bulkObjectCount: tick.objectCount,
+      bulkFileSize: tick.fileSize,
     },
   };
 }

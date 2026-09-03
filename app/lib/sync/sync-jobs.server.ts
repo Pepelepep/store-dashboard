@@ -8,10 +8,12 @@ import type { SyncBatchResult, SyncSource } from "./shopify-sync.server";
 import {
   syncFinancialBackfill30dBatch,
   syncInventoryBatch,
+  syncInventoryBulkStep,
   syncLocations,
   syncOrdersBatch,
   syncOrdersReconciliation48hBatch,
   syncProductsBatch,
+  syncProductsBulkStep,
 } from "./shopify-sync.server";
 
 type SupabaseAdminClient = ReturnType<typeof getSupabaseAdminClient>;
@@ -817,13 +819,24 @@ async function runStepBatch({
   supabase,
   step,
   progress,
+  jobType,
 }: {
   admin: ShopifyAdminClient;
   shop: string;
   supabase: SupabaseAdminClient;
   step: string;
   progress: Record<string, unknown> | null;
+  jobType: SyncJobType;
 }): Promise<SyncBatchResult> {
+  // Only full/full_refresh jobs (the historical-import path) use Shopify's
+  // Bulk Operations API for products/inventory instead of paginated batch
+  // calls — it's ~10-100x fewer round trips for a large catalog and isn't
+  // bounded by MAX_STEP_BATCHES_PER_TICK, which is what made a full rebuild
+  // take hours for shops with large inventories. Standalone "products"/
+  // "inventory" job types (e.g. from the admin "Retry" button) keep using
+  // the batch path — bulk operations are overkill for a single retry.
+  const useBulk = jobType === "full" || jobType === "full_refresh";
+
   if (step === "locations") {
     const result = await syncLocations({
       admin,
@@ -840,6 +853,18 @@ async function runStepBatch({
   }
 
   if (step === "products") {
+    if (useBulk) {
+      return syncProductsBulkStep({
+        admin,
+        shop,
+        supabase,
+        progress:
+          (progress?.products as
+            | { bulkOperationId?: string | null }
+            | undefined) ?? null,
+      });
+    }
+
     return syncProductsBatch({
       admin,
       shop,
@@ -850,6 +875,18 @@ async function runStepBatch({
   }
 
   if (step === "inventory") {
+    if (useBulk) {
+      return syncInventoryBulkStep({
+        admin,
+        shop,
+        supabase,
+        progress:
+          (progress?.inventory as
+            | { bulkOperationId?: string | null }
+            | undefined) ?? null,
+      });
+    }
+
     return syncInventoryBatch({
       admin,
       shop,
@@ -920,13 +957,18 @@ async function runStepToCompletion({
   supabase,
   step,
   progress,
+  jobType,
 }: {
   admin: ShopifyAdminClient;
   shop: string;
   supabase: SupabaseAdminClient;
   step: string;
   progress: Record<string, unknown> | null;
+  jobType: SyncJobType;
 }) {
+  const isBulkStep =
+    (jobType === "full" || jobType === "full_refresh") &&
+    (step === "products" || step === "inventory");
   let currentProgress = progress;
   let accumulatedCounts: Record<string, unknown> = {};
   let batchesProcessed = 0;
@@ -937,6 +979,7 @@ async function runStepToCompletion({
       shop,
       supabase,
       step,
+      jobType,
       progress: {
         [step]: currentProgress,
       },
@@ -953,6 +996,14 @@ async function runStepToCompletion({
         counts: accumulatedCounts,
         batchesProcessed,
       };
+    }
+
+    // A bulk operation still running server-side won't change status within
+    // the same tick — retrying immediately would just repeat the same status
+    // check up to MAX_STEP_BATCHES_PER_TICK times for no benefit. Yield back
+    // to "pending" now; the next tick (cron or manual) checks again.
+    if (isBulkStep) {
+      break;
     }
   }
 
@@ -1163,6 +1214,7 @@ export async function processManualSyncJobBatch({
         shop,
         supabase,
         step: currentStep,
+        jobType: claimedJob.job_type,
         progress: getProgressForStep(
           { ...claimedJob, progress: nextProgress },
           currentStep,

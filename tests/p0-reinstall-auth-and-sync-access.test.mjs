@@ -4993,6 +4993,67 @@ test("Manual sync/rebuild drains a stuck job across ticks instead of relying on 
   );
 });
 
+test("full/full_refresh jobs use Shopify Bulk Operations for products/inventory instead of paginated batches", () => {
+  const syncJobs = readFileSync(
+    new URL("../app/lib/sync/sync-jobs.server.ts", import.meta.url),
+    "utf8",
+  );
+  const shopifySync = readFileSync(
+    new URL("../app/lib/sync/shopify-sync.server.ts", import.meta.url),
+    "utf8",
+  );
+
+  // Paginated batch calls (5 batches/tick, 20-50 items/page) made a full
+  // historical rebuild take hours for a shop with a large catalog. Bulk
+  // Operations run to completion on Shopify's side, unbounded by our own
+  // tick governor — but only for full/full_refresh; a standalone retry of a
+  // single "products"/"inventory" job keeps using the batch path.
+  assert.match(
+    syncJobs,
+    /const useBulk =\s*jobType === "full" \|\| jobType === "full_refresh";/,
+  );
+  assert.match(
+    syncJobs,
+    /if \(step === "products"\) \{\s*if \(useBulk\) \{\s*return syncProductsBulkStep\(/,
+  );
+  assert.match(
+    syncJobs,
+    /if \(step === "inventory"\) \{\s*if \(useBulk\) \{\s*return syncInventoryBulkStep\(/,
+  );
+
+  // The inventory bulk query must be rooted at inventoryItems, not nested
+  // three connections deep through products -> variants -> inventoryItem ->
+  // inventoryLevels, which exceeds Shopify's documented "max two levels deep
+  // for nested connections" bulk-operation restriction.
+  assert.match(shopifySync, /const INVENTORY_BULK_QUERY = `\{\s*inventoryItems \{/);
+  assert.doesNotMatch(
+    shopifySync,
+    /const INVENTORY_BULK_QUERY[\s\S]*?products\s*\{[\s\S]*?variants\s*\{[\s\S]*?inventoryLevels/,
+  );
+
+  // A tick-friendly bulk poll must never block waiting for Shopify's export
+  // to finish (that can take minutes for a large catalog) — it must check
+  // status once and yield done:false for the caller to retry on a later
+  // tick, unlike the blocking sleep-loop `runBulkOperation` uses for the
+  // standalone local-refresh CLI script.
+  assert.match(
+    shopifySync,
+    /async function startOrCheckBulkOperation\([\s\S]*?\bgetCurrentBulkOperation\(admin\)/,
+  );
+  assert.doesNotMatch(
+    shopifySync,
+    /async function startOrCheckBulkOperation[\s\S]*?sleep\([\s\S]*?^}/m,
+  );
+
+  // Retrying a transient throttle/5xx should not fail an entire batch/bulk
+  // check for nothing — no retry existed anywhere in this file before.
+  assert.match(shopifySync, /const SHOPIFY_GRAPHQL_TRIES = \d+/);
+  assert.match(
+    shopifySync,
+    /admin\.graphql\(query, \{\s*variables,\s*tries: SHOPIFY_GRAPHQL_TRIES,/,
+  );
+});
+
 test("Plan and billing is summary-only, owner-priced, contextual, and uses a one-time flash", () => {
   const appShell = readFileSync(
     new URL("../app/routes/app.tsx", import.meta.url),
