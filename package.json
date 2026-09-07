@@ -56,7 +56,7 @@
     "@shopify/app-bridge-react": "^4.2.4",
     "@shopify/polaris": "^13.9.5",
     "@shopify/shopify-app-react-router": "^1.1.0",
-    "@shopify/shopify-app-session-storage-prisma": "^8.0.0",
+    "@shopify/shopify-app-session-storage-prisma": "^10.0.1",
     "@shopify/ui-extensions": "2026.1.x",
     "@supabase/supabase-js": "^2.105.4",
     "@tailwindcss/vite": "^4.3.3",
